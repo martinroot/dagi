@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Iterator, Literal
+from typing import Generator, Iterator, Literal
 
 from .provider import IncompleteStreamError, OpenAICompatibleProvider
 from .state import StateStore
@@ -66,7 +66,52 @@ class Agent:
                 )
                 current_text_parts.clear()
 
+        def dispatch_tool_call(call: dict) -> Generator[AgentEvent, None, str]:
+            call_id = str(call.get("id", call.get("tool_call_id", "")))
+            name = str(call["name"])
+            arguments = call["arguments"]
+            self.state.mark_tool_call_running(call_id)
+            yield event("tool_call", tool_call_id=call_id, tool_name=name, tool_args=arguments)
+            outcome = "succeeded"
+            error = None
+            try:
+                output = self.tools.call(name, arguments)
+            except ToolError as exc:
+                output = f"[tool error] {exc}"
+                outcome = "failed"
+                error = str(exc)
+            except Exception as exc:
+                output = f"[tool outcome unknown] {type(exc).__name__}: {exc}"
+                outcome = "uncertain"
+                error = str(exc)
+            self.state.append_message(
+                self.session_id,
+                {"role": "tool", "tool_call_id": call_id, "name": name, "content": output},
+            )
+            self.state.finish_tool_call(call_id, outcome, output, error)
+            yield event("tool_result", tool_call_id=call_id, tool_name=name, text=output)
+            return outcome
+
         try:
+            unresolved = self.state.list_tool_calls(self.session_id, ("running", "uncertain"))
+            if unresolved:
+                call_id = unresolved[0]["tool_call_id"]
+                error_text = f"tool call {call_id} has an unknown outcome; inspect it before continuing"
+                status = "error"
+                yield event("error", text=error_text)
+                yield event("done", status=status)
+                return
+
+            pending = self.state.list_tool_calls(self.session_id, ("pending",))
+            for call in pending:
+                outcome = yield from dispatch_tool_call(call)
+                if outcome == "uncertain":
+                    error_text = f"tool call {call['tool_call_id']} has an unknown outcome; stopping this run"
+                    status = "error"
+                    yield event("error", text=error_text)
+                    yield event("done", status=status)
+                    return
+
             self.state.append_message(self.session_id, {"role": "user", "content": user_text})
             for _round in range(MAX_TOOL_ROUNDS):
                 messages = [
@@ -121,47 +166,33 @@ class Agent:
                 if finish_reason != "tool_calls" or not tool_calls:
                     raise IncompleteStreamError(f"invalid tool round finish_reason: {finish_reason!r}")
 
-                # Durable-before-side-effect: a restart can reconstruct the pending tool round.
-                self.state.append_message(
-                    self.session_id,
+                calls_for_storage = [
                     {
-                        "role": "assistant",
-                        "content": assistant_content or None,
-                        "tool_calls": [
-                            {
-                                "id": call["id"],
-                                "type": "function",
-                                "function": {
-                                    "name": call["name"],
-                                    "arguments": json.dumps(call["arguments"], ensure_ascii=False),
-                                },
-                            }
-                            for call in tool_calls
-                        ],
-                    },
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {
+                            "name": call["name"],
+                            "arguments": json.dumps(call["arguments"], ensure_ascii=False),
+                        },
+                    }
+                    for call in tool_calls
+                ]
+                self.state.save_tool_round(
+                    self.session_id,
+                    run_id,
+                    {"role": "assistant", "content": assistant_content or None, "tool_calls": calls_for_storage},
+                    tool_calls,
                 )
                 current_text_parts.clear()
                 for call in tool_calls:
-                    name = str(call.get("name", ""))
-                    call_id = str(call.get("id", ""))
-                    arguments = call.get("arguments")
-                    yield event("tool_call", tool_call_id=call_id, tool_name=name, tool_args=arguments)
-                    try:
-                        output = self.tools.call(name, arguments)
-                    except ToolError as exc:
-                        output = f"[tool error] {exc}"
-                    except Exception as exc:
-                        output = f"[tool error] {type(exc).__name__}: {exc}"
-                    self.state.append_message(
-                        self.session_id,
-                        {
-                            "role": "tool",
-                            "tool_call_id": call_id,
-                            "name": name,
-                            "content": output,
-                        },
-                    )
-                    yield event("tool_result", tool_call_id=call_id, tool_name=name, text=output)
+                    outcome = yield from dispatch_tool_call(call)
+                    if outcome == "uncertain":
+                        error_text = f"tool call {call['id']} has an unknown outcome; stopping this run"
+                        status = "error"
+                        yield event("error", text=error_text)
+                        break
+                if status == "error":
+                    break
             else:
                 status = "limit"
                 error_text = f"stopped after {MAX_TOOL_ROUNDS} tool rounds"

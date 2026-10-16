@@ -85,3 +85,43 @@ def test_cli_displays_run_id_and_terminal_status(tmp_path, monkeypatch, capsys):
     cli.run()
 
     assert "[run-123] completed" in capsys.readouterr().out
+
+
+def test_cli_can_resume_an_existing_session(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    import dagi_core.cli as cli
+    from dagi_core.state import StateStore
+
+    home = tmp_path / "home"
+    seed = StateStore(home / "state.sqlite3")
+    saved_session = seed.create_session("saved")
+    seed.close()
+
+    monkeypatch.setenv("DAGI_API_KEY", "placeholder-for-test")
+    monkeypatch.setenv("DAGI_HOME", str(home))
+    monkeypatch.setenv("DAGI_WORKSPACE", str(tmp_path / "workspace"))
+    inputs = iter([f"/resume {saved_session}", "hello", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
+    selected = []
+
+    class FinishedAgent:
+        def __init__(self, session_id):
+            self.session_id = session_id
+
+        def run_turn(self, _text):
+            yield SimpleNamespace(
+                kind="done", session_id=self.session_id, run_id="resumed-run",
+                tool_call_id=None, tool_name=None, tool_args=None, text=None, status="completed",
+            )
+
+    def build_agent(_config, _provider, state, session_id=None):
+        selected_id = session_id if session_id is not None else state.create_session()
+        selected.append(selected_id)
+        return FinishedAgent(selected_id)
+
+    monkeypatch.setattr(cli, "_new_agent", build_agent)
+    cli.run()
+
+    assert selected[-1] == saved_session
+    assert f"Resumed session {saved_session}" in capsys.readouterr().out

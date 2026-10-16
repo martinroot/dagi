@@ -11,12 +11,14 @@ from .state import StateStore
 from .tools import ToolRegistry
 
 HELP = """Commands:
-  /help            show commands
-  /new             start a fresh session
-  /memory <query>  search saved messages
-  /skills          list saved procedures
-  /model           show the configured model and endpoint
-  /exit            quit
+  /help                 show commands
+  /new                  start a fresh session
+  /sessions             list saved sessions
+  /resume <session_id>  resume a saved session
+  /memory <query>       search saved messages
+  /skills               list saved procedures
+  /model                show the configured model and endpoint
+  /exit                 quit
 """
 
 
@@ -31,8 +33,9 @@ def approve_shell_command(command: str) -> bool:
     return answer.strip().lower() in {"y", "yes"}
 
 
-def _new_agent(config, provider, state) -> Agent:
-    session_id = state.create_session()
+def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
+    if session_id is None:
+        session_id = state.create_session()
     tools = ToolRegistry(
         config.workspace,
         state,
@@ -68,6 +71,27 @@ def run() -> None:
                 elif command == "/new":
                     agent = _new_agent(config, provider, state)
                     print("Started a new session.")
+                elif command == "/sessions":
+                    sessions = state.list_sessions()
+                    print("\n".join(
+                        f"{item['id']}: {item['title'] or 'untitled'} ({item['created_at']})"
+                        for item in sessions
+                    ) or "(no sessions)")
+                elif command == "/resume" and argument:
+                    try:
+                        session_id = int(argument)
+                    except ValueError:
+                        print("Usage: /resume <session_id>")
+                    else:
+                        known = {item["id"] for item in state.list_sessions(100)}
+                        if session_id not in known:
+                            print(f"No saved session {session_id}.")
+                        else:
+                            calls = state.recover_interrupted(session_id)
+                            agent = _new_agent(config, provider, state, session_id)
+                            pending = sum(call["status"] == "pending" for call in calls)
+                            uncertain = sum(call["status"] == "uncertain" for call in calls)
+                            print(f"Resumed session {session_id}; pending tools: {pending}, uncertain tools: {uncertain}.")
                 elif command == "/model":
                     print(f"{config.model} ({config.base_url})")
                 elif command == "/skills":
@@ -77,7 +101,7 @@ def run() -> None:
                     hits = state.search_memory(argument)
                     print("\n".join(f"[session {hit['session_id']}, {hit['role']}] {hit['snippet']}" for hit in hits) or "(no matches)")
                 else:
-                    print("Usage: /help, /new, /memory <query>, /skills, /model, /exit")
+                    print("Usage: /help, /new, /sessions, /resume <session_id>, /memory <query>, /skills, /model, /exit")
                 continue
 
             for event in agent.run_turn(text):

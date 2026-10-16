@@ -11,7 +11,8 @@ A compact terminal agent, not a reduced copy of the full Hermes platform. This i
 - Events correlated by session ID, run ID, and tool-call ID.
 - Stream finish reasons are validated; partial responses are stored as incomplete, and unfinalized tool calls are never executed.
 - Workspace-scoped file tools; a tool call is persisted before its side effect.
-- A terminal CLI with no web panel, gateway, or TUI framework.
+- A terminal CLI with session listing/resume and no web panel, gateway, or TUI framework.
+- Interrupted tool actions are recovered by state: safe pending calls may resume, while unknown outcomes are never replayed automatically.
 
 The runtime has one direct dependency, `openai`; SQLite and the CLI use the Python standard library. There is no web UI, messaging gateway, MCP, cron, voice, multi-agent, profile, or remote-backend integration in this version.
 
@@ -42,7 +43,7 @@ Environment variables:
 - `DAGI_WORKSPACE` — root for file tools; defaults to the current directory.
 - `DAGI_ENABLE_SHELL=1` — enables shell execution with per-command approval.
 
-CLI commands: `/help`, `/new`, `/memory <query>`, `/skills`, `/model`, `/exit`. A run prints its ID and final status. Skills can be saved with `create_skill` and loaded with `use_skill`.
+CLI commands: `/help`, `/new`, `/sessions`, `/resume <session_id>`, `/memory <query>`, `/skills`, `/model`, `/exit`. A run prints its ID and final status. Skills can be saved with `create_skill` and loaded with `use_skill`.
 
 ## Verification
 
@@ -57,10 +58,10 @@ Tests do not require an API key and do not make model requests.
 ## Layout
 
 ```text
-dagi_core/agent.py     agent loop, run status, durable tool-call ordering
+dagi_core/agent.py     agent loop, run status, and interrupted-tool recovery
 dagi_core/provider.py  single OpenAI-compatible streaming adapter
 dagi_core/tools.py     workspace files, memory, skills, optional shell
-dagi_core/state.py     SQLite, FTS5, sessions, runs, and skills
+dagi_core/state.py     SQLite, FTS5, runs, tool executions, and skills
 dagi_core/config.py    environment-based configuration
 dagi_core/cli.py       terminal interface
 ```

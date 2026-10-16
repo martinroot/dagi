@@ -25,6 +25,19 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at TEXT,
     error TEXT
 );
+CREATE TABLE IF NOT EXISTS tool_executions (
+    tool_call_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    arguments TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'uncertain')),
+    result TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tool_executions_session_status ON tool_executions(session_id, status);
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -127,6 +140,121 @@ class StateStore:
             raise ValueError(f"run is missing or already finished: {run_id}")
         self._db.commit()
 
+    def save_tool_round(
+        self,
+        session_id: int,
+        run_id: str,
+        assistant_message: dict[str, Any],
+        calls: list[dict[str, Any]],
+    ) -> None:
+        if not calls:
+            raise ValueError("a tool round must contain at least one call")
+        now = _now()
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            self._insert_message(session_id, assistant_message)
+            for call in calls:
+                call_id = call.get("id")
+                name = call.get("name")
+                arguments = call.get("arguments")
+                if not isinstance(call_id, str) or not call_id or not isinstance(name, str) or not name:
+                    raise ValueError("tool calls require a non-empty id and name")
+                if not isinstance(arguments, dict):
+                    raise ValueError("tool call arguments must be an object")
+                self._db.execute(
+                    """INSERT INTO tool_executions
+                       (tool_call_id, run_id, session_id, name, arguments, status, created_at, updated_at)
+                       VALUES(?, ?, ?, ?, ?, 'pending', ?, ?)""",
+                    (call_id, run_id, session_id, name, json.dumps(arguments, ensure_ascii=False), now, now),
+                )
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+
+    def get_tool_call(self, tool_call_id: str) -> dict[str, Any] | None:
+        row = self._db.execute(
+            "SELECT * FROM tool_executions WHERE tool_call_id=?", (tool_call_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["arguments"] = json.loads(result["arguments"])
+        return result
+
+    def list_tool_calls(
+        self, session_id: int, statuses: tuple[str, ...] | None = None
+    ) -> list[dict[str, Any]]:
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            rows = self._db.execute(
+                f"SELECT * FROM tool_executions WHERE session_id=? AND status IN ({placeholders}) ORDER BY rowid",
+                (session_id, *statuses),
+            ).fetchall()
+        else:
+            rows = self._db.execute(
+                "SELECT * FROM tool_executions WHERE session_id=? ORDER BY rowid", (session_id,)
+            ).fetchall()
+        results = [dict(row) for row in rows]
+        for result in results:
+            result["arguments"] = json.loads(result["arguments"])
+        return results
+
+    def mark_tool_call_running(self, tool_call_id: str) -> None:
+        cursor = self._db.execute(
+            "UPDATE tool_executions SET status='running', updated_at=? WHERE tool_call_id=? AND status='pending'",
+            (_now(), tool_call_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"tool call is missing or not pending: {tool_call_id}")
+        self._db.commit()
+
+    def finish_tool_call(
+        self, tool_call_id: str, status: str, result: str | None = None, error: str | None = None
+    ) -> None:
+        if status not in {"succeeded", "failed", "uncertain"}:
+            raise ValueError(f"invalid tool call outcome: {status!r}")
+        cursor = self._db.execute(
+            """UPDATE tool_executions SET status=?, result=?, error=?, updated_at=?
+               WHERE tool_call_id=? AND status='running'""",
+            (status, result, error, _now(), tool_call_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"tool call is missing or not running: {tool_call_id}")
+        self._db.commit()
+
+    def recover_interrupted(self, session_id: int | None = None) -> list[dict[str, Any]]:
+        scope = " AND session_id=?" if session_id is not None else ""
+        params = (session_id,) if session_id is not None else ()
+        rows = self._db.execute(
+            f"SELECT tool_call_id FROM tool_executions WHERE status='running'{scope}", params
+        ).fetchall()
+        for row in rows:
+            call_id = row["tool_call_id"]
+            saved = self._db.execute(
+                "SELECT content FROM messages WHERE role='tool' AND tool_call_id=? ORDER BY id DESC LIMIT 1",
+                (call_id,),
+            ).fetchone()
+            if saved is None:
+                status, result, error = "uncertain", None, "process stopped while action was running; outcome unknown"
+            else:
+                result = saved["content"]
+                status = "failed" if result.startswith("[tool error]") else "succeeded"
+                error = None
+            self._db.execute(
+                "UPDATE tool_executions SET status=?, result=?, error=?, updated_at=? WHERE tool_call_id=?",
+                (status, result, error, _now(), call_id),
+            )
+        self._db.execute(
+            f"UPDATE runs SET status='error', finished_at=?, error='process interrupted' "
+            f"WHERE status='running'{scope}",
+            (_now(), *params),
+        )
+        self._db.commit()
+        if session_id is None:
+            return []
+        return self.list_tool_calls(session_id)
+
     def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
         rows = self._db.execute(
             "SELECT id, title, created_at FROM sessions ORDER BY id DESC LIMIT ?",
@@ -134,7 +262,7 @@ class StateStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def append_message(self, session_id: int, message: dict[str, Any]) -> int:
+    def _insert_message(self, session_id: int, message: dict[str, Any]) -> int:
         role = message.get("role")
         if role not in {"user", "assistant", "tool"}:
             raise ValueError(f"unsupported message role: {role!r}")
@@ -160,8 +288,12 @@ class StateStore:
                 int(bool(message.get("is_partial", False))),
             ),
         )
-        self._db.commit()
         return int(cursor.lastrowid)
+
+    def append_message(self, session_id: int, message: dict[str, Any]) -> int:
+        message_id = self._insert_message(session_id, message)
+        self._db.commit()
+        return message_id
 
     def messages(self, session_id: int, *, include_metadata: bool = False) -> list[dict[str, Any]]:
         rows = self._db.execute(
