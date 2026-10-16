@@ -53,6 +53,22 @@ CREATE TABLE IF NOT EXISTS provider_calls (
     finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS provider_calls_run_id ON provider_calls(run_id, id);
+CREATE TABLE IF NOT EXISTS model_requests (
+    provider_call_id INTEGER PRIMARY KEY REFERENCES provider_calls(id) ON DELETE CASCADE,
+    request_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS context_archives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    source_message_ids TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    compression_model TEXT NOT NULL,
+    provider_call_id INTEGER NOT NULL REFERENCES provider_calls(id),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS context_archives_session_id ON context_archives(session_id, id);
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -209,6 +225,69 @@ class StateStore:
                 from decimal import Decimal
                 item["cost_usd"] = Decimal(item["cost_usd"])
         return result
+
+    def save_provider_request(self, provider_call_id: int, request: dict[str, Any]) -> None:
+        required = {"model", "messages", "tools", "stream", "stream_options"}
+        if not required.issubset(request):
+            raise ValueError(f"provider request is missing fields: {sorted(required - set(request))}")
+        self._db.execute(
+            "INSERT INTO model_requests(provider_call_id, request_json, created_at) VALUES(?, ?, ?)",
+            (provider_call_id, json.dumps(request, ensure_ascii=False), _now()),
+        )
+        self._db.commit()
+
+    def get_provider_request(self, provider_call_id: int) -> dict[str, Any] | None:
+        row = self._db.execute(
+            "SELECT request_json FROM model_requests WHERE provider_call_id=?", (provider_call_id,)
+        ).fetchone()
+        return json.loads(row["request_json"]) if row is not None else None
+
+    def save_context_archive(
+        self,
+        session_id: int,
+        run_id: str,
+        source_message_ids: list[int],
+        summary: str,
+        compression_model: str,
+        provider_call_id: int,
+    ) -> int:
+        if not source_message_ids or not summary.strip():
+            raise ValueError("context archives require source messages and a summary")
+        cursor = self._db.execute(
+            """INSERT INTO context_archives
+               (session_id, run_id, source_message_ids, summary, compression_model, provider_call_id, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?)""",
+            (
+                session_id, run_id, json.dumps(sorted(set(source_message_ids))),
+                summary.strip(), compression_model, provider_call_id, _now(),
+            ),
+        )
+        self._db.commit()
+        return int(cursor.lastrowid)
+
+    def list_context_archives(self, session_id: int) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            "SELECT * FROM context_archives WHERE session_id=? ORDER BY id", (session_id,)
+        ).fetchall()
+        archives = [dict(row) for row in rows]
+        for archive in archives:
+            archive["source_message_ids"] = json.loads(archive["source_message_ids"])
+        return archives
+
+    def message_records(self, session_id: int) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            """SELECT id, role, content, tool_calls, tool_call_id, name, is_partial
+               FROM messages WHERE session_id=? ORDER BY id""",
+            (session_id,),
+        ).fetchall()
+        records = []
+        for row in rows:
+            record = dict(row)
+            if record["tool_calls"] is not None:
+                record["tool_calls"] = json.loads(record["tool_calls"])
+            record["is_partial"] = bool(record["is_partial"])
+            records.append(record)
+        return records
 
     def usage_summary(self, run_id: str) -> dict[str, Any]:
         rows = self._db.execute(

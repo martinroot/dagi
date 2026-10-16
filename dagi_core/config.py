@@ -27,6 +27,9 @@ class Config:
     workspace: Path
     enable_shell: bool
     usage_policy: UsagePolicy
+    compression_model: str
+    context_limit_tokens: int
+    context_max_tool_result_chars: int
 
     @property
     def database(self) -> Path:
@@ -66,6 +69,11 @@ def load_config() -> Config:
         budget_text = os.environ.get("DAGI_BUDGET_USD")
         budget = Decimal(budget_text) if budget_text else None
         max_calls = int(os.environ.get("DAGI_MAX_PROVIDER_CALLS_PER_RUN", "32"))
+        context_limit = int(os.environ.get("DAGI_CONTEXT_LIMIT_TOKENS", "32768"))
+        max_tool_result_chars = int(os.environ.get("DAGI_CONTEXT_MAX_TOOL_RESULT_CHARS", "4000"))
+        compression_model = os.environ.get("DAGI_COMPRESSION_MODEL", model).strip() or model
+        if context_limit < 1 or max_tool_result_chars < 1:
+            raise ValueError("context limits must be positive")
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
         raise ValueError(f"invalid usage/budget configuration: {exc}") from exc
     usage_policy = UsagePolicy(
@@ -75,6 +83,7 @@ def load_config() -> Config:
         estimate_missing=_enabled(os.environ.get("DAGI_ESTIMATE_MISSING_USAGE", "true")),
     )
     usage_policy.validate_model(model)
+    usage_policy.validate_model(compression_model)
     return Config(
         api_key=api_key,
         base_url=os.environ.get("DAGI_BASE_URL", DEFAULT_BASE_URL).strip().rstrip("/"),
@@ -83,4 +92,7 @@ def load_config() -> Config:
         workspace=workspace,
         enable_shell=_enabled(os.environ.get("DAGI_ENABLE_SHELL")),
         usage_policy=usage_policy,
+        compression_model=compression_model,
+        context_limit_tokens=context_limit,
+        context_max_tool_result_chars=max_tool_result_chars,
     )

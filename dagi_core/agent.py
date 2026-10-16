@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Generator, Iterator, Literal
 
+from .context import ContextBuilder, ContextLimitError
 from .provider import IncompleteStreamError, OpenAICompatibleProvider
 from .state import StateStore
 from .tools import ToolError, ToolRegistry, ToolResult
@@ -42,6 +43,7 @@ class Agent:
         session_id: int,
         system_prompt: str = SYSTEM_PROMPT,
         usage_policy: UsagePolicy | None = None,
+        context_builder: ContextBuilder | None = None,
     ):
         self.provider = provider
         self.model = getattr(provider, "model", "unknown")
@@ -50,6 +52,7 @@ class Agent:
         self.session_id = session_id
         self.system_prompt = system_prompt
         self.usage_policy = usage_policy or UsagePolicy()
+        self.context_builder = context_builder or ContextBuilder(state, usage_policy=self.usage_policy)
 
     def run_turn(self, user_text: str) -> Iterator[AgentEvent]:
         if not user_text.strip():
@@ -157,17 +160,23 @@ class Agent:
                     error_text = stop_reason
                     yield event("error", text=error_text)
                     break
-                messages = [
-                    {"role": "system", "content": self.system_prompt},
-                    *self.state.messages(self.session_id),
-                ]
                 specs = [tool.openai_spec() for tool in self.tools.specs()]
+                messages = self.context_builder.build(
+                    self.session_id, run_id, self.system_prompt, specs
+                )
                 current_text_parts = []
                 tool_calls: list[dict] = []
                 finish_reason = None
                 actual_usage = None
                 response_seen = False
                 provider_call_id = self.state.create_provider_call(run_id, self.model, "agent")
+                self.state.save_provider_request(provider_call_id, {
+                    "model": self.model,
+                    "messages": messages,
+                    "tools": specs,
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                })
                 stream = None
                 try:
                     stream = self.provider.stream(messages, specs)
@@ -275,6 +284,12 @@ class Agent:
             if status == "running":
                 status = "cancelled"
             raise
+        except ContextLimitError as exc:
+            save_partial()
+            status = "limit"
+            error_text = str(exc)
+            yield event("error", text=error_text)
+            yield event("done", status=status)
         except Exception as exc:
             save_partial()
             status = "error"

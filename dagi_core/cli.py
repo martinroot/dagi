@@ -6,6 +6,7 @@ import sys
 
 from .agent import Agent
 from .config import load_config
+from .context import ContextBuilder
 from .provider import OpenAICompatibleProvider
 from .state import StateStore
 from .tools import ToolRegistry
@@ -43,7 +44,19 @@ def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
         shell_enabled=config.enable_shell,
         approve_shell=approve_shell_command if config.enable_shell else None,
     )
-    return Agent(provider, tools, state, session_id, usage_policy=config.usage_policy)
+    compressor = OpenAICompatibleProvider(config.compression_model, config.api_key, config.base_url)
+    context_builder = ContextBuilder(
+        state,
+        max_tokens=config.context_limit_tokens,
+        max_tool_result_chars=config.context_max_tool_result_chars,
+        compression_provider=compressor,
+        usage_policy=config.usage_policy,
+    )
+    return Agent(
+        provider, tools, state, session_id,
+        usage_policy=config.usage_policy,
+        context_builder=context_builder,
+    )
 
 
 def run() -> None:

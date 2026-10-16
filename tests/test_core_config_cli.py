@@ -117,6 +117,21 @@ def test_config_requires_price_for_configured_money_budget(tmp_path, monkeypatch
         load_config()
 
 
+def test_config_loads_context_limit_and_compression_model(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAGI_API_KEY", "placeholder-for-test")
+    monkeypatch.setenv("DAGI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("DAGI_MODEL", "main-model")
+    monkeypatch.setenv("DAGI_CONTEXT_LIMIT_TOKENS", "4096")
+    monkeypatch.setenv("DAGI_CONTEXT_MAX_TOOL_RESULT_CHARS", "1200")
+    monkeypatch.setenv("DAGI_COMPRESSION_MODEL", "small-compressor")
+
+    config = load_config()
+
+    assert config.context_limit_tokens == 4096
+    assert config.context_max_tool_result_chars == 1200
+    assert config.compression_model == "small-compressor"
+
+
 def test_cli_can_resume_an_existing_session(tmp_path, monkeypatch, capsys):
     from types import SimpleNamespace
 

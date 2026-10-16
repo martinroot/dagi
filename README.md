@@ -11,6 +11,7 @@ A compact terminal agent, not a reduced copy of the full Hermes platform. This i
 - Events correlated by session ID, run ID, and tool-call ID.
 - Provider usage is persisted per call and aggregated per run as actual, estimated, mixed, or unavailable; missing usage is never stored as zero.
 - Configurable per-model prices, provider-call limits, and monetary run budgets.
+- Bounded model-context assembly with tool-result truncation, source-preserving history summaries, and exact request snapshots.
 - Stream finish reasons are validated; partial responses are stored as incomplete, and unfinalized tool calls are never executed.
 - Publicly extensible tools with structured results and persisted recovery metadata.
 - Workspace-scoped file tools; a tool call is persisted before its side effect.
@@ -46,11 +47,14 @@ Environment variables:
 - `DAGI_MAX_PROVIDER_CALLS_PER_RUN` — maximum primary and auxiliary provider calls; defaults to `32`.
 - `DAGI_BUDGET_USD` — optional per-run spend limit; requires a price entry for `DAGI_MODEL`.
 - `DAGI_ESTIMATE_MISSING_USAGE` — estimate missing token usage (default `true`); set to `false` to retain it as unavailable.
+- `DAGI_CONTEXT_LIMIT_TOKENS` — approximate request-context limit; defaults to `32768`.
+- `DAGI_CONTEXT_MAX_TOOL_RESULT_CHARS` — maximum tool-result characters sent in context; defaults to `4000`.
+- `DAGI_COMPRESSION_MODEL` — history-compression model; defaults to `DAGI_MODEL` and can be priced separately.
 - `DAGI_HOME` — database and skill storage; defaults to `~/.dagi`.
 - `DAGI_WORKSPACE` — root for file tools; defaults to the current directory.
 - `DAGI_ENABLE_SHELL=1` — enables shell execution with per-command approval.
 
-Budget checks happen between provider calls. A single provider response may exceed the configured budget before its final usage is available; missing usage is treated as unknown, never as zero.
+Budget checks happen between provider calls. A single provider response may exceed the configured budget before its final usage is available; missing usage is treated as unknown, never as zero. Context-compression calls are stored separately and count toward the same provider-call and budget limits.
 
 Example price configuration:
 
@@ -95,7 +99,8 @@ Tests do not require an API key and do not make model requests.
 dagi_core/agent.py     agent loop, run status, recovery, and usage budgets
 dagi_core/provider.py  single OpenAI-compatible streaming adapter
 dagi_core/tools.py     workspace files, memory, skills, optional shell
-dagi_core/state.py     SQLite, FTS5, runs, tools, and provider usage
+dagi_core/state.py     SQLite, FTS5, runs, requests, archives, and usage
+dagi_core/context.py   bounded request assembly and history compression
 dagi_core/usage.py     token provenance, model prices, and run limits
 dagi_core/config.py    environment-based configuration
 dagi_core/cli.py       terminal interface
