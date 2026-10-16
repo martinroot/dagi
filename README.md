@@ -9,6 +9,7 @@ A compact terminal agent, not a reduced copy of the full Hermes platform. This i
 - SQLite transcript, FTS5 memory search, and persistent reusable skills.
 - Durable run records with `completed`, `error`, `limit`, and `cancelled` outcomes.
 - Events correlated by session ID, run ID, and tool-call ID.
+- Stream finish reasons are validated; partial responses are stored as incomplete, and unfinalized tool calls are never executed.
 - Workspace-scoped file tools; a tool call is persisted before its side effect.
 - A terminal CLI with no web panel, gateway, or TUI framework.
 

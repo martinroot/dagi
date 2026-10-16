@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Iterator, Literal
 
-from .provider import OpenAICompatibleProvider
+from .provider import IncompleteStreamError, OpenAICompatibleProvider
 from .state import StateStore
 from .tools import ToolError, ToolRegistry
 
@@ -52,14 +52,19 @@ class Agent:
         run_id = self.state.create_run(self.session_id)
         status = "running"
         error_text = None
+        current_text_parts: list[str] = []
 
-        def event(kind: str, **values) -> AgentEvent:
-            return AgentEvent(
-                kind=kind,
-                session_id=self.session_id,
-                run_id=run_id,
-                **values,
-            )
+        def event(kind: Literal["text", "tool_call", "tool_result", "error", "done"], **values) -> AgentEvent:
+            return AgentEvent(kind=kind, session_id=self.session_id, run_id=run_id, **values)
+
+        def save_partial() -> None:
+            content = "".join(current_text_parts)
+            if content:
+                self.state.append_message(
+                    self.session_id,
+                    {"role": "assistant", "content": content, "is_partial": True},
+                )
+                current_text_parts.clear()
 
         try:
             self.state.append_message(self.session_id, {"role": "user", "content": user_text})
@@ -69,24 +74,52 @@ class Agent:
                     *self.state.messages(self.session_id),
                 ]
                 specs = [tool.openai_spec() for tool in self.tools.specs()]
-                text_parts: list[str] = []
+                current_text_parts = []
                 tool_calls: list[dict] = []
-                for item in self.provider.stream(messages, specs):
-                    if item.kind == "text" and item.text:
-                        text_parts.append(item.text)
-                        yield event("text", text=item.text)
-                    elif item.kind == "tool_call" and item.tool_call is not None:
-                        tool_calls.append(item.tool_call)
+                finish_reason = None
+                stream = self.provider.stream(messages, specs)
+                try:
+                    for item in stream:
+                        if item.kind == "text" and item.text:
+                            current_text_parts.append(item.text)
+                            yield event("text", text=item.text)
+                        elif item.kind == "tool_call" and item.tool_call is not None:
+                            tool_calls.append(item.tool_call)
+                        elif item.kind == "finish":
+                            finish_reason = item.finish_reason
+                finally:
+                    close_stream = getattr(stream, "close", None)
+                    if callable(close_stream):
+                        close_stream()
 
-                assistant_content = "".join(text_parts)
-                if not tool_calls:
+                assistant_content = "".join(current_text_parts)
+                if finish_reason is None:
+                    raise IncompleteStreamError("provider stream ended without finish_reason")
+                if finish_reason == "length":
+                    save_partial()
+                    status = "limit"
+                    error_text = "provider reached the output length limit"
+                    yield event("error", text=error_text)
+                    break
+                if finish_reason == "content_filter":
+                    save_partial()
+                    status = "error"
+                    error_text = "provider filtered the response"
+                    yield event("error", text=error_text)
+                    break
+                if finish_reason == "stop":
+                    if tool_calls:
+                        raise IncompleteStreamError("tool calls were returned without a tool_calls finish_reason")
                     if assistant_content:
                         self.state.append_message(
                             self.session_id,
                             {"role": "assistant", "content": assistant_content},
                         )
+                    current_text_parts.clear()
                     status = "completed"
                     break
+                if finish_reason != "tool_calls" or not tool_calls:
+                    raise IncompleteStreamError(f"invalid tool round finish_reason: {finish_reason!r}")
 
                 # Durable-before-side-effect: a restart can reconstruct the pending tool round.
                 self.state.append_message(
@@ -107,6 +140,7 @@ class Agent:
                         ],
                     },
                 )
+                current_text_parts.clear()
                 for call in tool_calls:
                     name = str(call.get("name", ""))
                     call_id = str(call.get("id", ""))
@@ -135,10 +169,12 @@ class Agent:
 
             yield event("done", status=status)
         except GeneratorExit:
+            save_partial()
             if status == "running":
                 status = "cancelled"
             raise
         except Exception as exc:
+            save_partial()
             status = "error"
             error_text = f"{type(exc).__name__}: {exc}"
             yield event("error", text=f"provider or run error: {error_text}")

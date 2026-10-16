@@ -30,11 +30,14 @@ def test_agent_persists_tool_call_before_side_effect_then_continues(tmp_path: Pa
     workspace = tmp_path / "workspace"
     tools = InspectingTools(workspace, state, session)
     provider = FakeProvider([
-        [StreamEvent(kind="tool_call", tool_call={
-            "id": "call-1", "name": "write_file",
-            "arguments": {"path": "hello.txt", "content": "from minimal core"},
-        })],
-        [StreamEvent(kind="text", text="Saved.")],
+        [
+            StreamEvent(kind="tool_call", tool_call={
+                "id": "call-1", "name": "write_file",
+                "arguments": {"path": "hello.txt", "content": "from minimal core"},
+            }),
+            StreamEvent(kind="finish", finish_reason="tool_calls"),
+        ],
+        [StreamEvent(kind="text", text="Saved."), StreamEvent(kind="finish", finish_reason="stop")],
     ])
     agent = Agent(provider, tools, state, session)
 
@@ -61,10 +64,13 @@ def test_agent_returns_tool_error_without_skipping_follow_up(tmp_path: Path):
     session = state.create_session()
     tools = ToolRegistry(tmp_path / "workspace", state, session)
     provider = FakeProvider([
-        [StreamEvent(kind="tool_call", tool_call={
-            "id": "call-1", "name": "unknown", "arguments": {},
-        })],
-        [StreamEvent(kind="text", text="I could not run that tool.")],
+        [
+            StreamEvent(kind="tool_call", tool_call={
+                "id": "call-1", "name": "unknown", "arguments": {},
+            }),
+            StreamEvent(kind="finish", finish_reason="tool_calls"),
+        ],
+        [StreamEvent(kind="text", text="I could not run that tool."), StreamEvent(kind="finish", finish_reason="stop")],
     ])
 
     events = list(Agent(provider, tools, state, session).run_turn("try tool"))
@@ -94,7 +100,8 @@ def test_provider_error_and_tool_round_limit_have_distinct_run_statuses(tmp_path
     limit_session = limit_state.create_session()
     limit_tools = ToolRegistry(tmp_path / "limit-workspace", limit_state, limit_session)
     provider = FakeProvider([[
-        StreamEvent(kind="tool_call", tool_call={"id": "call-limit", "name": "unknown", "arguments": {}})
+        StreamEvent(kind="tool_call", tool_call={"id": "call-limit", "name": "unknown", "arguments": {}}),
+        StreamEvent(kind="finish", finish_reason="tool_calls"),
     ]])
     limit_events = list(Agent(provider, limit_tools, limit_state, limit_session).run_turn("loop"))
     limit_run = limit_state.get_run(limit_events[0].run_id)
@@ -115,4 +122,99 @@ def test_closing_a_live_run_marks_it_cancelled(tmp_path):
 
     assert first_event.run_id
     assert state.get_run(first_event.run_id)["status"] == "cancelled"
+    partial = state.messages(session, include_metadata=True)[-1]
+    assert partial["is_partial"] is True
+    state.close()
+
+
+def test_length_finish_persists_partial_output_and_limit_status(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    tools = ToolRegistry(tmp_path / "workspace", state, session)
+    provider = FakeProvider([[
+        StreamEvent(kind="text", text="incomplete answer"),
+        StreamEvent(kind="finish", finish_reason="length"),
+    ]])
+
+    events = list(Agent(provider, tools, state, session).run_turn("answer"))
+
+    assert events[-1].status == "limit"
+    assert state.get_run(events[-1].run_id)["status"] == "limit"
+    partial = state.messages(session, include_metadata=True)[-1]
+    assert partial["content"] == "incomplete answer"
+    assert partial["is_partial"] is True
+    state.close()
+
+
+def test_filtered_finish_never_executes_tool_call(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    workspace = tmp_path / "workspace"
+    tools = ToolRegistry(workspace, state, session)
+    provider = FakeProvider([[
+        StreamEvent(kind="text", text="filtered"),
+        StreamEvent(kind="tool_call", tool_call={
+            "id": "blocked-call", "name": "write_file",
+            "arguments": {"path": "must-not-exist", "content": "no"},
+        }),
+        StreamEvent(kind="finish", finish_reason="content_filter"),
+    ]])
+
+    events = list(Agent(provider, tools, state, session).run_turn("do it"))
+
+    assert not (workspace / "must-not-exist").exists()
+    assert state.get_run(events[-1].run_id)["status"] == "error"
+    assert state.messages(session, include_metadata=True)[-1]["is_partial"] is True
+    state.close()
+
+
+def test_stream_without_finish_is_saved_as_incomplete(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    tools = ToolRegistry(tmp_path / "workspace", state, session)
+    provider = FakeProvider([[StreamEvent(kind="text", text="cut off")]])
+
+    events = list(Agent(provider, tools, state, session).run_turn("continue"))
+
+    assert state.get_run(events[-1].run_id)["status"] == "error"
+    partial = state.messages(session, include_metadata=True)[-1]
+    assert partial["content"] == "cut off"
+    assert partial["is_partial"] is True
+    state.close()
+
+
+def test_cancelling_agent_closes_provider_transport(tmp_path):
+    from types import SimpleNamespace as NS
+
+    from dagi_core.provider import OpenAICompatibleProvider
+
+    class ClosableResponse:
+        def __init__(self):
+            self.chunks = iter([NS(choices=[NS(delta=NS(content="streaming", tool_calls=None), finish_reason=None)], usage=None)])
+            self.closed = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self.chunks)
+
+        def close(self):
+            self.closed = True
+
+    response = ClosableResponse()
+    completions = NS(create=lambda **_kwargs: response)
+    provider = OpenAICompatibleProvider("test", "fake-key")
+    provider._client = NS(chat=NS(completions=completions))
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    tools = ToolRegistry(tmp_path / "workspace", state, session)
+    turn = Agent(provider, tools, state, session).run_turn("hello")
+
+    event = next(turn)
+    turn.close()
+
+    assert event.text == "streaming"
+    assert response.closed is True
+    assert state.get_run(event.run_id)["status"] == "cancelled"
     state.close()

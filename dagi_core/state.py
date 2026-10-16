@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS messages (
     tool_calls TEXT,
     tool_call_id TEXT,
     name TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    is_partial INTEGER NOT NULL DEFAULT 0
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content, session_id UNINDEXED, role UNINDEXED,
@@ -85,6 +86,9 @@ class StateStore:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
         self._db.executescript(_SCHEMA)
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(messages)")}
+        if "is_partial" not in columns:
+            self._db.execute("ALTER TABLE messages ADD COLUMN is_partial INTEGER NOT NULL DEFAULT 0")
         self._db.commit()
         if os.name == "posix":
             os.chmod(self.path, 0o600)
@@ -143,8 +147,8 @@ class StateStore:
         if calls is not None and not isinstance(calls, list):
             raise TypeError("tool_calls must be a list")
         cursor = self._db.execute(
-            """INSERT INTO messages(session_id, role, content, tool_calls, tool_call_id, name, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO messages(session_id, role, content, tool_calls, tool_call_id, name, created_at, is_partial)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session_id,
                 role,
@@ -153,14 +157,15 @@ class StateStore:
                 message.get("tool_call_id"),
                 message.get("name"),
                 _now(),
+                int(bool(message.get("is_partial", False))),
             ),
         )
         self._db.commit()
         return int(cursor.lastrowid)
 
-    def messages(self, session_id: int) -> list[dict[str, Any]]:
+    def messages(self, session_id: int, *, include_metadata: bool = False) -> list[dict[str, Any]]:
         rows = self._db.execute(
-            """SELECT role, content, tool_calls, tool_call_id, name
+            """SELECT role, content, tool_calls, tool_call_id, name, is_partial
                FROM messages WHERE session_id=? ORDER BY id""",
             (session_id,),
         ).fetchall()
@@ -175,6 +180,8 @@ class StateStore:
                 message["tool_call_id"] = row["tool_call_id"]
             if row["name"] is not None:
                 message["name"] = row["name"]
+            if include_metadata:
+                message["is_partial"] = bool(row["is_partial"])
             result.append(message)
         return result
 

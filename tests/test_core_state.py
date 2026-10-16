@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import stat
 
 from dagi_core.state import StateStore
@@ -72,6 +73,30 @@ def test_run_statuses_are_persisted_and_terminal_outcomes_are_distinct(tmp_path)
     }
     assert all(run["session_id"] == session for run in outcomes.values())
     assert all(run["finished_at"] for run in outcomes.values())
+    store.close()
+
+
+def test_existing_database_migrates_partial_message_flag(tmp_path):
+    path = tmp_path / "previous.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        CREATE TABLE sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, created_at TEXT NOT NULL);
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL REFERENCES sessions(id),
+            role TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', tool_calls TEXT,
+            tool_call_id TEXT, name TEXT, created_at TEXT NOT NULL
+        );
+        INSERT INTO sessions(title, created_at) VALUES('old', '2026-01-01T00:00:00+00:00');
+    """)
+    connection.commit()
+    connection.close()
+
+    store = StateStore(path)
+    session = store.list_sessions()[0]["id"]
+    store.append_message(session, {"role": "assistant", "content": "partial", "is_partial": True})
+
+    assert store.messages(session, include_metadata=True)[0]["is_partial"] is True
     store.close()
 
 
