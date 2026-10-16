@@ -61,3 +61,27 @@ def test_shell_confirmation_is_opt_in_and_terminal_safe(monkeypatch, capsys):
     assert approve_shell_command("printf ok") is True
     monkeypatch.setattr("builtins.input", lambda _prompt: "yessir")
     assert approve_shell_command("printf no") is False
+
+
+def test_cli_displays_run_id_and_terminal_status(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    import dagi_core.cli as cli
+
+    class FinishedAgent:
+        def run_turn(self, _text):
+            yield SimpleNamespace(
+                kind="done", session_id=1, run_id="run-123", tool_call_id=None,
+                tool_name=None, tool_args=None, text=None, status="completed",
+            )
+
+    monkeypatch.setenv("DAGI_API_KEY", "placeholder-for-test")
+    monkeypatch.setenv("DAGI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("DAGI_WORKSPACE", str(tmp_path / "workspace"))
+    inputs = iter(["hello", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
+    monkeypatch.setattr(cli, "_new_agent", lambda *_args: FinishedAgent())
+
+    cli.run()
+
+    assert "[run-123] completed" in capsys.readouterr().out

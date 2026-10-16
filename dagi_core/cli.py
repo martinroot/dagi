@@ -84,13 +84,13 @@ def run() -> None:
                 if event.kind == "text" and event.text:
                     print(event.text, end="", flush=True)
                 elif event.kind == "tool_call":
-                    print(f"\n-> {event.tool_name}({event.tool_args!r})")
+                    print(f"\n-> [{event.run_id}/{event.tool_call_id}] {event.tool_name}({event.tool_args!r})")
                 elif event.kind == "tool_result":
                     print((event.text or "")[:400])
                 elif event.kind == "error":
                     print(f"\nError: {event.text}", file=sys.stderr)
                 elif event.kind == "done":
-                    print()
+                    print(f"\n[{event.run_id}] {event.status}")
     finally:
         state.close()
         print("\nSession saved.")

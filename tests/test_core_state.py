@@ -56,6 +56,25 @@ def test_skills_can_be_created_loaded_and_listed(tmp_path):
     store.close()
 
 
+def test_run_statuses_are_persisted_and_terminal_outcomes_are_distinct(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite3")
+    session = store.create_session()
+
+    outcomes = {}
+    for status in ("completed", "error", "limit", "cancelled"):
+        run_id = store.create_run(session)
+        assert store.get_run(run_id)["status"] == "running"
+        store.finish_run(run_id, status)
+        outcomes[status] = store.get_run(run_id)
+
+    assert {run["status"] for run in outcomes.values()} == {
+        "completed", "error", "limit", "cancelled"
+    }
+    assert all(run["session_id"] == session for run in outcomes.values())
+    assert all(run["finished_at"] for run in outcomes.values())
+    store.close()
+
+
 def test_state_database_has_owner_only_permissions_on_posix(tmp_path):
     if os.name != "posix":
         return

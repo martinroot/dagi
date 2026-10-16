@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from typing import Iterator, Literal
 
-from .provider import OpenAICompatibleProvider, StreamEvent
+from .provider import OpenAICompatibleProvider
 from .state import StateStore
 from .tools import ToolError, ToolRegistry
 
@@ -22,9 +22,13 @@ when you have discovered a reusable procedure. Be honest about tool results; nev
 @dataclass(frozen=True)
 class AgentEvent:
     kind: Literal["text", "tool_call", "tool_result", "error", "done"]
+    session_id: int | None = None
+    run_id: str | None = None
+    tool_call_id: str | None = None
     text: str | None = None
     tool_name: str | None = None
     tool_args: dict | None = None
+    status: str | None = None
 
 
 class Agent:
@@ -45,76 +49,102 @@ class Agent:
     def run_turn(self, user_text: str) -> Iterator[AgentEvent]:
         if not user_text.strip():
             raise ValueError("user message must not be empty")
-        self.state.append_message(self.session_id, {"role": "user", "content": user_text})
+        run_id = self.state.create_run(self.session_id)
+        status = "running"
+        error_text = None
 
-        for _round in range(MAX_TOOL_ROUNDS):
-            messages = [
-                {"role": "system", "content": self.system_prompt},
-                *self.state.messages(self.session_id),
-            ]
-            specs = [tool.openai_spec() for tool in self.tools.specs()]
-            text_parts: list[str] = []
-            tool_calls: list[dict] = []
-            try:
-                for event in self.provider.stream(messages, specs):
-                    if event.kind == "text" and event.text:
-                        text_parts.append(event.text)
-                        yield AgentEvent(kind="text", text=event.text)
-                    elif event.kind == "tool_call" and event.tool_call is not None:
-                        tool_calls.append(event.tool_call)
-            except Exception as exc:
-                yield AgentEvent(kind="error", text=f"provider error: {exc}")
-                yield AgentEvent(kind="done")
-                return
-
-            assistant_content = "".join(text_parts)
-            if not tool_calls:
-                if assistant_content:
-                    self.state.append_message(
-                        self.session_id, {"role": "assistant", "content": assistant_content}
-                    )
-                yield AgentEvent(kind="done")
-                return
-
-            # Durable-before-side-effect: a process restart can reconstruct the pending tool round.
-            self.state.append_message(
-                self.session_id,
-                {
-                    "role": "assistant",
-                    "content": assistant_content or None,
-                    "tool_calls": [
-                        {
-                            "id": call["id"],
-                            "type": "function",
-                            "function": {
-                                "name": call["name"],
-                                "arguments": json.dumps(call["arguments"], ensure_ascii=False),
-                            },
-                        }
-                        for call in tool_calls
-                    ],
-                },
+        def event(kind: str, **values) -> AgentEvent:
+            return AgentEvent(
+                kind=kind,
+                session_id=self.session_id,
+                run_id=run_id,
+                **values,
             )
-            for call in tool_calls:
-                name = str(call.get("name", ""))
-                arguments = call.get("arguments")
-                yield AgentEvent(kind="tool_call", tool_name=name, tool_args=arguments)
-                try:
-                    output = self.tools.call(name, arguments)
-                except ToolError as exc:
-                    output = f"[tool error] {exc}"
-                except Exception as exc:
-                    output = f"[tool error] {type(exc).__name__}: {exc}"
+
+        try:
+            self.state.append_message(self.session_id, {"role": "user", "content": user_text})
+            for _round in range(MAX_TOOL_ROUNDS):
+                messages = [
+                    {"role": "system", "content": self.system_prompt},
+                    *self.state.messages(self.session_id),
+                ]
+                specs = [tool.openai_spec() for tool in self.tools.specs()]
+                text_parts: list[str] = []
+                tool_calls: list[dict] = []
+                for item in self.provider.stream(messages, specs):
+                    if item.kind == "text" and item.text:
+                        text_parts.append(item.text)
+                        yield event("text", text=item.text)
+                    elif item.kind == "tool_call" and item.tool_call is not None:
+                        tool_calls.append(item.tool_call)
+
+                assistant_content = "".join(text_parts)
+                if not tool_calls:
+                    if assistant_content:
+                        self.state.append_message(
+                            self.session_id,
+                            {"role": "assistant", "content": assistant_content},
+                        )
+                    status = "completed"
+                    break
+
+                # Durable-before-side-effect: a restart can reconstruct the pending tool round.
                 self.state.append_message(
                     self.session_id,
                     {
-                        "role": "tool",
-                        "tool_call_id": str(call.get("id", "")),
-                        "name": name,
-                        "content": output,
+                        "role": "assistant",
+                        "content": assistant_content or None,
+                        "tool_calls": [
+                            {
+                                "id": call["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": call["name"],
+                                    "arguments": json.dumps(call["arguments"], ensure_ascii=False),
+                                },
+                            }
+                            for call in tool_calls
+                        ],
                     },
                 )
-                yield AgentEvent(kind="tool_result", tool_name=name, text=output)
+                for call in tool_calls:
+                    name = str(call.get("name", ""))
+                    call_id = str(call.get("id", ""))
+                    arguments = call.get("arguments")
+                    yield event("tool_call", tool_call_id=call_id, tool_name=name, tool_args=arguments)
+                    try:
+                        output = self.tools.call(name, arguments)
+                    except ToolError as exc:
+                        output = f"[tool error] {exc}"
+                    except Exception as exc:
+                        output = f"[tool error] {type(exc).__name__}: {exc}"
+                    self.state.append_message(
+                        self.session_id,
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": name,
+                            "content": output,
+                        },
+                    )
+                    yield event("tool_result", tool_call_id=call_id, tool_name=name, text=output)
+            else:
+                status = "limit"
+                error_text = f"stopped after {MAX_TOOL_ROUNDS} tool rounds"
+                yield event("error", text=error_text)
 
-        yield AgentEvent(kind="error", text=f"stopped after {MAX_TOOL_ROUNDS} tool rounds")
-        yield AgentEvent(kind="done")
+            yield event("done", status=status)
+        except GeneratorExit:
+            if status == "running":
+                status = "cancelled"
+            raise
+        except Exception as exc:
+            status = "error"
+            error_text = f"{type(exc).__name__}: {exc}"
+            yield event("error", text=f"provider or run error: {error_text}")
+            yield event("done", status=status)
+        finally:
+            if status == "running":
+                status = "error"
+                error_text = "run ended without a terminal outcome"
+            self.state.finish_run(run_id, status, error_text)

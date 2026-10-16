@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT,
     created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS runs (
+    run_id TEXT PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'error', 'limit', 'cancelled')),
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    error TEXT
 );
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,6 +98,30 @@ class StateStore:
         )
         self._db.commit()
         return int(cursor.lastrowid)
+
+    def create_run(self, session_id: int) -> str:
+        run_id = str(uuid.uuid4())
+        self._db.execute(
+            "INSERT INTO runs(run_id, session_id, status, started_at) VALUES(?, ?, 'running', ?)",
+            (run_id, session_id, _now()),
+        )
+        self._db.commit()
+        return run_id
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        row = self._db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def finish_run(self, run_id: str, status: str, error: str | None = None) -> None:
+        if status not in {"completed", "error", "limit", "cancelled"}:
+            raise ValueError(f"invalid terminal run status: {status!r}")
+        cursor = self._db.execute(
+            "UPDATE runs SET status=?, finished_at=?, error=? WHERE run_id=? AND status='running'",
+            (status, _now(), error, run_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"run is missing or already finished: {run_id}")
+        self._db.commit()
 
     def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
         rows = self._db.execute(
