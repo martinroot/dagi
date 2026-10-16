@@ -43,7 +43,7 @@ def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
         shell_enabled=config.enable_shell,
         approve_shell=approve_shell_command if config.enable_shell else None,
     )
-    return Agent(provider, tools, state, session_id)
+    return Agent(provider, tools, state, session_id, usage_policy=config.usage_policy)
 
 
 def run() -> None:

@@ -11,9 +11,10 @@ from openai import OpenAI
 
 @dataclass(frozen=True)
 class StreamEvent:
-    kind: Literal["text", "tool_call", "finish"]
+    kind: Literal["text", "tool_call", "usage", "finish"]
     text: str | None = None
     tool_call: dict[str, Any] | None = None
+    usage: dict[str, int] | None = None
     finish_reason: str | None = None
 
 
@@ -36,11 +37,21 @@ class OpenAICompatibleProvider:
             messages=messages,
             tools=tools or None,
             stream=True,
+            stream_options={"include_usage": True},
         )
         pending: dict[int, dict[str, str | None]] = {}
         finish_reason: str | None = None
+        actual_usage: dict[str, int] | None = None
         try:
             for chunk in response:
+                usage = getattr(chunk, "usage", None)
+                input_tokens = getattr(usage, "prompt_tokens", None) if usage is not None else None
+                output_tokens = getattr(usage, "completion_tokens", None) if usage is not None else None
+                if (
+                    isinstance(input_tokens, int) and not isinstance(input_tokens, bool) and input_tokens >= 0
+                    and isinstance(output_tokens, int) and not isinstance(output_tokens, bool) and output_tokens >= 0
+                ):
+                    actual_usage = {"input_tokens": input_tokens, "output_tokens": output_tokens}
                 if not chunk.choices:
                     continue
                 choice = chunk.choices[0]
@@ -60,6 +71,8 @@ class OpenAICompatibleProvider:
                 if getattr(choice, "finish_reason", None):
                     finish_reason = choice.finish_reason
 
+            if actual_usage is not None:
+                yield StreamEvent(kind="usage", usage=actual_usage)
             if finish_reason is None:
                 raise IncompleteStreamError("provider stream ended before finish_reason")
             if finish_reason not in {"stop", "tool_calls", "length", "content_filter"}:

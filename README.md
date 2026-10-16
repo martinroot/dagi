@@ -9,6 +9,8 @@ A compact terminal agent, not a reduced copy of the full Hermes platform. This i
 - SQLite transcript, FTS5 memory search, and persistent reusable skills.
 - Durable run records with `completed`, `error`, `limit`, and `cancelled` outcomes.
 - Events correlated by session ID, run ID, and tool-call ID.
+- Provider usage is persisted per call and aggregated per run as actual, estimated, mixed, or unavailable; missing usage is never stored as zero.
+- Configurable per-model prices, provider-call limits, and monetary run budgets.
 - Stream finish reasons are validated; partial responses are stored as incomplete, and unfinalized tool calls are never executed.
 - Workspace-scoped file tools; a tool call is persisted before its side effect.
 - A terminal CLI with session listing/resume and no web panel, gateway, or TUI framework.
@@ -39,9 +41,22 @@ Environment variables:
 - `DAGI_API_KEY` — required API key.
 - `DAGI_BASE_URL` — API endpoint; defaults to `https://api.openai.com/v1`.
 - `DAGI_MODEL` — model; defaults to `gpt-4o-mini`.
+- `DAGI_MODEL_PRICES` — JSON model map with `input_per_million` and `output_per_million` prices in USD per million tokens.
+- `DAGI_MAX_PROVIDER_CALLS_PER_RUN` — maximum primary and auxiliary provider calls; defaults to `32`.
+- `DAGI_BUDGET_USD` — optional per-run spend limit; requires a price entry for `DAGI_MODEL`.
+- `DAGI_ESTIMATE_MISSING_USAGE` — estimate missing token usage (default `true`); set to `false` to retain it as unavailable.
 - `DAGI_HOME` — database and skill storage; defaults to `~/.dagi`.
 - `DAGI_WORKSPACE` — root for file tools; defaults to the current directory.
 - `DAGI_ENABLE_SHELL=1` — enables shell execution with per-command approval.
+
+Budget checks happen between provider calls. A single provider response may exceed the configured budget before its final usage is available; missing usage is treated as unknown, never as zero.
+
+Example price configuration:
+
+```bash
+export DAGI_MODEL_PRICES='{"gpt-4o-mini":{"input_per_million":"0.15","output_per_million":"0.60"}}'
+export DAGI_BUDGET_USD="0.25"
+```
 
 CLI commands: `/help`, `/new`, `/sessions`, `/resume <session_id>`, `/memory <query>`, `/skills`, `/model`, `/exit`. A run prints its ID and final status. Skills can be saved with `create_skill` and loaded with `use_skill`.
 
@@ -58,10 +73,11 @@ Tests do not require an API key and do not make model requests.
 ## Layout
 
 ```text
-dagi_core/agent.py     agent loop, run status, and interrupted-tool recovery
+dagi_core/agent.py     agent loop, run status, recovery, and usage budgets
 dagi_core/provider.py  single OpenAI-compatible streaming adapter
 dagi_core/tools.py     workspace files, memory, skills, optional shell
-dagi_core/state.py     SQLite, FTS5, runs, tool executions, and skills
+dagi_core/state.py     SQLite, FTS5, runs, tools, and provider usage
+dagi_core/usage.py     token provenance, model prices, and run limits
 dagi_core/config.py    environment-based configuration
 dagi_core/cli.py       terminal interface
 ```

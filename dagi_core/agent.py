@@ -9,6 +9,7 @@ from typing import Generator, Iterator, Literal
 from .provider import IncompleteStreamError, OpenAICompatibleProvider
 from .state import StateStore
 from .tools import ToolError, ToolRegistry
+from .usage import UsagePolicy
 
 MAX_TOOL_ROUNDS = 16
 SYSTEM_PROMPT = """You are Dagi, a minimal Hermes-style agent running in a terminal.
@@ -39,16 +40,20 @@ class Agent:
         state: StateStore,
         session_id: int,
         system_prompt: str = SYSTEM_PROMPT,
+        usage_policy: UsagePolicy | None = None,
     ):
         self.provider = provider
+        self.model = getattr(provider, "model", "unknown")
         self.tools = tools
         self.state = state
         self.session_id = session_id
         self.system_prompt = system_prompt
+        self.usage_policy = usage_policy or UsagePolicy()
 
     def run_turn(self, user_text: str) -> Iterator[AgentEvent]:
         if not user_text.strip():
             raise ValueError("user message must not be empty")
+        self.usage_policy.validate_model(self.model)
         run_id = self.state.create_run(self.session_id)
         status = "running"
         error_text = None
@@ -114,6 +119,12 @@ class Agent:
 
             self.state.append_message(self.session_id, {"role": "user", "content": user_text})
             for _round in range(MAX_TOOL_ROUNDS):
+                stop_reason = self.usage_policy.stop_reason(self.state.usage_summary(run_id))
+                if stop_reason:
+                    status = "limit"
+                    error_text = stop_reason
+                    yield event("error", text=error_text)
+                    break
                 messages = [
                     {"role": "system", "content": self.system_prompt},
                     *self.state.messages(self.session_id),
@@ -122,20 +133,36 @@ class Agent:
                 current_text_parts = []
                 tool_calls: list[dict] = []
                 finish_reason = None
-                stream = self.provider.stream(messages, specs)
+                actual_usage = None
+                response_seen = False
+                provider_call_id = self.state.create_provider_call(run_id, self.model, "agent")
+                stream = None
                 try:
+                    stream = self.provider.stream(messages, specs)
                     for item in stream:
                         if item.kind == "text" and item.text:
+                            response_seen = True
                             current_text_parts.append(item.text)
                             yield event("text", text=item.text)
                         elif item.kind == "tool_call" and item.tool_call is not None:
+                            response_seen = True
                             tool_calls.append(item.tool_call)
+                        elif item.kind == "usage" and item.usage is not None:
+                            actual_usage = item.usage
                         elif item.kind == "finish":
+                            response_seen = True
                             finish_reason = item.finish_reason
                 finally:
                     close_stream = getattr(stream, "close", None)
                     if callable(close_stream):
                         close_stream()
+                    response_text = "".join(current_text_parts) + json.dumps(tool_calls, ensure_ascii=False)
+                    usage = self.usage_policy.measure(
+                        self.model, messages, response_text, actual_usage,
+                        tools=specs,
+                        estimate=self.usage_policy.estimate_missing and response_seen,
+                    )
+                    self.state.record_usage(provider_call_id, usage.as_dict())
 
                 assistant_content = "".join(current_text_parts)
                 if finish_reason is None:
@@ -165,6 +192,14 @@ class Agent:
                     break
                 if finish_reason != "tool_calls" or not tool_calls:
                     raise IncompleteStreamError(f"invalid tool round finish_reason: {finish_reason!r}")
+
+                stop_reason = self.usage_policy.stop_reason(self.state.usage_summary(run_id))
+                if stop_reason:
+                    save_partial()
+                    status = "limit"
+                    error_text = stop_reason
+                    yield event("error", text=error_text)
+                    break
 
                 calls_for_storage = [
                     {

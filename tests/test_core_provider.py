@@ -5,13 +5,13 @@ import pytest
 from dagi_core.provider import OpenAICompatibleProvider, StreamEvent
 
 
-def _chunk(*, content=None, tool_calls=None, finish_reason=None):
+def _chunk(*, content=None, tool_calls=None, finish_reason=None, usage=None):
     return NS(
         choices=[NS(
             delta=NS(content=content, tool_calls=tool_calls),
             finish_reason=finish_reason,
         )],
-        usage=None,
+        usage=usage,
     )
 
 
@@ -71,6 +71,20 @@ def test_filtered_response_discards_pending_tool_calls():
     assert events == [StreamEvent(kind="finish", finish_reason="content_filter")]
 
 
+def test_actual_usage_survives_an_incomplete_stream():
+    response = iter([
+        _chunk(content="partial"),
+        NS(choices=[], usage=NS(prompt_tokens=10, completion_tokens=2)),
+    ])
+    provider, _ = _provider_for(response)
+    events = []
+
+    with pytest.raises(ValueError, match="finish"):
+        events.extend(provider.stream([], []))
+
+    assert StreamEvent(kind="usage", usage={"input_tokens": 10, "output_tokens": 2}) in events
+
+
 def test_provider_rejects_stream_without_finish_reason():
     provider, _ = _provider_for(iter([_chunk(content="partial")]))
 
@@ -102,6 +116,22 @@ def test_provider_closes_transport_when_stream_is_cancelled():
     stream.close()
 
     assert response.closed is True
+
+
+def test_provider_requests_and_forwards_usage_data():
+    response = iter([
+        _chunk(finish_reason="stop"),
+        NS(choices=[], usage=NS(prompt_tokens=17, completion_tokens=5)),
+    ])
+    provider, completions = _provider_for(response)
+
+    events = list(provider.stream([], []))
+
+    assert events == [
+        StreamEvent(kind="usage", usage={"input_tokens": 17, "output_tokens": 5}),
+        StreamEvent(kind="finish", finish_reason="stop"),
+    ]
+    assert completions.kwargs["stream_options"] == {"include_usage": True}
 
 
 def test_provider_refuses_malformed_tool_arguments():

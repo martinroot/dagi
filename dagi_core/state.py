@@ -38,6 +38,19 @@ CREATE TABLE IF NOT EXISTS tool_executions (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tool_executions_session_status ON tool_executions(session_id, status);
+CREATE TABLE IF NOT EXISTS provider_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    usage_source TEXT NOT NULL CHECK (usage_source IN ('actual', 'estimated', 'unavailable')),
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cost_usd TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS provider_calls_run_id ON provider_calls(run_id, id);
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -139,6 +152,80 @@ class StateStore:
         if cursor.rowcount != 1:
             raise ValueError(f"run is missing or already finished: {run_id}")
         self._db.commit()
+
+    def create_provider_call(self, run_id: str, model: str, purpose: str) -> int:
+        cursor = self._db.execute(
+            """INSERT INTO provider_calls(run_id, model, purpose, usage_source, started_at)
+               VALUES(?, ?, ?, 'unavailable', ?)""",
+            (run_id, model, purpose, _now()),
+        )
+        self._db.commit()
+        return int(cursor.lastrowid)
+
+    def record_usage(self, provider_call_id: int, usage: dict[str, Any]) -> None:
+        source = usage.get("source")
+        if source not in {"actual", "estimated", "unavailable"}:
+            raise ValueError(f"invalid usage source: {source!r}")
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        cost_usd = usage.get("cost_usd")
+        if source == "unavailable":
+            if any(value is not None for value in (input_tokens, output_tokens, cost_usd)):
+                raise ValueError("unavailable usage must not contain numeric zeroes or costs")
+        else:
+            for value in (input_tokens, output_tokens):
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise ValueError("known usage requires non-negative integer token counts")
+        cursor = self._db.execute(
+            """UPDATE provider_calls SET usage_source=?, input_tokens=?, output_tokens=?,
+                      cost_usd=?, finished_at=? WHERE id=?""",
+            (
+                source,
+                input_tokens,
+                output_tokens,
+                str(cost_usd) if cost_usd is not None else None,
+                _now(),
+                provider_call_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"provider call does not exist: {provider_call_id}")
+        self._db.commit()
+
+    def list_provider_calls(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            "SELECT * FROM provider_calls WHERE run_id=? ORDER BY id", (run_id,)
+        ).fetchall()
+        result = [dict(row) for row in rows]
+        for item in result:
+            if item["cost_usd"] is not None:
+                from decimal import Decimal
+                item["cost_usd"] = Decimal(item["cost_usd"])
+        return result
+
+    def usage_summary(self, run_id: str) -> dict[str, Any]:
+        rows = self._db.execute(
+            "SELECT usage_source, input_tokens, output_tokens, cost_usd FROM provider_calls WHERE run_id=? ORDER BY id",
+            (run_id,),
+        ).fetchall()
+        if not rows:
+            from decimal import Decimal
+            return {
+                "provider_calls": 0, "source": "actual", "input_tokens": 0,
+                "output_tokens": 0, "cost_usd": Decimal("0"),
+            }
+        from decimal import Decimal
+        sources = {row["usage_source"] for row in rows}
+        source = "unavailable" if "unavailable" in sources else (next(iter(sources)) if len(sources) == 1 else "mixed")
+        input_tokens = None if any(row["input_tokens"] is None for row in rows) else sum(row["input_tokens"] for row in rows)
+        output_tokens = None if any(row["output_tokens"] is None for row in rows) else sum(row["output_tokens"] for row in rows)
+        cost_usd = None if any(row["cost_usd"] is None for row in rows) else sum(
+            (Decimal(row["cost_usd"]) for row in rows), Decimal("0")
+        )
+        return {
+            "provider_calls": len(rows), "source": source,
+            "input_tokens": input_tokens, "output_tokens": output_tokens, "cost_usd": cost_usd,
+        }
 
     def save_tool_round(
         self,

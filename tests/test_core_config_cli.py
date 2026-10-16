@@ -87,6 +87,36 @@ def test_cli_displays_run_id_and_terminal_status(tmp_path, monkeypatch, capsys):
     assert "[run-123] completed" in capsys.readouterr().out
 
 
+def test_config_parses_usage_prices_and_budgets(tmp_path, monkeypatch):
+    from decimal import Decimal
+
+    monkeypatch.setenv("DAGI_API_KEY", "placeholder-for-test")
+    monkeypatch.setenv("DAGI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("DAGI_MODEL", "test-model")
+    monkeypatch.setenv("DAGI_MODEL_PRICES", '{"test-model":{"input_per_million":"0.15","output_per_million":"0.60"}}')
+    monkeypatch.setenv("DAGI_MAX_PROVIDER_CALLS_PER_RUN", "7")
+    monkeypatch.setenv("DAGI_BUDGET_USD", "0.25")
+    monkeypatch.setenv("DAGI_ESTIMATE_MISSING_USAGE", "false")
+
+    config = load_config()
+
+    assert config.usage_policy.max_calls_per_run == 7
+    assert config.usage_policy.budget_usd == Decimal("0.25")
+    assert config.usage_policy.prices["test-model"].input_per_million == Decimal("0.15")
+    assert config.usage_policy.estimate_missing is False
+
+
+def test_config_requires_price_for_configured_money_budget(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAGI_API_KEY", "placeholder-for-test")
+    monkeypatch.setenv("DAGI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("DAGI_MODEL", "unpriced-model")
+    monkeypatch.setenv("DAGI_BUDGET_USD", "1.00")
+    monkeypatch.delenv("DAGI_MODEL_PRICES", raising=False)
+
+    with pytest.raises(ValueError, match="price"):
+        load_config()
+
+
 def test_cli_can_resume_an_existing_session(tmp_path, monkeypatch, capsys):
     from types import SimpleNamespace
 
