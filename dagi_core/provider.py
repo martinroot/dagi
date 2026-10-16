@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, Iterator, Literal
 
 from openai import OpenAI
@@ -26,6 +27,15 @@ class OpenAICompatibleProvider:
     def __init__(self, model: str, api_key: str, base_url: str = "https://api.openai.com/v1"):
         self.model = model
         self._client = OpenAI(api_key=api_key, base_url=base_url)
+        self._stream_lock = Lock()
+        self._active_response = None
+
+    def cancel(self) -> None:
+        with self._stream_lock:
+            response = self._active_response
+        close = getattr(response, "close", None)
+        if callable(close):
+            close()
 
     def stream(
         self,
@@ -39,6 +49,8 @@ class OpenAICompatibleProvider:
             stream=True,
             stream_options={"include_usage": True},
         )
+        with self._stream_lock:
+            self._active_response = response
         pending: dict[int, dict[str, str | None]] = {}
         finish_reason: str | None = None
         actual_usage: dict[str, int] | None = None
@@ -102,6 +114,11 @@ class OpenAICompatibleProvider:
                 yield StreamEvent(kind="tool_call", tool_call=call)
             yield StreamEvent(kind="finish", finish_reason=finish_reason)
         finally:
-            close = getattr(response, "close", None)
-            if callable(close):
-                close()
+            try:
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
+            finally:
+                with self._stream_lock:
+                    if self._active_response is response:
+                        self._active_response = None

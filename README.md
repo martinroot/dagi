@@ -52,7 +52,8 @@ Environment variables:
 - `DAGI_COMPRESSION_MODEL` — history-compression model; defaults to `DAGI_MODEL` and can be priced separately.
 - `DAGI_HOME` — database and skill storage; defaults to `~/.dagi`.
 - `DAGI_WORKSPACE` — root for file tools; defaults to the current directory.
-- `DAGI_ENABLE_SHELL=1` — enables shell execution with per-command approval.
+- `DAGI_ENABLE_SHELL=1` — enables shell execution with per-command approval in the CLI.
+- `DAGI_WEB_HOST` / `DAGI_WEB_PORT` — sandbox bind address; defaults to `127.0.0.1:8765`.
 
 Budget checks happen between provider calls. A single provider response may exceed the configured budget before its final usage is available; missing usage is treated as unknown, never as zero. Context-compression calls are stored separately and count toward the same provider-call and budget limits.
 
@@ -64,6 +65,16 @@ export DAGI_BUDGET_USD="0.25"
 ```
 
 CLI commands: `/help`, `/new`, `/sessions`, `/resume <session_id>`, `/memory <query>`, `/skills`, `/model`, `/exit`. A run prints its ID and final status. Skills can be saved with `create_skill` and loaded with `use_skill`.
+
+## Visual sandbox
+
+Run the local web shell with one command:
+
+```bash
+uv run dagi-web
+```
+
+It binds to `127.0.0.1:8765` by default. The sandbox shows sessions, runs, chat/events, exact provider requests, tool outcomes, errors, and usage. Run events are persisted and replayed after reconnect; opening a saved run only inspects it and never starts it again. Each HTTP handler and run worker opens its own SQLite connection. Shell tools are disabled in the web sandbox; use the CLI for individually approved shell actions. Keep the server on loopback unless you add an authenticated reverse proxy.
 
 ## Custom tools
 
@@ -102,6 +113,8 @@ dagi_core/tools.py     workspace files, memory, skills, optional shell
 dagi_core/state.py     SQLite, FTS5, runs, requests, archives, and usage
 dagi_core/context.py   bounded request assembly and history compression
 dagi_core/usage.py     token provenance, model prices, and run limits
+dagi_core/web.py       loopback web sandbox and HTTP API
+dagi_core/static/      sandbox HTML and event-driven UI
 dagi_core/config.py    environment-based configuration
 dagi_core/cli.py       terminal interface
 ```

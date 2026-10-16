@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS context_archives (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS context_archives_session_id ON context_archives(session_id, id);
+CREATE TABLE IF NOT EXISTS run_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    event_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS run_events_run_id ON run_events(run_id, id);
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -164,6 +172,39 @@ class StateStore:
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         row = self._db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
         return dict(row) if row is not None else None
+
+    def list_runs(self, session_id: int, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            "SELECT * FROM runs WHERE session_id=? ORDER BY started_at DESC LIMIT ?",
+            (session_id, max(1, min(int(limit), 500))),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def append_run_event(self, session_id: int, run_id: str, event: dict[str, Any]) -> int:
+        if event.get("session_id") != session_id or event.get("run_id") != run_id:
+            raise ValueError("run event identifiers do not match the target run")
+        cursor = self._db.execute(
+            "INSERT INTO run_events(run_id, session_id, event_json, created_at) VALUES(?, ?, ?, ?)",
+            (run_id, session_id, json.dumps(event, ensure_ascii=False), _now()),
+        )
+        self._db.commit()
+        return int(cursor.lastrowid)
+
+    def list_run_events(
+        self, run_id: str, *, after_id: int = 0, limit: int = 1000
+    ) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            """SELECT id, run_id, session_id, event_json, created_at FROM run_events
+               WHERE run_id=? AND id>? ORDER BY id LIMIT ?""",
+            (run_id, max(0, int(after_id)), max(1, min(int(limit), 5000))),
+        ).fetchall()
+        return [
+            {
+                "id": row["id"], "run_id": row["run_id"], "session_id": row["session_id"],
+                "event": json.loads(row["event_json"]), "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
 
     def finish_run(self, run_id: str, status: str, error: str | None = None) -> None:
         if status not in {"completed", "error", "limit", "cancelled"}:
@@ -393,6 +434,15 @@ class StateStore:
             raise ValueError(f"tool call is missing or not pending: {tool_call_id}")
         self._db.commit()
 
+    def reset_tool_call_pending(self, tool_call_id: str) -> None:
+        cursor = self._db.execute(
+            "UPDATE tool_executions SET status='pending', updated_at=? WHERE tool_call_id=? AND status='running'",
+            (_now(), tool_call_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"tool call is missing or not running: {tool_call_id}")
+        self._db.commit()
+
     def finish_tool_call(
         self, tool_call_id: str, status: str, result: str | None = None, error: str | None = None
     ) -> None:
@@ -455,6 +505,12 @@ class StateStore:
         if session_id is None:
             return []
         return self.list_tool_calls(session_id)
+
+    def get_session(self, session_id: int) -> dict[str, Any] | None:
+        row = self._db.execute(
+            "SELECT id, title, created_at FROM sessions WHERE id=?", (session_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
         rows = self._db.execute(

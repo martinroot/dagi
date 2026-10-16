@@ -14,6 +14,7 @@ dependencies = ["openai==2.24.0"]
 
 [project.scripts]
 dagi = "dagi_core.cli:main"
+"dagi-web" = "dagi_core.web:main"
 
 [project.optional-dependencies]
 dev = ["pytest==9.0.3"]
@@ -23,3 +24,6 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["dagi_core*"]
+
+[tool.setuptools.package-data]
+dagi_core = ["static/*.html", "static/*.js"]

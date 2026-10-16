@@ -100,6 +100,25 @@ def test_existing_database_migrates_partial_message_flag(tmp_path):
     store.close()
 
 
+def test_run_events_are_persisted_and_resumable_by_cursor(tmp_path):
+    store = StateStore(tmp_path / "state.sqlite3")
+    session = store.create_session()
+    run = store.create_run(session)
+    first = {"kind": "text", "session_id": session, "run_id": run, "text": "hi"}
+    second = {"kind": "done", "session_id": session, "run_id": run, "status": "completed"}
+
+    first_id = store.append_run_event(session, run, first)
+    second_id = store.append_run_event(session, run, second)
+
+    assert store.list_run_events(run, after_id=0)[0]["event"] == first
+    replayed = store.list_run_events(run, after_id=first_id)
+    assert len(replayed) == 1
+    assert replayed[0]["id"] == second_id
+    assert replayed[0]["event"] == second
+    assert second_id > first_id
+    store.close()
+
+
 def test_state_database_has_owner_only_permissions_on_posix(tmp_path):
     if os.name != "posix":
         return

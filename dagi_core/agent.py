@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from threading import Event
 from typing import Generator, Iterator, Literal
 
 from .context import ContextBuilder, ContextLimitError
@@ -23,7 +24,7 @@ when you have discovered a reusable procedure. Be honest about tool results; nev
 
 @dataclass(frozen=True)
 class AgentEvent:
-    kind: Literal["text", "tool_call", "tool_result", "error", "done"]
+    kind: Literal["started", "text", "tool_call", "tool_result", "error", "done"]
     session_id: int | None = None
     run_id: str | None = None
     tool_call_id: str | None = None
@@ -32,6 +33,10 @@ class AgentEvent:
     tool_args: dict | None = None
     status: str | None = None
     is_error: bool | None = None
+
+
+class RunCancelled(Exception):
+    """Raised when a cooperative caller requests cancellation."""
 
 
 class Agent:
@@ -54,17 +59,38 @@ class Agent:
         self.usage_policy = usage_policy or UsagePolicy()
         self.context_builder = context_builder or ContextBuilder(state, usage_policy=self.usage_policy)
 
-    def run_turn(self, user_text: str) -> Iterator[AgentEvent]:
+    def run_turn(
+        self,
+        user_text: str,
+        *,
+        run_id: str | None = None,
+        cancel_event: Event | None = None,
+    ) -> Iterator[AgentEvent]:
         if not user_text.strip():
             raise ValueError("user message must not be empty")
         self.usage_policy.validate_model(self.model)
-        run_id = self.state.create_run(self.session_id)
+        if run_id is None:
+            run_id = self.state.create_run(self.session_id)
+        else:
+            existing = self.state.get_run(run_id)
+            if existing is None or existing["session_id"] != self.session_id or existing["status"] != "running":
+                raise ValueError("provided run_id must be a running run in this session")
         status = "running"
         error_text = None
         current_text_parts: list[str] = []
+        done_emitted = False
 
-        def event(kind: Literal["text", "tool_call", "tool_result", "error", "done"], **values) -> AgentEvent:
-            return AgentEvent(kind=kind, session_id=self.session_id, run_id=run_id, **values)
+        def event(kind: Literal["started", "text", "tool_call", "tool_result", "error", "done"], **values) -> AgentEvent:
+            nonlocal done_emitted
+            emitted = AgentEvent(kind=kind, session_id=self.session_id, run_id=run_id, **values)
+            self.state.append_run_event(self.session_id, run_id, asdict(emitted))
+            if kind == "done":
+                done_emitted = True
+            return emitted
+
+        def check_cancelled() -> None:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RunCancelled("run cancelled")
 
         def save_partial() -> None:
             content = "".join(current_text_parts)
@@ -79,8 +105,12 @@ class Agent:
             call_id = str(call.get("id", call.get("tool_call_id", "")))
             name = str(call["name"])
             arguments = call["arguments"]
+            check_cancelled()
             self.state.mark_tool_call_running(call_id)
             yield event("tool_call", tool_call_id=call_id, tool_name=name, tool_args=arguments)
+            if cancel_event is not None and cancel_event.is_set():
+                self.state.reset_tool_call_pending(call_id)
+                raise RunCancelled("run cancelled before tool action")
             outcome = "succeeded"
             error = None
             try:
@@ -109,6 +139,8 @@ class Agent:
             return outcome
 
         try:
+            yield event("started", status="running")
+            check_cancelled()
             running = self.state.list_tool_calls(self.session_id, ("running",))
             uncertain = self.state.list_tool_calls(self.session_id, ("uncertain",))
             for call in uncertain:
@@ -154,6 +186,7 @@ class Agent:
 
             self.state.append_message(self.session_id, {"role": "user", "content": user_text})
             for _round in range(MAX_TOOL_ROUNDS):
+                check_cancelled()
                 stop_reason = self.usage_policy.stop_reason(self.state.usage_summary(run_id))
                 if stop_reason:
                     status = "limit"
@@ -181,6 +214,7 @@ class Agent:
                 try:
                     stream = self.provider.stream(messages, specs)
                     for item in stream:
+                        check_cancelled()
                         if item.kind == "text" and item.text:
                             response_seen = True
                             current_text_parts.append(item.text)
@@ -205,6 +239,7 @@ class Agent:
                     )
                     self.state.record_usage(provider_call_id, usage.as_dict())
 
+                check_cancelled()
                 assistant_content = "".join(current_text_parts)
                 if finish_reason is None:
                     raise IncompleteStreamError("provider stream ended without finish_reason")
@@ -283,7 +318,15 @@ class Agent:
             save_partial()
             if status == "running":
                 status = "cancelled"
+                error_text = "run cancelled"
+            if not done_emitted:
+                event("done", status=status)
             raise
+        except RunCancelled as exc:
+            save_partial()
+            status = "cancelled"
+            error_text = str(exc)
+            yield event("done", status=status)
         except ContextLimitError as exc:
             save_partial()
             status = "limit"
@@ -292,10 +335,15 @@ class Agent:
             yield event("done", status=status)
         except Exception as exc:
             save_partial()
-            status = "error"
-            error_text = f"{type(exc).__name__}: {exc}"
-            yield event("error", text=f"provider or run error: {error_text}")
-            yield event("done", status=status)
+            if cancel_event is not None and cancel_event.is_set():
+                status = "cancelled"
+                error_text = "run cancelled"
+                yield event("done", status=status)
+            else:
+                status = "error"
+                error_text = f"{type(exc).__name__}: {exc}"
+                yield event("error", text=f"provider or run error: {error_text}")
+                yield event("done", status=status)
         finally:
             if status == "running":
                 status = "error"

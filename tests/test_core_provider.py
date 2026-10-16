@@ -118,6 +118,18 @@ def test_provider_closes_transport_when_stream_is_cancelled():
     assert response.closed is True
 
 
+def test_provider_cancel_closes_the_active_transport():
+    response = _ClosableResponse([_chunk(content="partial")])
+    provider, _ = _provider_for(response)
+    stream = provider.stream([], [])
+
+    assert next(stream) == StreamEvent(kind="text", text="partial")
+    provider.cancel()
+
+    assert response.closed is True
+    stream.close()
+
+
 def test_provider_requests_and_forwards_usage_data():
     response = iter([
         _chunk(finish_reason="stop"),

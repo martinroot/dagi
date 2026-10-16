@@ -123,12 +123,16 @@ def test_closing_a_live_run_marks_it_cancelled(tmp_path):
     provider = FakeProvider([[StreamEvent(kind="text", text="partial")]])
     events = Agent(provider, tools, state, session).run_turn("hello")
 
+    started_event = next(events)
     first_event = next(events)
     events.close()
 
+    assert started_event.kind == "started"
+    assert first_event.text == "partial"
     assert first_event.run_id
     assert state.get_run(first_event.run_id)["status"] == "cancelled"
     partial = state.messages(session, include_metadata=True)[-1]
+    assert state.list_run_events(first_event.run_id)[-1]["event"]["status"] == "cancelled"
     assert partial["is_partial"] is True
     state.close()
 
@@ -217,9 +221,11 @@ def test_cancelling_agent_closes_provider_transport(tmp_path):
     tools = ToolRegistry(tmp_path / "workspace", state, session)
     turn = Agent(provider, tools, state, session).run_turn("hello")
 
+    started = next(turn)
     event = next(turn)
     turn.close()
 
+    assert started.kind == "started"
     assert event.text == "streaming"
     assert response.closed is True
     assert state.get_run(event.run_id)["status"] == "cancelled"

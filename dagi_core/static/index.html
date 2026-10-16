@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dagi Sandbox</title>
+  <style>
+    :root { color-scheme: light dark; font: 15px/1.45 system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; grid-template-rows: auto 1fr; background: #11151d; color: #edf2fa; }
+    header { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid #30394a; background: #171d27; }
+    h1 { font-size: 18px; margin: 0; }
+    h2 { font-size: 14px; margin: 0 0 10px; color: #aebbd0; }
+    button { color: inherit; background: #28374c; border: 1px solid #435571; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+    button:hover { background: #344965; }
+    button:disabled { opacity: .5; cursor: default; }
+    main { min-height: 0; display: grid; grid-template-columns: 230px minmax(300px, 1fr) minmax(260px, 360px); }
+    nav, .inspector { padding: 14px; overflow: auto; border-right: 1px solid #30394a; }
+    .inspector { border-right: 0; border-left: 1px solid #30394a; }
+    #sessions, #runs { list-style: none; margin: 0; padding: 0; }
+    #sessions button, #runs button { width: 100%; text-align: left; margin: 3px 0; overflow-wrap: anywhere; }
+    #sessions button.selected { border-color: #8ab4f8; }
+    .workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto 1fr auto; }
+    .toolbar { padding: 10px 14px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid #30394a; }
+    #session-title { margin-right: auto; font-weight: 600; }
+    #chat { overflow: auto; padding: 14px; }
+    .message, .event { padding: 9px 11px; margin: 7px 0; border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; background: #1c2430; }
+    .message.user { background: #223a51; }
+    .message.tool { background: #29283a; }
+    .event.error { color: #ffb4ab; }
+    form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #30394a; }
+    textarea { resize: vertical; min-height: 44px; max-height: 180px; flex: 1; border-radius: 6px; border: 1px solid #435571; background: #171d27; color: inherit; padding: 9px; }
+    details { margin: 8px 0; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 9px; background: #171d27; border-radius: 5px; max-height: 30vh; overflow: auto; font-size: 12px; }
+    .muted { color: #96a2b6; font-size: 12px; }
+    @media (max-width: 900px) { main { grid-template-columns: 180px minmax(250px, 1fr); } .inspector { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #30394a; } }
+    @media (max-width: 600px) { main { grid-template-columns: 1fr; } nav { max-height: 180px; border-right: 0; border-bottom: 1px solid #30394a; } }
+  </style>
+</head>
+<body>
+  <header><h1>Dagi Sandbox</h1><button id="new-session">New session</button></header>
+  <main>
+    <nav>
+      <h2>Sessions</h2><ul id="sessions"></ul>
+      <h2 style="margin-top:18px">Saved runs</h2><ul id="runs"></ul>
+    </nav>
+    <section class="workspace">
+      <div class="toolbar"><span id="session-title">Select or create a session</span><button id="stop-run" disabled>Stop run</button></div>
+      <div id="chat" aria-live="polite"></div>
+      <form id="chat-form"><textarea id="message" placeholder="Send a message…" required></textarea><button id="send" type="submit">Run</button></form>
+    </section>
+    <aside class="inspector">
+      <h2>Run inspector</h2><div id="run-status" class="muted">Select a saved run or start one.</div>
+      <details open><summary>Exact model requests</summary><pre id="requests">[]</pre></details>
+      <details open><summary>Tool calls and errors</summary><pre id="tools">[]</pre></details>
+      <details open><summary>Usage and cost</summary><pre id="usage">{}</pre></details>
+    </aside>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
