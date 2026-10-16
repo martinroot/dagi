@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dagi-core"
+version = "0.1.0"
+description = "A minimal, self-improving Hermes-style agent core"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+  "openai>=1.50,<3",
+  "PyYAML>=6,<7",
+]
+
+[project.scripts]
+dagi = "hermes.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["hermes*"]
