@@ -12,6 +12,7 @@ A compact terminal agent, not a reduced copy of the full Hermes platform. This i
 - Provider usage is persisted per call and aggregated per run as actual, estimated, mixed, or unavailable; missing usage is never stored as zero.
 - Configurable per-model prices, provider-call limits, and monetary run budgets.
 - Stream finish reasons are validated; partial responses are stored as incomplete, and unfinalized tool calls are never executed.
+- Publicly extensible tools with structured results and persisted recovery metadata.
 - Workspace-scoped file tools; a tool call is persisted before its side effect.
 - A terminal CLI with session listing/resume and no web panel, gateway, or TUI framework.
 - Interrupted tool actions are recovered by state: safe pending calls may resume, while unknown outcomes are never replayed automatically.
@@ -59,6 +60,24 @@ export DAGI_BUDGET_USD="0.25"
 ```
 
 CLI commands: `/help`, `/new`, `/sessions`, `/resume <session_id>`, `/memory <query>`, `/skills`, `/model`, `/exit`. A run prints its ID and final status. Skills can be saved with `create_skill` and loaded with `use_skill`.
+
+## Custom tools
+
+Register tools through the public registry; duplicate names raise `ValueError`.
+
+```python
+from dagi_core.tools import Tool, ToolResult
+
+registry.register(Tool(
+    name="lookup_record",
+    description="Look up a record by key.",
+    parameters={"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]},
+    handler=lambda args: ToolResult(f"record: {args['key']}"),
+    retryable=True,  # Set only when repeating the operation is safe.
+))
+```
+
+Handlers may return `ToolResult(content, is_error=True)` for a structured failure. A `verify_effect` callback returns `True` only when the effect is confirmed, `False` only when absence is confirmed, and `None` when the outcome remains unknown. Unknown non-retryable actions stay blocked during recovery.
 
 ## Verification
 

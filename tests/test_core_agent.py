@@ -52,7 +52,12 @@ def test_agent_persists_tool_call_before_side_effect_then_continues(tmp_path: Pa
     assert all(event.session_id == session for event in events)
     assert all(event.run_id == events[0].run_id for event in events)
     assert next(event for event in events if event.kind == "tool_call").tool_call_id == "call-1"
-    assert next(event for event in events if event.kind == "tool_result").tool_call_id == "call-1"
+    tool_result = next(event for event in events if event.kind == "tool_result")
+    assert tool_result.tool_call_id == "call-1"
+    assert tool_result.is_error is False
+    stored_call = state.get_tool_call("call-1")
+    assert stored_call["retryable"] is True
+    assert stored_call["has_verifier"] is True
     assert state.get_run(events[-1].run_id)["status"] == "completed"
     assert any(event.kind == "tool_result" for event in events)
     assert any(event.kind == "text" and event.text == "Saved." for event in events)
@@ -77,6 +82,7 @@ def test_agent_returns_tool_error_without_skipping_follow_up(tmp_path: Path):
 
     assert provider.requests.__len__() == 2
     assert any("unknown tool" in (event.text or "") for event in events)
+    assert next(event for event in events if event.kind == "tool_result").is_error is True
     assert events[-1].kind == "done"
     state.close()
 

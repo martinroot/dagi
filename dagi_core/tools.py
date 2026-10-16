@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,12 @@ SHELL_TIMEOUT_SECONDS = 30
 
 class ToolError(Exception):
     """A user- or model-correctable tool error."""
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    content: str
+    is_error: bool = False
 
 
 def _resolve(workspace: Path, raw_path: str) -> Path:
@@ -37,7 +44,9 @@ class Tool:
     name: str
     description: str
     parameters: dict[str, Any]
-    handler: Callable[[dict[str, Any]], str]
+    handler: Callable[[dict[str, Any]], str | ToolResult]
+    retryable: bool = False
+    verify_effect: Callable[[dict[str, Any]], bool | None] | None = None
 
     def openai_spec(self) -> dict[str, Any]:
         return {
@@ -68,57 +77,97 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
         self._register_builtins(shell_enabled)
 
-    def _register(self, tool: Tool) -> None:
+    def register(self, tool: Tool) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tool.name):
+            raise ValueError(f"invalid tool name: {tool.name!r}")
+        if tool.name in self._tools:
+            raise ValueError(f"tool name already registered: {tool.name}")
         self._tools[tool.name] = tool
 
     def specs(self) -> list[Tool]:
         return list(self._tools.values())
 
-    def call(self, name: str, arguments: dict[str, Any]) -> str:
+    def call(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
             raise ToolError(f"unknown tool: {name!r}")
         if not isinstance(arguments, dict):
             raise ToolError("tool arguments must be a JSON object")
-        return tool.handler(arguments)
+        result = tool.handler(arguments)
+        if isinstance(result, ToolResult):
+            return result
+        if not isinstance(result, str):
+            raise ToolError(f"tool {name!r} returned neither text nor ToolResult")
+        return ToolResult(result)
+
+    def recovery_metadata(self, name: str) -> dict[str, bool]:
+        tool = self._tools.get(name)
+        if tool is None:
+            return {"retryable": False, "has_verifier": False}
+        return {"retryable": tool.retryable, "has_verifier": tool.verify_effect is not None}
+
+    def recovery_decision(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        persisted_retryable: bool | None = None,
+    ) -> tuple[str, ToolResult | None]:
+        tool = self._tools.get(name)
+        if tool is None:
+            return "uncertain", None
+        retryable = tool.retryable and persisted_retryable is not False
+        if tool.verify_effect is not None:
+            try:
+                verified = tool.verify_effect(arguments)
+            except Exception:
+                return "uncertain", None
+            if verified is True:
+                return "succeeded", ToolResult("The tool effect was verified after interruption.")
+            if verified is False and retryable:
+                return "pending", None
+            return "uncertain", None
+        if retryable:
+            return "pending", None
+        return "uncertain", None
 
     def _register_builtins(self, shell_enabled: bool) -> None:
-        self._register(Tool(
+        self.register(Tool(
             "read_file", "Read a UTF-8 text file within the workspace.",
             {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
-            self._read_file,
+            self._read_file, retryable=True,
         ))
-        self._register(Tool(
+        self.register(Tool(
             "write_file", "Write a UTF-8 text file within the workspace.",
             {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
-            self._write_file,
+            self._write_file, retryable=True, verify_effect=self._verify_write_effect,
         ))
-        self._register(Tool(
+        self.register(Tool(
             "list_dir", "List a directory within the workspace.",
             {"type": "object", "properties": {"path": {"type": "string"}}},
-            self._list_dir,
+            self._list_dir, retryable=True,
         ))
-        self._register(Tool(
+        self.register(Tool(
             "search_memory", "Search messages saved from earlier sessions.",
             {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"]},
-            self._search_memory,
+            self._search_memory, retryable=True,
         ))
-        self._register(Tool(
+        self.register(Tool(
             "list_skills", "List saved reusable procedures.",
-            {"type": "object", "properties": {}}, self._list_skills,
+            {"type": "object", "properties": {}}, self._list_skills, retryable=True,
         ))
-        self._register(Tool(
+        self.register(Tool(
             "use_skill", "Load a saved procedure by name and record its use.",
             {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
             self._use_skill,
         ))
-        self._register(Tool(
+        self.register(Tool(
             "create_skill", "Save a reusable procedure for future sessions.",
             {"type": "object", "properties": {"name": {"type": "string"}, "description": {"type": "string"}, "triggers": {"type": "array", "items": {"type": "string"}}, "body": {"type": "string"}}, "required": ["name", "description", "body"]},
             self._create_skill,
         ))
         if shell_enabled:
-            self._register(Tool(
+            self.register(Tool(
                 "run_bash", "Run a shell command in the workspace after user approval.",
                 {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]},
                 self._run_bash,
@@ -131,6 +180,17 @@ class ToolRegistry:
         if path.stat().st_size > MAX_FILE_BYTES:
             raise ToolError(f"file exceeds {MAX_FILE_BYTES} bytes")
         return _truncate(path.read_text(encoding="utf-8"))
+
+    def _verify_write_effect(self, args: dict[str, Any]) -> bool | None:
+        try:
+            path = _resolve(self.workspace, str(args["path"]))
+            if not path.exists():
+                return False
+            if not path.is_file() or path.stat().st_size > MAX_FILE_BYTES:
+                return None
+            return True if path.read_text(encoding="utf-8") == args.get("content") else None
+        except Exception:
+            return None
 
     def _write_file(self, args: dict[str, Any]) -> str:
         path = _resolve(self.workspace, str(args["path"]))

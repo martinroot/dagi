@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS tool_executions (
     status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'uncertain')),
     result TEXT,
     error TEXT,
+    retryable INTEGER NOT NULL DEFAULT 0,
+    has_verifier INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -115,6 +117,11 @@ class StateStore:
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(messages)")}
         if "is_partial" not in columns:
             self._db.execute("ALTER TABLE messages ADD COLUMN is_partial INTEGER NOT NULL DEFAULT 0")
+        tool_columns = {row[1] for row in self._db.execute("PRAGMA table_info(tool_executions)")}
+        if "retryable" not in tool_columns:
+            self._db.execute("ALTER TABLE tool_executions ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0")
+        if "has_verifier" not in tool_columns:
+            self._db.execute("ALTER TABLE tool_executions ADD COLUMN has_verifier INTEGER NOT NULL DEFAULT 0")
         self._db.commit()
         if os.name == "posix":
             os.chmod(self.path, 0o600)
@@ -233,6 +240,8 @@ class StateStore:
         run_id: str,
         assistant_message: dict[str, Any],
         calls: list[dict[str, Any]],
+        *,
+        recovery_metadata: dict[str, dict[str, bool]] | None = None,
     ) -> None:
         if not calls:
             raise ValueError("a tool round must contain at least one call")
@@ -250,9 +259,14 @@ class StateStore:
                     raise ValueError("tool call arguments must be an object")
                 self._db.execute(
                     """INSERT INTO tool_executions
-                       (tool_call_id, run_id, session_id, name, arguments, status, created_at, updated_at)
-                       VALUES(?, ?, ?, ?, ?, 'pending', ?, ?)""",
-                    (call_id, run_id, session_id, name, json.dumps(arguments, ensure_ascii=False), now, now),
+                       (tool_call_id, run_id, session_id, name, arguments, status, retryable, has_verifier, created_at, updated_at)
+                       VALUES(?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)""",
+                    (
+                        call_id, run_id, session_id, name, json.dumps(arguments, ensure_ascii=False),
+                        int(bool((recovery_metadata or {}).get(call_id, {}).get("retryable"))),
+                        int(bool((recovery_metadata or {}).get(call_id, {}).get("has_verifier"))),
+                        now, now,
+                    ),
                 )
             self._db.commit()
         except Exception:
@@ -267,6 +281,8 @@ class StateStore:
             return None
         result = dict(row)
         result["arguments"] = json.loads(result["arguments"])
+        result["retryable"] = bool(result["retryable"])
+        result["has_verifier"] = bool(result["has_verifier"])
         return result
 
     def list_tool_calls(
@@ -285,6 +301,8 @@ class StateStore:
         results = [dict(row) for row in rows]
         for result in results:
             result["arguments"] = json.loads(result["arguments"])
+            result["retryable"] = bool(result["retryable"])
+            result["has_verifier"] = bool(result["has_verifier"])
         return results
 
     def mark_tool_call_running(self, tool_call_id: str) -> None:
@@ -308,6 +326,23 @@ class StateStore:
         )
         if cursor.rowcount != 1:
             raise ValueError(f"tool call is missing or not running: {tool_call_id}")
+        self._db.commit()
+
+    def reconcile_tool_call(
+        self, tool_call_id: str, status: str, result: str | None = None, error: str | None = None
+    ) -> None:
+        if status not in {"pending", "succeeded", "uncertain"}:
+            raise ValueError(f"invalid recovery decision: {status!r}")
+        if status == "pending":
+            result = None
+            error = None
+        cursor = self._db.execute(
+            """UPDATE tool_executions SET status=?, result=?, error=?, updated_at=?
+               WHERE tool_call_id=? AND status='uncertain'""",
+            (status, result, error, _now(), tool_call_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"tool call is missing or not uncertain: {tool_call_id}")
         self._db.commit()
 
     def recover_interrupted(self, session_id: int | None = None) -> list[dict[str, Any]]:

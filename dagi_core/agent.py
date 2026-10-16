@@ -8,7 +8,7 @@ from typing import Generator, Iterator, Literal
 
 from .provider import IncompleteStreamError, OpenAICompatibleProvider
 from .state import StateStore
-from .tools import ToolError, ToolRegistry
+from .tools import ToolError, ToolRegistry, ToolResult
 from .usage import UsagePolicy
 
 MAX_TOOL_ROUNDS = 16
@@ -30,6 +30,7 @@ class AgentEvent:
     tool_name: str | None = None
     tool_args: dict | None = None
     status: str | None = None
+    is_error: bool | None = None
 
 
 class Agent:
@@ -80,25 +81,56 @@ class Agent:
             outcome = "succeeded"
             error = None
             try:
-                output = self.tools.call(name, arguments)
+                returned = self.tools.call(name, arguments)
+                result = returned if isinstance(returned, ToolResult) else ToolResult(str(returned))
+                if result.is_error:
+                    outcome = "failed"
+                    error = result.content
             except ToolError as exc:
-                output = f"[tool error] {exc}"
+                result = ToolResult(f"[tool error] {exc}", is_error=True)
                 outcome = "failed"
                 error = str(exc)
             except Exception as exc:
-                output = f"[tool outcome unknown] {type(exc).__name__}: {exc}"
+                result = ToolResult(f"[tool outcome unknown] {type(exc).__name__}: {exc}", is_error=True)
                 outcome = "uncertain"
                 error = str(exc)
             self.state.append_message(
                 self.session_id,
-                {"role": "tool", "tool_call_id": call_id, "name": name, "content": output},
+                {"role": "tool", "tool_call_id": call_id, "name": name, "content": result.content},
             )
-            self.state.finish_tool_call(call_id, outcome, output, error)
-            yield event("tool_result", tool_call_id=call_id, tool_name=name, text=output)
+            self.state.finish_tool_call(call_id, outcome, result.content, error)
+            yield event(
+                "tool_result", tool_call_id=call_id, tool_name=name,
+                text=result.content, is_error=result.is_error,
+            )
             return outcome
 
         try:
-            unresolved = self.state.list_tool_calls(self.session_id, ("running", "uncertain"))
+            running = self.state.list_tool_calls(self.session_id, ("running",))
+            uncertain = self.state.list_tool_calls(self.session_id, ("uncertain",))
+            for call in uncertain:
+                decision, verified_result = self.tools.recovery_decision(
+                    call["name"], call["arguments"], persisted_retryable=call["retryable"]
+                )
+                if decision == "pending":
+                    self.state.reconcile_tool_call(call["tool_call_id"], "pending")
+                elif decision == "succeeded" and verified_result is not None:
+                    self.state.append_message(
+                        self.session_id,
+                        {
+                            "role": "tool", "tool_call_id": call["tool_call_id"],
+                            "name": call["name"], "content": verified_result.content,
+                        },
+                    )
+                    self.state.reconcile_tool_call(
+                        call["tool_call_id"], "succeeded", verified_result.content
+                    )
+                    yield event(
+                        "tool_result", tool_call_id=call["tool_call_id"],
+                        tool_name=call["name"], text=verified_result.content,
+                        is_error=verified_result.is_error,
+                    )
+            unresolved = running + self.state.list_tool_calls(self.session_id, ("uncertain",))
             if unresolved:
                 call_id = unresolved[0]["tool_call_id"]
                 error_text = f"tool call {call_id} has an unknown outcome; inspect it before continuing"
@@ -217,6 +249,10 @@ class Agent:
                     run_id,
                     {"role": "assistant", "content": assistant_content or None, "tool_calls": calls_for_storage},
                     tool_calls,
+                    recovery_metadata={
+                        call["id"]: self.tools.recovery_metadata(call["name"])
+                        for call in tool_calls
+                    },
                 )
                 current_text_parts.clear()
                 for call in tool_calls:
