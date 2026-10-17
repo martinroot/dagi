@@ -57,6 +57,46 @@ def test_read_file_marks_truncated_preview_structurally(tmp_path):
     state.close()
 
 
+def test_write_file_reports_created_and_updated_artifact_metadata(tmp_path):
+    state, tools = make_tools(tmp_path)
+
+    created = tools.call("write_file", {"path": "notes/a.txt", "content": "first"})
+    updated = tools.call("write_file", {"path": "notes/a.txt", "content": "second"})
+
+    assert created.content == "saved notes/a.txt (5 chars)"
+    assert created.presentation == {
+        "type": "file",
+        "summary": "Created notes/a.txt",
+        "artifacts": [{"path": "notes/a.txt", "operation": "create"}],
+        "diagnostics": {"size_bytes": 5, "created": True},
+    }
+    assert updated.presentation["summary"] == "Updated notes/a.txt"
+    assert updated.presentation["artifacts"][0]["operation"] == "update"
+    assert updated.presentation["diagnostics"]["created"] is False
+    state.close()
+
+
+def test_list_dir_returns_structured_entries_without_changing_text(tmp_path):
+    state, tools = make_tools(tmp_path)
+    (tools.workspace / "docs").mkdir(parents=True)
+    (tools.workspace / "docs" / "readme.md").write_text("notes", encoding="utf-8")
+    (tools.workspace / "docs" / "nested").mkdir()
+
+    result = tools.call("list_dir", {"path": "docs"})
+
+    assert result.content == "nested/\nreadme.md"
+    assert result.presentation == {
+        "type": "directory",
+        "summary": "Listed docs",
+        "artifacts": [
+            {"name": "nested", "path": "docs/nested", "kind": "directory"},
+            {"name": "readme.md", "path": "docs/readme.md", "kind": "file"},
+        ],
+        "diagnostics": {"entry_count": 2, "empty": False},
+    }
+    state.close()
+
+
 def test_file_tools_reject_paths_outside_workspace(tmp_path):
     state, tools = make_tools(tmp_path)
     outside = tmp_path / "outside.txt"

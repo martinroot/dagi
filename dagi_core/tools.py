@@ -262,23 +262,51 @@ class ToolRegistry:
         except Exception:
             return None
 
-    def _write_file(self, args: dict[str, Any]) -> str:
+    def _write_file(self, args: dict[str, Any]) -> ToolResult:
         path = _resolve(self.workspace, str(args["path"]))
         content = args["content"]
         if not isinstance(content, str):
             raise ToolError("file content must be text")
-        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
+        size_bytes = len(content.encode("utf-8"))
+        if size_bytes > MAX_FILE_BYTES:
             raise ToolError(f"file content exceeds {MAX_FILE_BYTES} bytes")
+        existed = path.exists()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        return f"saved {path.relative_to(self.workspace)} ({len(content)} chars)"
+        relative = path.relative_to(self.workspace).as_posix()
+        operation = "update" if existed else "create"
+        return ToolResult(
+            f"saved {relative} ({len(content)} chars)",
+            presentation={
+                "type": "file",
+                "summary": f"{'Updated' if existed else 'Created'} {relative}",
+                "artifacts": [{"path": relative, "operation": operation}],
+                "diagnostics": {"size_bytes": size_bytes, "created": not existed},
+            },
+        )
 
-    def _list_dir(self, args: dict[str, Any]) -> str:
+    def _list_dir(self, args: dict[str, Any]) -> ToolResult:
         raw = str(args.get("path", "."))
         path = _resolve(self.workspace, raw)
         if not path.is_dir():
             raise ToolError(f"not a directory: {raw!r}")
-        return "\n".join(sorted(item.name + ("/" if item.is_dir() else "") for item in path.iterdir())) or "(empty)"
+        items = sorted(path.iterdir(), key=lambda item: item.name)
+        content = "\n".join(item.name + ("/" if item.is_dir() else "") for item in items) or "(empty)"
+        relative = path.relative_to(self.workspace).as_posix() or "."
+        artifacts = []
+        for item in items:
+            kind = "symlink" if item.is_symlink() else "directory" if item.is_dir() else "file"
+            child_path = item.relative_to(self.workspace).as_posix()
+            artifacts.append({"name": item.name, "path": child_path, "kind": kind})
+        return ToolResult(
+            content,
+            presentation={
+                "type": "directory",
+                "summary": f"Listed {relative}",
+                "artifacts": artifacts,
+                "diagnostics": {"entry_count": len(items), "empty": not items},
+            },
+        )
 
     def _search_memory(self, args: dict[str, Any]) -> str:
         hits = self.state.search_memory(

@@ -175,7 +175,28 @@ function renderFilePresentation(presentation, resultText) {
   };
 }
 
-const toolPresentationRenderers = new Map([["file", renderFilePresentation]]);
+function renderDirectoryPresentation(presentation) {
+  const diagnostics = presentation.diagnostics || {};
+  const entries = Array.isArray(presentation.artifacts) ? presentation.artifacts : [];
+  const resultText = entries.map((entry) => {
+    const kind = entry.kind === "directory" ? "📁" : entry.kind === "symlink" ? "🔗" : "📄";
+    const suffix = entry.kind === "directory" ? "/" : "";
+    return `${kind} ${entry.name || entry.path || "unknown"}${suffix}`;
+  }).join("\n") || "(empty)";
+  const count = Number.isFinite(diagnostics.entry_count) ? diagnostics.entry_count : entries.length;
+  return {
+    icon: "📁",
+    title: presentation.summary || "Directory listing",
+    summary: `${count} entries${diagnostics.empty === true ? " · empty" : ""}`,
+    resultText,
+    metadata: presentation.summary || "Directory listing",
+  };
+}
+
+const toolPresentationRenderers = new Map([
+  ["file", renderFilePresentation],
+  ["directory", renderDirectoryPresentation],
+]);
 
 function registerToolPresentationRenderer(type, renderer) {
   if (typeof type !== "string" || !type.trim() || typeof renderer !== "function") {
