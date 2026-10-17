@@ -37,3 +37,80 @@ test("adjacent streamed text chunks render as one assistant message", () => {
   assert.equal(chat.children.length, 1, "one provider text turn should create one assistant bubble");
   assert.equal(chat.children[0].children[1].textContent, "понг");
 });
+
+function makeUi(fetchImpl) {
+  const elements = new Map();
+  const sources = [];
+  const document = {
+    getElementById(id) {
+      if (!elements.has(id)) elements.set(id, fakeElement());
+      return elements.get(id);
+    },
+    createElement() { return fakeElement(); },
+  };
+  class FakeEventSource {
+    constructor(url) { this.url = url; this.closed = false; sources.push(this); }
+    close() { this.closed = true; }
+  }
+  const context = {document, fetch: fetchImpl, EventSource: FakeEventSource};
+  vm.runInNewContext(fs.readFileSync(new URL("../dagi_core/static/app.js", import.meta.url), "utf8"), context);
+  return {context, elements, sources};
+}
+
+const jsonResponse = (value, status = 200) => ({
+  status, ok: status < 400, text: async () => JSON.stringify(value),
+});
+
+test("switching sessions closes the old stream and ignores queued events", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "old"}, runs: [{run_id: "run-old", status: "running"}], messages: [],
+    });
+    if (url === "/api/sessions/2") return jsonResponse({
+      session: {id: 2, title: "new"}, runs: [], messages: [{role: "assistant", content: "new session"}],
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const previous = sources.at(-1);
+  assert.ok(previous);
+  await context.selectSession(2);
+  assert.equal(previous.closed, true, "switching sessions must close the previous EventSource");
+
+  previous.onmessage({data: JSON.stringify({
+    kind: "text", session_id: 1, run_id: "run-old", text: "stale output",
+  })});
+  const chatText = elements.get("chat").children.map((item) => item.children[1].textContent).join("\n");
+  assert.match(chatText, /new session/);
+  assert.doesNotMatch(chatText, /stale output/);
+});
+
+test("late session detail response cannot overwrite the newest selection", async () => {
+  let resolveOld;
+  const delayedOld = new Promise((resolve) => { resolveOld = resolve; });
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return delayedOld;
+    if (url === "/api/sessions/2") return jsonResponse({
+      session: {id: 2, title: "latest"}, runs: [], messages: [{role: "assistant", content: "latest transcript"}],
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements} = makeUi(fetchImpl);
+  await context.restoreSession();
+  const oldSelection = context.selectSession(1);
+  await context.selectSession(2);
+  resolveOld(jsonResponse({
+    session: {id: 1, title: "stale"}, runs: [], messages: [{role: "assistant", content: "stale transcript"}],
+  }));
+  await oldSelection;
+  assert.match(elements.get("session-title").textContent, /latest/);
+  const chatText = elements.get("chat").children.map((item) => item.children[1].textContent).join("\n");
+  assert.match(chatText, /latest transcript/);
+  assert.doesNotMatch(chatText, /stale transcript/);
+});

@@ -4,6 +4,8 @@ let activeRunId = null;
 let eventSource = null;
 let selectedRunId = null;
 let streamingAssistantBody = null;
+let sessionGeneration = 0;
+let inspectionGeneration = 0;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -18,15 +20,26 @@ async function api(path, options = {}) {
   return value;
 }
 
-function showLogin(message = "") {
-  $("sandbox").hidden = true;
-  $("login-panel").hidden = false;
-  $("login-error").textContent = message;
+function detachRunStream() {
   if (eventSource) eventSource.close();
   eventSource = null;
   activeRunId = null;
+  selectedRunId = null;
   resetAssistantStream();
   $("stop-run").disabled = true;
+}
+
+function isCurrentSession(sessionId, generation) {
+  return generation === sessionGeneration && sessionId === selectedSession;
+}
+
+function showLogin(message = "") {
+  sessionGeneration += 1;
+  inspectionGeneration += 1;
+  $("sandbox").hidden = true;
+  $("login-panel").hidden = false;
+  $("login-error").textContent = message;
+  detachRunStream();
 }
 
 async function showSandbox() {
@@ -101,7 +114,10 @@ function appendAssistantText(text) {
   $("chat").scrollTop = $("chat").scrollHeight;
 }
 
-function addEvent(event) {
+function addEvent(event, scope = null) {
+  if (scope && (!isCurrentSession(scope.sessionId, scope.generation) || activeRunId !== scope.runId)) return;
+  if (event.session_id !== undefined && selectedSession !== null && event.session_id !== selectedSession) return;
+  if (event.run_id !== undefined && activeRunId !== null && event.run_id !== activeRunId) return;
   if (event.kind === "started") {
     resetAssistantStream();
     $("run-status").textContent = `Run ${event.run_id} is running`;
@@ -127,13 +143,16 @@ function addEvent(event) {
     eventSource = null;
     activeRunId = null;
     $("stop-run").disabled = true;
+    const generation = scope ? scope.generation : sessionGeneration;
+    const sessionId = scope ? scope.sessionId : selectedSession;
     refreshSessions();
-    inspectRun(event.run_id);
+    inspectRun(event.run_id, generation, sessionId);
   }
 }
 
-async function refreshSessions() {
+async function refreshSessions(generation = sessionGeneration) {
   const data = await api("/api/sessions");
+  if (generation !== sessionGeneration) return;
   const list = $("sessions");
   list.replaceChildren();
   for (const session of data.sessions) {
@@ -166,9 +185,12 @@ function renderRuns(runs) {
 }
 
 async function selectSession(sessionId) {
+  const generation = ++sessionGeneration;
+  inspectionGeneration += 1;
+  detachRunStream();
   selectedSession = sessionId;
-  resetAssistantStream();
   const data = await api(`/api/sessions/${sessionId}`);
+  if (!isCurrentSession(sessionId, generation)) return;
   $("session-title").textContent = `${data.session.title || "Untitled session"} · #${sessionId}`;
   $("chat").replaceChildren();
   for (const message of data.messages) {
@@ -183,33 +205,41 @@ async function selectSession(sessionId) {
   }
   renderRuns(data.runs);
   const running = data.runs.find((run) => run.status === "running");
-  if (running) connectRun(running.run_id, 0);
-  else if (data.runs.length) inspectRun(data.runs[0].run_id);
+  if (running) connectRun(running.run_id, 0, sessionId, generation);
+  else if (data.runs.length) inspectRun(data.runs[0].run_id, generation, sessionId);
 }
 
-function connectRun(runId, afterId = 0) {
+function connectRun(runId, afterId = 0, sessionId = selectedSession, generation = sessionGeneration) {
+  if (!isCurrentSession(sessionId, generation)) return;
   if (eventSource) eventSource.close();
   activeRunId = runId;
   selectedRunId = runId;
   $("stop-run").disabled = false;
-  eventSource = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events?after=${afterId}`);
-  eventSource.onmessage = (message) => {
+  const source = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events?after=${afterId}`);
+  eventSource = source;
+  source.onmessage = (message) => {
+    if (source !== eventSource || !isCurrentSession(sessionId, generation) || activeRunId !== runId) return;
     try {
-      addEvent(JSON.parse(message.data));
+      addEvent(JSON.parse(message.data), {sessionId, generation, runId});
     } catch (error) {
-      $("run-status").textContent = `Invalid event: ${error}`;
+      if (isCurrentSession(sessionId, generation) && activeRunId === runId) {
+        $("run-status").textContent = `Invalid event: ${error}`;
+      }
     }
   };
-  eventSource.onerror = () => {
+  source.onerror = () => {
+    if (source !== eventSource || !isCurrentSession(sessionId, generation) || activeRunId !== runId) return;
     // EventSource reconnects automatically and sends Last-Event-ID to the server.
     $("run-status").textContent = `Reconnecting to run ${runId}…`;
     api("/api/auth/session").catch(() => showLogin("Session expired. Sign in again."));
   };
 }
 
-async function inspectRun(runId) {
+async function inspectRun(runId, generation = sessionGeneration, sessionId = selectedSession) {
+  const inspection = ++inspectionGeneration;
   selectedRunId = runId;
   const detail = await api(`/api/runs/${encodeURIComponent(runId)}`);
+  if (!isCurrentSession(sessionId, generation) || inspection !== inspectionGeneration) return;
   $("run-status").textContent = `Run ${runId}: ${detail.run.status}${detail.run.error ? ` · ${detail.run.error}` : ""}`;
   $("requests").textContent = JSON.stringify(detail.requests, null, 2);
   $("tools").textContent = JSON.stringify(detail.tool_calls, null, 2);
@@ -225,7 +255,7 @@ async function inspectRun(runId) {
   for (const item of related) {
     const button = document.createElement("button");
     button.textContent = `${item.relation} d${item.run.depth} · ${item.run.agent_name} · ${item.run.status} · ${item.run.run_id.slice(0, 8)}`;
-    button.onclick = () => inspectRun(item.run.run_id);
+    button.onclick = () => inspectRun(item.run.run_id, generation, sessionId);
     hierarchy.append(button);
   }
 }
@@ -239,6 +269,8 @@ $("new-session").onclick = async () => {
 $("chat-form").onsubmit = async (event) => {
   event.preventDefault();
   if (selectedSession === null || activeRunId !== null) return;
+  const sessionId = selectedSession;
+  const generation = sessionGeneration;
   const input = $("message");
   const message = input.value.trim();
   if (!message) return;
@@ -246,13 +278,14 @@ $("chat-form").onsubmit = async (event) => {
   addChatLine("user", message, "You");
   input.value = "";
   try {
-    const started = await api(`/api/sessions/${selectedSession}/runs`, {
+    const started = await api(`/api/sessions/${sessionId}/runs`, {
       method: "POST", body: JSON.stringify({message}),
     });
-    connectRun(started.run_id, 0);
-    await refreshSessions();
+    if (!isCurrentSession(sessionId, generation)) return;
+    connectRun(started.run_id, 0, sessionId, generation);
+    await refreshSessions(generation);
   } catch (error) {
-    addChatLine("error", String(error), "Request error");
+    if (isCurrentSession(sessionId, generation)) addChatLine("error", String(error), "Request error");
   }
 };
 
