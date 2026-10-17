@@ -348,6 +348,8 @@ test("a registered custom presentation renderer is used without changing chat pl
   assert.equal(card.dataset.renderer, "custom");
   assert.match(card.children[0].textContent, /Custom renderer/);
   assert.equal(card.children[4].children[3].textContent, "EXTENSION RESULT");
+  assert.equal(card.children[4].children[4].children[0].textContent, "Original text result (fallback)");
+  assert.equal(card.children[4].children[4].children[1].textContent, "extension result");
 });
 
 test("directory presentation renders typed entries from structured artifacts", async () => {

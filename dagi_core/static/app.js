@@ -335,12 +335,19 @@ function renderToolCard(sessionId, runId, toolCallId) {
     input.className = "tool-input";
     const result = document.createElement("pre");
     result.className = "tool-result";
+    const rawDetails = document.createElement("details");
+    rawDetails.className = "tool-raw-fallback";
+    const rawTitle = document.createElement("summary");
+    rawTitle.textContent = "Original text result (fallback)";
+    const rawResult = document.createElement("pre");
+    rawResult.className = "tool-result-raw";
+    rawDetails.append(rawTitle, rawResult);
     const actions = document.createElement("div");
     actions.className = "tool-actions";
-    details.append(detailsTitle, metadata, input, result);
+    details.append(detailsTitle, metadata, input, result, rawDetails);
     card.append(title, status, duration, summary, details, actions);
     $("chat").append(card);
-    record.card = {card, title, status, duration, summary, metadata, input, result, actions};
+    record.card = {card, title, status, duration, summary, metadata, input, result, rawDetails, rawResult, actions};
   }
   const call = record.call || {};
   const name = call.tool_name || call.name || "unknown tool";
@@ -386,6 +393,10 @@ function renderToolCard(sessionId, runId, toolCallId) {
   record.card.input.textContent = inputText.length > 8_000 ? `${inputText.slice(0, 8_000)}\n[arguments truncated]` : inputText;
   const renderedResult = view?.resultText ?? resultText;
   record.card.result.textContent = renderedResult || (record.status === "running" || record.status === "pending" ? "No result yet." : "No result data.");
+  record.card.rawDetails.hidden = !view || !resultText || renderedResult === resultText;
+  record.card.rawResult.textContent = resultText.length > 8_000
+    ? `${resultText.slice(0, 8_000)}\n[original text truncated for display]`
+    : resultText;
   record.card.actions.replaceChildren();
   for (const action of view?.actions || []) {
     if (action.type !== "open-session" || !Number.isSafeInteger(action.sessionId) || action.sessionId < 1) continue;
