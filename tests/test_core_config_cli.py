@@ -226,6 +226,76 @@ def test_cli_can_resume_an_existing_session(tmp_path, monkeypatch, capsys):
     assert f"Resumed session {saved_session}" in capsys.readouterr().out
 
 
+def test_cli_refuses_web_owned_home_before_recovery_and_resumes_after_release(tmp_path, monkeypatch, capsys):
+    import dagi_core.cli as cli
+    from dagi_core.auth import hash_password
+    from dagi_core.state import StateStore
+    from dagi_core.web import WebApp
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("DAGI_API_KEY", "placeholder-for-test")
+    monkeypatch.setenv("DAGI_HOME", str(home))
+    monkeypatch.setenv("DAGI_WORKSPACE", str(tmp_path / "workspace"))
+    monkeypatch.setenv("DAGI_WEB_USERNAME", "admin")
+    monkeypatch.setenv(
+        "DAGI_WEB_PASSWORD_HASH",
+        hash_password("test-password", salt=b"0123456789abcdef", iterations=1_000),
+    )
+    config = load_config()
+    app = WebApp(config, provider_factory=lambda *_args: None)
+    server = app.create_server(host="127.0.0.1", port=0)
+
+    state = StateStore(config.database)
+    saved_session = state.create_session("web-owned")
+    run_id = state.create_run(saved_session)
+    call = {"id": "lease-pending", "name": "custom", "arguments": {"value": 1}}
+    state.save_tool_round(
+        saved_session,
+        run_id,
+        {
+            "role": "assistant", "content": None,
+            "tool_calls": [{
+                "id": call["id"], "type": "function",
+                "function": {"name": call["name"], "arguments": json.dumps(call["arguments"])},
+            }],
+        },
+        [call],
+    )
+    run_before = state.get_run(run_id)
+    tool_before = state.get_tool_call(call["id"])
+    state.close()
+
+    opened_stores = []
+    original_state_store = cli.StateStore
+    def tracking_store(*args, **kwargs):
+        opened_stores.append(args[0] if args else kwargs.get("path"))
+        return original_state_store(*args, **kwargs)
+    monkeypatch.setattr(cli, "StateStore", tracking_store)
+    monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("CLI reached input while Web owns DAGI_HOME"))
+    with pytest.raises(ValueError, match="another Dagi runtime"):
+        cli.run()
+    assert opened_stores == []
+
+    unchanged = StateStore(config.database)
+    assert unchanged.get_run(run_id) == run_before
+    assert unchanged.get_tool_call(call["id"]) == tool_before
+    unchanged.close()
+
+    app.close()
+    server.server_close()
+    inputs = iter([f"/resume {saved_session}", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
+    monkeypatch.setattr(cli, "OpenAICompatibleProvider", lambda *_args: object())
+    cli.run()
+    output = capsys.readouterr().out
+    assert f"Resumed session {saved_session}; pending tools: 1" in output
+
+    resumed = StateStore(config.database)
+    assert resumed.get_run(run_id)["status"] == "error"
+    assert resumed.get_tool_call(call["id"])["status"] == "pending"
+    resumed.close()
+
+
 def test_cli_resume_uses_saved_session_workspace(tmp_path, monkeypatch, capsys):
     import dagi_core.cli as cli
     from dagi_core.provider import StreamEvent

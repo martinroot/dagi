@@ -9,6 +9,7 @@ from .config import load_config
 from .context import ContextBuilder
 from .delegation import DelegationManager
 from .provider import OpenAICompatibleProvider
+from .runtime import RuntimeLease
 from .state import StateStore
 from .tools import ToolRegistry
 from .workspace import resolve_session_workspace
@@ -84,8 +85,7 @@ def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
     )
 
 
-def run() -> None:
-    config = load_config()
+def _run_locked(config) -> None:
     state = StateStore(config.database)
     provider = OpenAICompatibleProvider(config.model, config.api_key, config.base_url)
     session_id = state.create_session()
@@ -156,6 +156,15 @@ def run() -> None:
     finally:
         state.close()
         print("\nSession saved.")
+
+
+def run() -> None:
+    config = load_config()
+    lease = RuntimeLease(config.home)
+    try:
+        _run_locked(config)
+    finally:
+        lease.close()
 
 
 def main() -> None:
