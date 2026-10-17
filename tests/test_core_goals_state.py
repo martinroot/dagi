@@ -1,7 +1,7 @@
 import json
 import sqlite3
 
-from dagi_core.state import StateStore
+from dagi_core.state import StateStore, goal_lesson_fingerprint
 
 
 def test_goal_lifecycle_persists_checks_feedback_and_budget_group(tmp_path):
@@ -129,6 +129,7 @@ def test_goal_reflection_schema_upgrade_preserves_existing_record(tmp_path):
     assert reflection["failure_fingerprint"] == ""
     assert reflection["action_fingerprint"] == ""
     assert reflection["repeat_count"] == 0
+    assert reflection["next_action_fingerprint"] is None
     upgraded.close()
 
 
@@ -137,7 +138,7 @@ def test_lessons_are_idempotent_scoped_and_promoted_by_independent_goal_support(
     session_a = state.create_session("project-a")
     session_b = state.create_session("project-b")
     check = {"type": "json_valid", "path": "result.json"}
-    fingerprint = "a" * 64
+    fingerprint = goal_lesson_fingerprint("json_valid", "result.json", "b" * 64)
 
     def support(session_id, evidence_key):
         goal_id = state.create_goal(session_id, "create valid JSON", [check], 2)
@@ -157,6 +158,7 @@ def test_lessons_are_idempotent_scoped_and_promoted_by_independent_goal_support(
             True,
             next_change="Observed tool calls: write_file",
             evidence_ids=[f"run:{evidence_key}", f"tool:{evidence_key}"],
+            next_action_fingerprint="b" * 64,
         )
         reflection = state.get_latest_goal_reflection(goal_id, 0)
         return state.record_goal_lesson(
@@ -189,11 +191,60 @@ def test_lessons_are_idempotent_scoped_and_promoted_by_independent_goal_support(
     assert second["status"] == "verified" and second["support_count"] == 2
     assert "tool:a2" in second["evidence_ids"]
 
+    different_action_goal = state.create_goal(session_a, "try a different correction", [check], 2)
+    different_action = state.record_goal_reflection(
+        goal_id=different_action_goal,
+        iteration=0,
+        check_index=0,
+        expected=check,
+        observed={"passed": False, "detail": "invalid JSON"},
+        evidence_ids=["goal-check:d1", "run:d1", "tool:d1"],
+        failure_fingerprint="d" * 64,
+        action_fingerprint="d" * 64,
+    )
+    assert state.reject_goal_lesson_with_evidence(
+        session_id=session_a,
+        goal_id=different_action_goal,
+        reflection_id=different_action["id"],
+        check_type="json_valid",
+        check_key="result.json",
+        evidence_ids=different_action["evidence_ids"],
+    ) is None
+    assert state.list_goal_lessons(
+        session_a, check_type="json_valid", check_key="result.json"
+    ) == [second]
+
+    contradiction_goal = state.create_goal(session_a, "repeat the previously supported action", [check], 2)
+    contradiction = state.record_goal_reflection(
+        goal_id=contradiction_goal,
+        iteration=0,
+        check_index=0,
+        expected=check,
+        observed={"passed": False, "detail": "invalid JSON"},
+        evidence_ids=["goal-check:c1", "run:c1", "tool:c1"],
+        failure_fingerprint="c" * 64,
+        action_fingerprint="b" * 64,
+    )
+    rejected = state.reject_goal_lesson_with_evidence(
+        session_id=session_a,
+        goal_id=contradiction_goal,
+        reflection_id=contradiction["id"],
+        check_type="json_valid",
+        check_key="result.json",
+        evidence_ids=contradiction["evidence_ids"],
+    )
+    assert rejected is not None and rejected["status"] == "rejected"
+    assert "tool:c1" in rejected["evidence_ids"]
+    assert rejected["contradictions"][0]["reflection_id"] == contradiction["id"]
+    assert state.list_goal_lessons(
+        session_a, check_type="json_valid", check_key="result.json"
+    ) == []
+
     isolated, _isolated_goal, _isolated_reflection = support(session_b, "b1")
     assert isolated["lesson_id"] != first["lesson_id"]
     assert state.list_goal_lessons(
         session_a, check_type="json_valid", check_key="result.json", limit=10
-    ) == [second]
+    ) == []
     assert state.list_goal_lessons(
         session_a, check_type="json_valid", check_key="other.json"
     ) == []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -155,6 +156,7 @@ CREATE TABLE IF NOT EXISTS goal_reflections (
     blocker TEXT,
     cause_hypothesis TEXT,
     next_change TEXT,
+    next_action_fingerprint TEXT,
     following_check_passed INTEGER CHECK (following_check_passed IN (0, 1)),
     created_at TEXT NOT NULL,
     UNIQUE(goal_id, iteration, check_index)
@@ -186,6 +188,14 @@ CREATE TABLE IF NOT EXISTS lesson_supports (
     created_at TEXT NOT NULL,
     PRIMARY KEY(lesson_id, goal_id)
 );
+CREATE TABLE IF NOT EXISTS lesson_contradictions (
+    lesson_id TEXT NOT NULL REFERENCES lessons(lesson_id) ON DELETE CASCADE,
+    goal_id TEXT NOT NULL REFERENCES goals(goal_id) ON DELETE CASCADE,
+    reflection_id TEXT NOT NULL REFERENCES goal_reflections(reflection_id) ON DELETE CASCADE,
+    evidence_ids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(lesson_id, goal_id)
+);
 CREATE TABLE IF NOT EXISTS inbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -206,6 +216,16 @@ def _skill_name(value: str) -> str:
     if not name:
         raise ValueError("skill name must contain letters or digits")
     return name[:80]
+
+
+def goal_lesson_fingerprint(check_type: str, check_key: str, action_fingerprint: str) -> str:
+    payload = {
+        "check_type": check_type,
+        "check_key": check_key,
+        "action_fingerprint": action_fingerprint,
+    }
+    serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 class StateStore:
@@ -252,6 +272,7 @@ class StateStore:
             "action_fingerprint": "TEXT NOT NULL DEFAULT ''",
             "repeat_count": "INTEGER NOT NULL DEFAULT 0",
             "blocker": "TEXT",
+            "next_action_fingerprint": "TEXT",
         }
         for name, declaration in reflection_migrations.items():
             if name not in reflection_columns:
@@ -1183,11 +1204,17 @@ class StateStore:
         *,
         next_change: str | None = None,
         evidence_ids: list[str] | None = None,
+        next_action_fingerprint: str | None = None,
     ) -> bool:
         if not isinstance(passed, bool):
             raise ValueError("reflection follow-up result must be boolean")
         if next_change is not None and (not isinstance(next_change, str) or len(next_change) > 512):
             raise ValueError("reflection next-change note must be text of at most 512 characters")
+        if next_action_fingerprint is not None and (
+            not isinstance(next_action_fingerprint, str)
+            or re.fullmatch(r"[0-9a-f]{64}", next_action_fingerprint) is None
+        ):
+            raise ValueError("follow-up action fingerprint must be lowercase SHA-256 hex")
         if evidence_ids is not None and (
             not isinstance(evidence_ids, list) or len(evidence_ids) > 12
             or any(not isinstance(item, str) or not item.strip() or len(item) > 256 for item in evidence_ids)
@@ -1206,9 +1233,12 @@ class StateStore:
             if evidence_id not in current_ids:
                 current_ids.append(evidence_id)
         self._db.execute(
-            """UPDATE goal_reflections SET following_check_passed=?, next_change=?, evidence_ids_json=?
-               WHERE reflection_id=?""",
-            (int(passed), next_change, json.dumps(current_ids[:12], ensure_ascii=False), row["reflection_id"]),
+            """UPDATE goal_reflections SET following_check_passed=?, next_change=?, evidence_ids_json=?,
+                      next_action_fingerprint=? WHERE reflection_id=?""",
+            (
+                int(passed), next_change, json.dumps(current_ids[:12], ensure_ascii=False),
+                next_action_fingerprint, row["reflection_id"],
+            ),
         )
         self._db.commit()
         return True
@@ -1241,6 +1271,11 @@ class StateStore:
         expected_key = expected.get("path", expected.get("executable", ""))
         if expected_key != check_key:
             raise ValueError("lesson check key must match the reflection evidence")
+        next_action_fingerprint = reflection.get("next_action_fingerprint")
+        if not isinstance(next_action_fingerprint, str):
+            raise ValueError("lesson requires a persisted follow-up action fingerprint")
+        if pattern_fingerprint != goal_lesson_fingerprint(check_type, check_key, next_action_fingerprint):
+            raise ValueError("lesson pattern fingerprint must match its observed follow-up action")
         if not isinstance(check_type, str) or not check_type or len(check_type) > 80:
             raise ValueError("lesson check type is invalid")
         if not isinstance(check_key, str) or len(check_key) > 256:
@@ -1327,6 +1362,96 @@ class StateStore:
             (session_id, check_type, check_key, page_limit),
         ).fetchall()
         return [self._decode_goal_lesson(row) for row in rows]
+
+    def reject_goal_lesson_with_evidence(
+        self,
+        *,
+        session_id: int,
+        goal_id: str,
+        reflection_id: str,
+        check_type: str,
+        check_key: str,
+        evidence_ids: list[str],
+    ) -> dict[str, Any] | None:
+        goal = self.get_goal(goal_id)
+        if goal is None or goal["session_id"] != session_id:
+            raise ValueError("contradiction scope must match the goal session")
+        row = self._db.execute(
+            "SELECT * FROM goal_reflections WHERE reflection_id=? AND goal_id=?",
+            (reflection_id, goal_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("contradiction requires a persisted reflection")
+        reflection = self._decode_goal_reflection(row)
+        if reflection["observed"].get("passed") is not False:
+            raise ValueError("contradiction evidence must be a failed check")
+        expected = reflection["expected"]
+        expected_key = expected.get("path", expected.get("executable", ""))
+        if expected.get("type") != check_type or expected_key != check_key:
+            raise ValueError("contradiction check must match the reflection evidence")
+        action_fingerprint = reflection["action_fingerprint"]
+        if not isinstance(action_fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", action_fingerprint) is None:
+            raise ValueError("contradiction action fingerprint is invalid")
+        expected_fingerprint = goal_lesson_fingerprint(check_type, check_key, action_fingerprint)
+        if (
+            not isinstance(evidence_ids, list)
+            or not 1 <= len(evidence_ids) <= 12
+            or any(not isinstance(item, str) or not item.strip() or len(item) > 256 for item in evidence_ids)
+            or not set(evidence_ids).issubset(set(reflection["evidence_ids"]))
+        ):
+            raise ValueError("contradiction evidence must come from the persisted reflection")
+        lesson_row = self._db.execute(
+            """SELECT * FROM lessons WHERE session_id=? AND pattern_fingerprint=?
+               AND status IN ('candidate', 'verified')""",
+            (session_id, expected_fingerprint),
+        ).fetchone()
+        if lesson_row is None:
+            return None
+        now = _now()
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            self._db.execute(
+                """INSERT OR IGNORE INTO lesson_contradictions(
+                       lesson_id, goal_id, reflection_id, evidence_ids_json, created_at
+                   ) VALUES(?, ?, ?, ?, ?)""",
+                (lesson_row["lesson_id"], goal_id, reflection_id,
+                 json.dumps(evidence_ids, ensure_ascii=False), now),
+            )
+            merged_ids = json.loads(lesson_row["evidence_ids_json"])
+            for evidence_id in evidence_ids:
+                if evidence_id not in merged_ids:
+                    merged_ids.append(evidence_id)
+            self._db.execute(
+                """UPDATE lessons SET status='rejected', evidence_ids_json=?, updated_at=?
+                   WHERE lesson_id=?""",
+                (json.dumps(merged_ids[:12], ensure_ascii=False), now, lesson_row["lesson_id"]),
+            )
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        return self.get_goal_lesson(lesson_row["lesson_id"])
+
+    def get_goal_lesson(self, lesson_id: str) -> dict[str, Any] | None:
+        row = self._db.execute("SELECT * FROM lessons WHERE lesson_id=?", (lesson_id,)).fetchone()
+        if row is None:
+            return None
+        lesson = self._decode_goal_lesson(row)
+        rows = self._db.execute(
+            """SELECT goal_id, reflection_id, evidence_ids_json, created_at
+               FROM lesson_contradictions WHERE lesson_id=? ORDER BY created_at DESC LIMIT 10""",
+            (lesson_id,),
+        ).fetchall()
+        lesson["contradictions"] = [
+            {
+                "goal_id": item["goal_id"],
+                "reflection_id": item["reflection_id"],
+                "evidence_ids": json.loads(item["evidence_ids_json"]),
+                "created_at": item["created_at"],
+            }
+            for item in rows
+        ]
+        return lesson
 
     def list_goals(self, session_id: int) -> list[dict[str, Any]]:
         rows = self._db.execute(

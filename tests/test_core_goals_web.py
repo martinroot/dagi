@@ -281,6 +281,77 @@ def test_failed_reflection_save_does_not_replay_completed_tool_after_resume(tmp_
         resumed_app.close()
 
 
+def test_matching_failed_action_rejects_a_scoped_lesson_with_provenance(tmp_path):
+    config = _config(tmp_path)
+    initial_provider = ReflectionCorrectionProvider(config.workspace)
+    initial_app = WebApp(config, lambda *_args: initial_provider)
+    session_id = _create_session(config)
+    try:
+        first_goal = initial_app.start_goal(session_id, {
+            "objective": "create valid JSON",
+            "checks": [{"type": "json_valid", "path": "result.json"}],
+            "max_iterations": 2,
+        })
+        completed = _wait_goal_terminal(config, first_goal["goal_id"])
+        assert completed["status"] == "completed"
+        state = StateStore(config.database)
+        candidate = state.list_goal_lessons(session_id, check_type="json_valid", check_key="result.json")[0]
+        state.close()
+    finally:
+        initial_app.close()
+
+    (config.workspace / "result.json").unlink()
+
+    class ContradictoryProvider:
+        model = "test-model"
+
+        def __init__(self):
+            self.calls = 0
+            self.requests = []
+
+        def stream(self, messages, _tools):
+            self.calls += 1
+            self.requests.append(deepcopy(messages))
+            if self.calls == 1:
+                prompt = "".join(
+                    str(message.get("content", "")) for message in messages if message.get("role") == "user"
+                )
+                if "Scoped lessons from this session" not in prompt:
+                    yield StreamEvent(kind="text", text="No scoped lesson was provided.")
+                    yield StreamEvent(kind="finish", finish_reason="stop")
+                    return
+                yield StreamEvent(kind="tool_call", tool_call={
+                    "id": "contradictory-valid-write",
+                    "name": "write_file",
+                    "arguments": {"path": "result.json", "content": json.dumps({"ok": True})},
+                })
+                yield StreamEvent(kind="finish", finish_reason="tool_calls")
+                return
+            (config.workspace / "result.json").unlink()
+            yield StreamEvent(kind="text", text="The write was subsequently removed by the fixture.")
+            yield StreamEvent(kind="finish", finish_reason="stop")
+
+    provider = ContradictoryProvider()
+    app = WebApp(config, lambda *_args: provider)
+    try:
+        goal = app.start_goal(session_id, {
+            "objective": "repeat the same verified action",
+            "checks": [{"type": "json_valid", "path": "result.json"}],
+            "max_iterations": 1,
+        })
+        capped = _wait_goal_terminal(config, goal["goal_id"])
+        assert capped["status"] == "capped"
+        state = StateStore(config.database)
+        rejected = state.get_goal_lesson(candidate["lesson_id"])
+        assert rejected is not None and rejected["status"] == "rejected"
+        assert rejected["contradictions"][0]["goal_id"] == goal["goal_id"]
+        assert "contradictory-valid-write" in rejected["contradictions"][0]["evidence_ids"]
+        assert state.list_goal_lessons(session_id, check_type="json_valid", check_key="result.json") == []
+        state.close()
+    finally:
+        app.close()
+
+
 class RepeatingInvalidJsonProvider:
     model = "test-model"
 

@@ -27,7 +27,7 @@ from .context import ContextBuilder
 from .delegation import DelegationManager
 from .provider import OpenAICompatibleProvider
 from .runtime import RuntimeLease
-from .state import StateStore
+from .state import StateStore, goal_lesson_fingerprint
 from .tools import ToolRegistry, _resolve
 from .workspace import resolve_session_workspace
 from .goals import validate_checks, verify
@@ -649,6 +649,10 @@ class WebApp:
                 followup_evidence_ids = ([latest_run_id] if latest_run_id else [])
                 followup_evidence_ids.extend(call["tool_call_id"] for call in latest_calls[:10])
                 observed_tool_names = list(dict.fromkeys(call["name"] for call in latest_calls))
+                followup_action_fingerprint = _reflection_fingerprint([
+                    {"name": call["name"], "arguments": call["arguments"]}
+                    for call in latest_calls
+                ])
                 next_change = (
                     "Observed tool calls: " + ", ".join(observed_tool_names)
                     if observed_tool_names else "No tool calls were recorded in the following run."
@@ -660,6 +664,7 @@ class WebApp:
                         bool(item["passed"]),
                         next_change=next_change,
                         evidence_ids=followup_evidence_ids[:12],
+                        next_action_fingerprint=followup_action_fingerprint,
                     )
                     if updated_reflection and item["passed"]:
                         reflection = state.get_latest_goal_reflection(goal_id, check_index)
@@ -667,11 +672,9 @@ class WebApp:
                             expected = reflection["expected"]
                             check_type = expected["type"]
                             check_key = expected.get("path", expected.get("executable", ""))
-                            pattern_fingerprint = _reflection_fingerprint({
-                                "check_type": check_type,
-                                "check_key": check_key,
-                                "tool_names": observed_tool_names,
-                            })
+                            pattern_fingerprint = goal_lesson_fingerprint(
+                                check_type, check_key, reflection["next_action_fingerprint"]
+                            )
                             lesson = (
                                 f"Observed {check_type} check for {check_key or 'configured target'} pass "
                                 f"after following action(s): {', '.join(observed_tool_names) or 'no tool calls'}."
@@ -689,10 +692,7 @@ class WebApp:
                 if all(item["passed"] for item in feedback):
                     state.update_goal(goal_id, "completed", feedback=feedback)
                     return
-                action_fingerprint = _reflection_fingerprint([
-                    {"name": call["name"], "arguments": call["arguments"]}
-                    for call in latest_calls
-                ])
+                action_fingerprint = followup_action_fingerprint
                 stop_for_repeated_failure = False
                 for check_index, item in enumerate(feedback):
                     if item["passed"]:
@@ -733,6 +733,14 @@ class WebApp:
                         }),
                         action_fingerprint=action_fingerprint,
                         repeat_threshold=self.config.goal_repeat_failure_threshold,
+                    )
+                    state.reject_goal_lesson_with_evidence(
+                        session_id=goal["session_id"],
+                        goal_id=goal_id,
+                        reflection_id=reflection["id"],
+                        check_type=expected["type"],
+                        check_key=expected.get("path", expected.get("executable", "")),
+                        evidence_ids=reflection["evidence_ids"],
                     )
                     stop_for_repeated_failure = stop_for_repeated_failure or bool(reflection["blocker"])
                 if stop_for_repeated_failure:
@@ -793,7 +801,7 @@ class WebApp:
                     if len(scoped_lessons) >= 3:
                         break
                     check_type = check["type"]
-                    check_key = Path(check["argv"][0]).name[:256] if check_type == "command" else str(check["path"])[:256]
+                    check_key = Path(check["argv"][0]).name[:128] if check_type == "command" else str(check["path"])[:256]
                     scoped_lessons.extend(state.list_goal_lessons(
                         goal["session_id"], check_type=check_type, check_key=check_key,
                         limit=3 - len(scoped_lessons),
