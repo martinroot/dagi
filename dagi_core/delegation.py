@@ -67,6 +67,34 @@ class DelegationManager:
             context_aware=True,
         ))
 
+    def _child_presentation(
+        self,
+        *,
+        child_session_id: int,
+        child_run_id: str | None,
+        parent_run_id: str,
+        task: str,
+        model: str,
+        depth: int,
+        status: str,
+    ) -> dict[str, Any]:
+        child = self.state.get_session(child_session_id)
+        workspace = child["workspace"] if child else ""
+        return {
+            "type": "delegation",
+            "summary": f"Child session #{child_session_id} · {status}",
+            "artifacts": [{
+                "child_session_id": child_session_id,
+                "child_run_id": child_run_id,
+                "parent_run_id": parent_run_id,
+                "task": task[:512],
+                "model": model[:120],
+                "status": status,
+                "workspace": workspace[:256],
+            }],
+            "diagnostics": {"depth": depth, "task_truncated": len(task) > 512},
+        }
+
     def _delegate(self, args: dict[str, Any], context: ToolExecutionContext) -> ToolResult:
         task = args.get("task")
         transferred_context = args.get("context", "")
@@ -154,7 +182,15 @@ class DelegationManager:
                     self.state.notify_parent(child_session, child_run)
                 status = completed["status"] if completed else "missing"
                 error = completed.get("error") if completed else "child run disappeared"
-                return ToolResult(f"Child run {child_run} ended with {status}: {error or 'no final result'}", is_error=True)
+                return ToolResult(
+                    f"Child run {child_run} ended with {status}: {error or 'no final result'}",
+                    is_error=True,
+                    presentation=self._child_presentation(
+                        child_session_id=child_session, child_run_id=child_run,
+                        parent_run_id=context.run_id, task=task, model=model,
+                        depth=context.depth + 1, status=status,
+                    ),
+                )
             self.state.notify_parent(child_session, child_run)
             child_messages = self.state.messages(child_session)
             answer = next(
@@ -163,8 +199,23 @@ class DelegationManager:
                 "",
             )
             if not answer:
-                return ToolResult(f"Child run {child_run} completed without a text result", is_error=True)
-            return ToolResult(f"Child run {child_run} result:\n{answer}")
+                return ToolResult(
+                    f"Child run {child_run} completed without a text result",
+                    is_error=True,
+                    presentation=self._child_presentation(
+                        child_session_id=child_session, child_run_id=child_run,
+                        parent_run_id=context.run_id, task=task, model=model,
+                        depth=context.depth + 1, status="completed",
+                    ),
+                )
+            return ToolResult(
+                f"Child run {child_run} result:\n{answer}",
+                presentation=self._child_presentation(
+                    child_session_id=child_session, child_run_id=child_run,
+                    parent_run_id=context.run_id, task=task, model=model,
+                    depth=context.depth + 1, status="completed",
+                ),
+            )
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
             if child_run is not None and child_session is not None:
@@ -181,4 +232,12 @@ class DelegationManager:
                         })
                     self.state.finish_run(child_run, "error", full_error)
                     self.state.notify_parent(child_session, child_run)
-            return ToolResult(f"Child agent could not complete the task: {error}", is_error=True)
+            return ToolResult(
+                f"Child agent could not complete the task: {error}",
+                is_error=True,
+                presentation=self._child_presentation(
+                    child_session_id=child_session, child_run_id=child_run,
+                    parent_run_id=context.run_id, task=task, model=model,
+                    depth=context.depth + 1, status="error",
+                ) if child_session is not None else None,
+            )

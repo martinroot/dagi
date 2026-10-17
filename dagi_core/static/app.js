@@ -193,6 +193,30 @@ function renderDirectoryPresentation(presentation) {
   };
 }
 
+function renderDelegationPresentation(presentation, resultText) {
+  const child = Array.isArray(presentation.artifacts) ? presentation.artifacts[0] || {} : {};
+  const diagnostics = presentation.diagnostics || {};
+  const id = Number.isSafeInteger(child.child_session_id) && child.child_session_id > 0
+    ? child.child_session_id : null;
+  const status = typeof child.status === "string" ? child.status : "status unavailable";
+  const metadata = [
+    child.model ? `model: ${child.model}` : "model unavailable",
+    child.child_run_id ? `child run: ${child.child_run_id}` : "child run unavailable",
+    child.parent_run_id ? `parent run: ${child.parent_run_id}` : "parent run unavailable",
+    child.workspace ? `workspace: ${child.workspace}` : "workspace unavailable",
+    Number.isFinite(diagnostics.depth) ? `depth: ${diagnostics.depth}` : "",
+    diagnostics.task_truncated === true ? "task preview truncated" : "",
+  ].filter(Boolean).join(" · ");
+  return {
+    icon: "🤝",
+    title: id ? `Child session #${id} · ${status}` : `Child agent · ${status}`,
+    summary: child.task || presentation.summary || "Delegated task unavailable",
+    resultText: resultText || "(no child result)",
+    metadata,
+    actions: id ? [{type: "open-session", sessionId: id}] : [],
+  };
+}
+
 function renderCommandPresentation(presentation, resultText) {
   const diagnostics = presentation.diagnostics || {};
   const duration = Number.isFinite(diagnostics.duration_ms) ? ` · ${diagnostics.duration_ms} ms` : "";
@@ -262,6 +286,7 @@ function renderMemoryPresentation(presentation) {
 const toolPresentationRenderers = new Map([
   ["file", renderFilePresentation],
   ["directory", renderDirectoryPresentation],
+  ["delegation", renderDelegationPresentation],
   ["command", renderCommandPresentation],
   ["memory", renderMemoryPresentation],
   ["skills", renderSkillsPresentation],

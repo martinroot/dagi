@@ -505,6 +505,48 @@ test("command presentation exposes exit state and warns that host privileges are
   assert.ok(card.children[4].children[3].textContent.includes("hello"));
 });
 
+test("delegation presentation shows child lineage and an open-child action", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "parent"},
+      runs: [{run_id: "run-parent", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-parent": 0},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({lastEventId: "1", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-parent", tool_call_id: "delegate-1",
+    tool_name: "delegate_task", tool_args: {task: "Calculate the requested result."},
+  })});
+  source.onmessage({lastEventId: "2", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-parent", tool_call_id: "delegate-1",
+    tool_name: "delegate_task", text: "Child run child-run result:\\nThe answer is 42.", is_error: false, outcome: "succeeded",
+    presentation: {
+      type: "delegation", summary: "Child session #7 · completed",
+      artifacts: [{
+        child_session_id: 7, child_run_id: "child-run", parent_run_id: "run-parent",
+        task: "Calculate the requested result.", model: "child-model", status: "completed",
+        workspace: ".dagi-children/7",
+      }],
+      diagnostics: {depth: 1, task_truncated: false},
+    },
+  })});
+  const card = elements.get("chat").children[0];
+  assert.equal(card.dataset.renderer, "delegation");
+  assert.ok(card.children[0].textContent.includes("Child session #7"));
+  assert.ok(card.children[3].textContent.includes("Calculate the requested result."));
+  assert.ok(card.children[4].children[1].textContent.includes("child-model"));
+  assert.ok(card.children[4].children[1].textContent.includes(".dagi-children/7"));
+  assert.ok(card.children[4].children[3].textContent.includes("The answer is 42."));
+  assert.equal(card.children[5].children[0].textContent, "Open session #7");
+});
+
 test("saved messages keep their persisted message identity in the UI model", async () => {
   const fetchImpl = async (url) => {
     if (url === "/api/auth/session") return jsonResponse({authenticated: true});

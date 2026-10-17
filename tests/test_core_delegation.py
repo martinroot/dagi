@@ -126,6 +126,19 @@ def test_parent_delegates_with_explicit_context_and_checks_child_result(tmp_path
     parent_tool_result = next(message for message in state.messages(parent_session) if message.get("tool_call_id") == "delegate-1")
     assert "The answer is 42." in parent_tool_result["content"]
     assert "The answer is 42." in str(parent_provider.requests[1]["messages"])
+    delegation_result = next(
+        event for event in events if event.kind == "tool_result" and event.tool_call_id == "delegate-1"
+    )
+    assert delegation_result.presentation is not None
+    assert delegation_result.presentation["type"] == "delegation"
+    child_artifact = delegation_result.presentation["artifacts"][0]
+    assert child_artifact["child_session_id"] == child_session
+    assert child_artifact["child_run_id"] == child_run["run_id"]
+    assert child_artifact["parent_run_id"] == parent_run_id
+    assert child_artifact["task"] == "Calculate the requested result."
+    assert child_artifact["model"] == "child-model"
+    assert child_artifact["status"] == "completed"
+    assert child_artifact["workspace"] == child_session_record["workspace"]
     child_inbox = state.inbox(parent_session)
     assert child_inbox[0]["child_session_id"] == child_session
     assert child_inbox[0]["run_id"] == child_run["run_id"]
