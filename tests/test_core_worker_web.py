@@ -55,7 +55,7 @@ def _request(base, path, *, method="GET", payload=None, token=None, origin=None)
         return exc.code, json.loads(exc.read())
 
 
-def test_authenticated_worker_list_and_proxy_keep_peer_tokens_server_side(tmp_path, monkeypatch):
+def test_authenticated_worker_list_and_proxy_keep_peer_tokens_server_side(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("DAGI_WORKERS", "{}")
     workers = []
     servers = []
@@ -132,3 +132,8 @@ def test_authenticated_worker_list_and_proxy_keep_peer_tokens_server_side(tmp_pa
             server.shutdown()
             server.server_close()
             thread.join(timeout=3)
+    captured = capsys.readouterr()
+    logs = captured.out + captured.err
+    assert "hub-private-token" not in logs
+    assert "alpha-private-token" not in logs
+    assert "beta-private-token" not in logs
