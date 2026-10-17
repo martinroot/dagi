@@ -20,7 +20,7 @@ def _enabled(value: str | None) -> bool:
 
 @dataclass(frozen=True)
 class Config:
-    api_key: str
+    api_key: str = field(repr=False)
     base_url: str
     model: str
     home: Path
@@ -33,11 +33,12 @@ class Config:
     max_delegation_depth: int
     max_child_agents_per_run: int
     web_username: str = ""
-    web_password_hash: str = ""
+    web_password_hash: str = field(default="", repr=False)
     web_cookie_path: str = "/"
     web_public_origin: str = ""
     web_cookie_secure: bool = True
     web_token: str = field(default="", repr=False)
+    enable_check_commands: bool = False
 
     @property
     def database(self) -> Path:
@@ -115,4 +116,5 @@ def load_config() -> Config:
         web_public_origin=os.environ.get("DAGI_WEB_PUBLIC_ORIGIN", "").strip().rstrip("/"),
         web_cookie_secure=_enabled(os.environ.get("DAGI_WEB_COOKIE_SECURE", "true")),
         web_token=os.environ.get("DAGI_WEB_TOKEN", "").strip(),
+        enable_check_commands=_enabled(os.environ.get("DAGI_ENABLE_CHECK_COMMANDS")),
     )

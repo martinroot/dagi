@@ -23,7 +23,7 @@ The runtime has one direct dependency, `openai`; SQLite and the CLI use the Pyth
 
 ## Safety
 
-`DAGI_ENABLE_SHELL` is disabled by default. When enabled, every shell command requires interactive approval; command text is escaped before display. The workspace constrains file tools but is not an OS-level sandbox for shell execution. The database is created with mode `0600`; the default `~/.dagi` directory is `0700` on POSIX. An explicitly selected existing `DAGI_HOME` keeps its existing directory permissions. The API key is read from the process environment and is not written to the repository or database.
+`DAGI_ENABLE_SHELL` is disabled by default. When enabled, every CLI shell command requires interactive approval; command text is escaped before display. The workspace constrains file tools but is not an OS-level sandbox. The bounded goal-check runner uses argv without a shell, a fixed credential-free environment, process-group cleanup, and capped output; any command check is still privileged code executed as the Dagi service user, not an OS sandbox. Keep `DAGI_ENABLE_CHECK_COMMANDS` disabled unless an operator explicitly opts in on a trusted installation; a request payload cannot change this setting. The database is created with mode `0600`; the default `~/.dagi` directory is `0700` on POSIX. An explicitly selected existing `DAGI_HOME` keeps its existing directory permissions. API keys, session password hashes, and worker tokens are excluded from `Config` repr and are never written to the repository or database.
 
 ## Run
 
@@ -56,6 +56,7 @@ Environment variables:
 - `DAGI_HOME` — database and skill storage; defaults to `~/.dagi`.
 - `DAGI_WORKSPACE` — root for file tools; defaults to the current directory.
 - `DAGI_ENABLE_SHELL=1` — enables shell execution with per-command approval in the CLI.
+- `DAGI_ENABLE_CHECK_COMMANDS=1` — explicit operator opt-in for privileged goal command checks; defaults off and is never read from a request payload.
 - `DAGI_WEB_HOST` / `DAGI_WEB_PORT` — sandbox bind address; defaults to `127.0.0.1:8765`.
 - `DAGI_WEB_USERNAME` / `DAGI_WEB_PASSWORD_HASH` — login credentials; store a PBKDF2-SHA256 password hash, never a plaintext password.
 - `DAGI_WEB_COOKIE_PATH` — session-cookie path; use `/dagi/` when mounted under that prefix.

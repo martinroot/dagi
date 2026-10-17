@@ -20,6 +20,32 @@ def test_config_requires_key_and_defaults_shell_off(tmp_path, monkeypatch):
         assert stat.S_IMODE(config.home.stat().st_mode) == 0o700
 
 
+def test_command_checks_are_disabled_unless_operator_sets_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAGI_API_KEY", "placeholder-for-test")
+    monkeypatch.setenv("DAGI_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("DAGI_ENABLE_CHECK_COMMANDS", raising=False)
+    assert load_config().enable_check_commands is False
+
+    monkeypatch.setenv("DAGI_ENABLE_CHECK_COMMANDS", "true")
+    assert load_config().enable_check_commands is True
+
+
+def test_config_repr_omits_credentials_and_session_verifier(tmp_path, monkeypatch):
+    api_key = "api-key-test-not-real"
+    password_hash = "pbkdf2-test-verifier-not-real"
+    web_token = "web-token-test-not-real"
+    monkeypatch.setenv("DAGI_API_KEY", api_key)
+    monkeypatch.setenv("DAGI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("DAGI_WEB_PASSWORD_HASH", password_hash)
+    monkeypatch.setenv("DAGI_WEB_TOKEN", web_token)
+
+    displayed = repr(load_config())
+
+    assert api_key not in displayed
+    assert password_hash not in displayed
+    assert web_token not in displayed
+
+
 def test_explicit_existing_home_directory_permissions_are_preserved(tmp_path, monkeypatch):
     home = tmp_path / "shared-home"
     home.mkdir(mode=0o755)
