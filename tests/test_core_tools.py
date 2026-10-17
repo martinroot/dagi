@@ -131,8 +131,28 @@ def test_list_skills_returns_structured_skill_records(tmp_path):
             "name": "release-check", "description": "Verify releases",
             "triggers": ["release", "tag"], "use_count": 1,
         }],
-        "diagnostics": {"skill_count": 1},
+        "diagnostics": {"skill_count": 1, "displayed_count": 1, "omitted_count": 0},
     }
+    state.close()
+
+
+def test_list_skills_bounds_structured_metadata_for_large_catalog(tmp_path):
+    state, tools = make_tools(tmp_path)
+    for index in range(25):
+        state.create_skill(
+            f"skill-{index}", "d" * 800, ["trigger" * 20] * 10, "procedure",
+        )
+
+    result = tools.call("list_skills", {})
+
+    assert result.presentation is not None
+    assert result.presentation["diagnostics"] == {
+        "skill_count": 25, "displayed_count": 20, "omitted_count": 5,
+    }
+    assert len(result.presentation["artifacts"]) == 20
+    assert all(len(skill["description"]) <= 256 for skill in result.presentation["artifacts"])
+    assert all(len(skill["triggers"]) <= 5 for skill in result.presentation["artifacts"])
+    assert all(len(trigger) <= 80 for skill in result.presentation["artifacts"] for trigger in skill["triggers"])
     state.close()
 
 

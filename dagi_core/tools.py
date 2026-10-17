@@ -344,18 +344,23 @@ class ToolRegistry:
             f"- {skill['name']}: {skill['description']}" for skill in skills
         ) or "(no skills yet)"
         count = len(skills)
+        displayed = skills[:20]
         return ToolResult(
             content,
             presentation={
                 "type": "skills",
                 "summary": f"Listed {count} {'skill' if count == 1 else 'skills'}",
                 "artifacts": [{
-                    "name": skill["name"],
-                    "description": skill["description"],
-                    "triggers": skill.get("triggers", []),
+                    "name": str(skill["name"])[:80],
+                    "description": str(skill["description"])[:160],
+                    "triggers": [str(trigger)[:60] for trigger in skill.get("triggers", [])[:3]],
                     "use_count": skill.get("use_count", 0),
-                } for skill in skills],
-                "diagnostics": {"skill_count": count},
+                } for skill in displayed],
+                "diagnostics": {
+                    "skill_count": count,
+                    "displayed_count": len(displayed),
+                    "omitted_count": max(0, count - len(displayed)),
+                },
             },
         )
 
