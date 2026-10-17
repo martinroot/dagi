@@ -9,7 +9,7 @@ from .agent import Agent
 from .context import ContextBuilder
 from .provider import OpenAICompatibleProvider
 from .state import StateStore
-from .tools import Tool, ToolExecutionContext, ToolRegistry, ToolResult
+from .tools import Tool, ToolExecutionContext, ToolRegistry, ToolResult, _resolve
 from .usage import UsagePolicy
 
 ProviderFactory = Callable[[str, str, str], OpenAICompatibleProvider]
@@ -88,9 +88,15 @@ class DelegationManager:
         try:
             self.usage_policy.validate_model(model)
             parent = self.state.get_run(context.run_id)
-            if parent is None:
-                return ToolResult("parent run does not exist", is_error=True)
-            child_session = self.state.create_session(f"Child: {task[:80]}")
+            parent_session = self.state.get_session(context.session_id)
+            if parent is None or parent_session is None:
+                return ToolResult("parent run or session does not exist", is_error=True)
+            child_session = self.state.create_session(
+                f"Child: {task[:80]}", parent_id=context.session_id
+            )
+            child_workspace = f"{parent_session['workspace'] + '/' if parent_session['workspace'] else ''}.dagi-children/{child_session}"
+            self.state.set_session_workspace(child_session, child_workspace)
+            isolated_workspace = _resolve(self.workspace, child_workspace)
             child_agent_id = str(uuid4())
             child_run = self.state.create_run(
                 child_session,
@@ -105,7 +111,7 @@ class DelegationManager:
                 context.register_provider(provider)
                 context.register_provider(compressor)
             child_tools = ToolRegistry(
-                self.workspace,
+                isolated_workspace,
                 self.state,
                 child_session,
                 shell_enabled=self.shell_enabled,
@@ -144,9 +150,12 @@ class DelegationManager:
             ))
             completed = self.state.get_run(child_run)
             if completed is None or completed["status"] != "completed":
+                if completed is not None:
+                    self.state.notify_parent(child_session, child_run)
                 status = completed["status"] if completed else "missing"
                 error = completed.get("error") if completed else "child run disappeared"
                 return ToolResult(f"Child run {child_run} ended with {status}: {error or 'no final result'}", is_error=True)
+            self.state.notify_parent(child_session, child_run)
             child_messages = self.state.messages(child_session)
             answer = next(
                 (message["content"] for message in reversed(child_messages)
@@ -171,4 +180,5 @@ class DelegationManager:
                             "status": status,
                         })
                     self.state.finish_run(child_run, "error", full_error)
+                    self.state.notify_parent(child_session, child_run)
             return ToolResult(f"Child agent could not complete the task: {error}", is_error=True)

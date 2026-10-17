@@ -156,7 +156,7 @@ def test_child_runs_inherit_parent_budget_scope_and_keep_separate_usage(tmp_path
     store = StateStore(tmp_path / "state.sqlite3")
     parent_session = store.create_session("parent")
     parent_run = store.create_run(parent_session)
-    child_session = store.create_session("child")
+    child_session = store.create_session("child", parent_id=parent_session)
     child_run = store.create_run(
         child_session, agent_id="child-agent-id", parent_run_id=parent_run, agent_name="child-model"
     )

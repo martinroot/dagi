@@ -1,4 +1,5 @@
 from copy import deepcopy
+from pathlib import Path
 from threading import Event, Thread
 
 from dagi_core.agent import Agent
@@ -102,6 +103,12 @@ def test_parent_delegates_with_explicit_context_and_checks_child_result(tmp_path
     assert len(child_sessions) == 1
     child_session = child_sessions[0]["id"]
     child_run = state.list_runs(child_session)[0]
+    child_session_record = state.get_session(child_session)
+    assert child_session_record is not None
+    assert child_session_record["parent_id"] == parent_session
+    assert child_session_record["workspace"].startswith(".dagi-children/")
+    child_workspace = (tmp_path / "workspace" / child_session_record["workspace"]).resolve()
+    assert child_workspace.is_dir()
     parent_run_id = events[-1].run_id
     assert parent_run_id is not None
     assert child_run["parent_run_id"] == parent_run_id
@@ -119,6 +126,10 @@ def test_parent_delegates_with_explicit_context_and_checks_child_result(tmp_path
     parent_tool_result = next(message for message in state.messages(parent_session) if message.get("tool_call_id") == "delegate-1")
     assert "The answer is 42." in parent_tool_result["content"]
     assert "The answer is 42." in str(parent_provider.requests[1]["messages"])
+    child_inbox = state.inbox(parent_session)
+    assert child_inbox[0]["child_session_id"] == child_session
+    assert child_inbox[0]["run_id"] == child_run["run_id"]
+    assert child_inbox[0]["result"] == "The answer is 42."
     assert state.usage_summary_for_budget(parent_run_id)["provider_calls"] == 4
     assert state.list_provider_calls(child_run["run_id"])[0]["model"] == "child-model"
     state.close()
@@ -306,7 +317,7 @@ def test_delegation_enforces_depth_and_total_child_limit(tmp_path):
     assert too_deep.is_error is True
     assert state.count_child_runs_in_budget_group(parent_run) == 0
 
-    child_session = state.create_session("already created")
+    child_session = state.create_session("already created", parent_id=session)
     state.create_run(child_session, parent_run_id=parent_run, agent_name="existing-child")
     count_tools = ToolRegistry(workspace, state, session)
     count_manager = _manager(state, workspace, factory, depth=3, children=1)

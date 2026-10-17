@@ -241,13 +241,18 @@ class StateStore:
         run_id = str(uuid.uuid4())
         if budget_group_id is not None and (not isinstance(budget_group_id, str) or not budget_group_id.strip()):
             raise ValueError("budget_group_id must be non-empty text")
+        session = self.get_session(session_id)
+        if session is None:
+            raise ValueError("session not found")
         if parent_run_id is None:
             actual_depth = 0 if depth is None else depth
             actual_group = budget_group_id or run_id
         else:
             parent = self.get_run(parent_run_id)
-            if parent is None:
-                raise ValueError(f"parent run does not exist: {parent_run_id}")
+            if parent is None or parent["status"] != "running":
+                raise ValueError("parent run must exist and still be running")
+            if session["parent_id"] != parent["session_id"]:
+                raise ValueError("child session must belong to the parent run's session")
             expected_depth = int(parent["depth"]) + 1
             if depth is not None and depth != expected_depth:
                 raise ValueError("child run depth must be exactly parent depth plus one")

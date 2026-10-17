@@ -69,3 +69,24 @@ def test_session_workspace_must_be_relative_and_confined(tmp_path):
         with pytest.raises(ValueError, match="workspace"):
             state.create_session("child", parent_id=parent, workspace=unsafe)
     state.close()
+
+
+def test_child_run_must_match_parent_session_lineage(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    parent_session = state.create_session("parent")
+    parent_run = state.create_run(parent_session)
+    unrelated_session = state.create_session("unrelated")
+    with pytest.raises(ValueError, match="child session"):
+        state.create_run(unrelated_session, parent_run_id=parent_run)
+    state.close()
+
+
+def test_child_run_cannot_start_after_parent_run_finishes(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    parent_session = state.create_session("parent")
+    parent_run = state.create_run(parent_session)
+    child_session = state.create_session("child", parent_id=parent_session)
+    state.finish_run(parent_run, "completed")
+    with pytest.raises(ValueError, match="parent run"):
+        state.create_run(child_session, parent_run_id=parent_run)
+    state.close()
