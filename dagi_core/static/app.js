@@ -193,9 +193,31 @@ function renderDirectoryPresentation(presentation) {
   };
 }
 
+function renderMemoryPresentation(presentation) {
+  const diagnostics = presentation.diagnostics || {};
+  const hits = Array.isArray(presentation.artifacts) ? presentation.artifacts : [];
+  const resultText = hits.map((hit) => {
+    const source = `session ${hit.session_id} · message ${hit.message_id} · ${hit.role}`;
+    const timestamp = typeof hit.created_at === "string" ? ` · ${hit.created_at}` : "";
+    return `[${source}${timestamp}] ${hit.snippet || ""}`;
+  }).join("\n") || "(no matches)";
+  const sessionIds = [...new Set(hits.map((hit) => hit.session_id)
+    .filter((id) => Number.isSafeInteger(id) && id > 0))];
+  const omitted = Number.isFinite(diagnostics.omitted_count) ? diagnostics.omitted_count : 0;
+  return {
+    icon: "🧠",
+    title: presentation.summary || "Memory search",
+    summary: `${Number.isFinite(diagnostics.match_count) ? diagnostics.match_count : hits.length} matches${omitted ? ` · ${omitted} more not shown` : ""}`,
+    resultText,
+    metadata: `${hits.length} sourced snippets`,
+    actions: sessionIds.map((sessionId) => ({type: "open-session", sessionId})),
+  };
+}
+
 const toolPresentationRenderers = new Map([
   ["file", renderFilePresentation],
   ["directory", renderDirectoryPresentation],
+  ["memory", renderMemoryPresentation],
 ]);
 
 function registerToolPresentationRenderer(type, renderer) {
@@ -230,10 +252,12 @@ function renderToolCard(sessionId, runId, toolCallId) {
     input.className = "tool-input";
     const result = document.createElement("pre");
     result.className = "tool-result";
+    const actions = document.createElement("div");
+    actions.className = "tool-actions";
     details.append(detailsTitle, metadata, input, result);
-    card.append(title, status, duration, summary, details);
+    card.append(title, status, duration, summary, details, actions);
     $("chat").append(card);
-    record.card = {card, title, status, duration, summary, metadata, input, result};
+    record.card = {card, title, status, duration, summary, metadata, input, result, actions};
   }
   const call = record.call || {};
   const name = call.tool_name || call.name || "unknown tool";
@@ -279,6 +303,15 @@ function renderToolCard(sessionId, runId, toolCallId) {
   record.card.input.textContent = inputText.length > 8_000 ? `${inputText.slice(0, 8_000)}\n[arguments truncated]` : inputText;
   const renderedResult = view?.resultText ?? resultText;
   record.card.result.textContent = renderedResult || (record.status === "running" || record.status === "pending" ? "No result yet." : "No result data.");
+  record.card.actions.replaceChildren();
+  for (const action of view?.actions || []) {
+    if (action.type !== "open-session" || !Number.isSafeInteger(action.sessionId) || action.sessionId < 1) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `Open session #${action.sessionId}`;
+    button.onclick = () => selectSession(action.sessionId);
+    record.card.actions.append(button);
+  }
   return record.card.card;
 }
 

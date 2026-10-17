@@ -308,15 +308,35 @@ class ToolRegistry:
             },
         )
 
-    def _search_memory(self, args: dict[str, Any]) -> str:
+    def _search_memory(self, args: dict[str, Any]) -> ToolResult:
         hits = self.state.search_memory(
             str(args["query"]),
             int(args.get("limit", 10)),
             session_id=self.session_id if self.memory_session_scope else None,
         )
-        return "\n".join(
+        content = "\n".join(
             f"[session {hit['session_id']}, {hit['role']}] {hit['snippet']}" for hit in hits
         ) or "(no matches)"
+        displayed = hits[:20]
+        return ToolResult(
+            content,
+            presentation={
+                "type": "memory",
+                "summary": f"Found {len(hits)} memory matches",
+                "artifacts": [{
+                    "message_id": hit["id"],
+                    "session_id": hit["session_id"],
+                    "role": hit["role"],
+                    "snippet": hit["snippet"],
+                    "created_at": hit["created_at"],
+                } for hit in displayed],
+                "diagnostics": {
+                    "match_count": len(hits),
+                    "displayed_count": len(displayed),
+                    "omitted_count": max(0, len(hits) - len(displayed)),
+                },
+            },
+        )
 
     def _list_skills(self, _args: dict[str, Any]) -> str:
         skills = self.state.list_skills()

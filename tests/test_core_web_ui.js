@@ -339,6 +339,46 @@ test("directory presentation renders typed entries from structured artifacts", a
   assert.ok(card.children[4].children[3].textContent.includes("readme.md"));
 });
 
+test("memory presentation renders sourced hits and opens the owning session", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "memory search"},
+      runs: [{run_id: "run-memory", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-memory": 0},
+    });
+    if (url === "/api/sessions/7") return jsonResponse({
+      session: {id: 7, title: "source session"}, runs: [], messages: [], tool_calls: [], goals: [], event_cursors: {},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({lastEventId: "1", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-memory", tool_call_id: "memory-1",
+    tool_name: "search_memory", tool_args: {query: "release"},
+  })});
+  source.onmessage({lastEventId: "2", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-memory", tool_call_id: "memory-1",
+    tool_name: "search_memory", text: "[session 7, user] release notes", is_error: false, outcome: "succeeded",
+    presentation: {
+      type: "memory", summary: "Found 1 memory matches",
+      artifacts: [{message_id: 41, session_id: 7, role: "user", snippet: "[release] notes", created_at: "2026-10-17T00:00:00+00:00"}],
+      diagnostics: {match_count: 1, displayed_count: 1, omitted_count: 0},
+    },
+  })});
+  const card = elements.get("chat").children[0];
+  assert.equal(card.dataset.renderer, "memory");
+  assert.ok(card.children[4].children[3].textContent.includes("session 7"));
+  const button = card.children[5].children[0];
+  assert.equal(button.textContent, "Open session #7");
+  await button.onclick();
+  assert.match(elements.get("session-title").textContent, /source session · #7/);
+});
+
 test("saved messages keep their persisted message identity in the UI model", async () => {
   const fetchImpl = async (url) => {
     if (url === "/api/auth/session") return jsonResponse({authenticated: true});

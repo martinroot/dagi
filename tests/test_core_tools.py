@@ -97,6 +97,25 @@ def test_list_dir_returns_structured_entries_without_changing_text(tmp_path):
     state.close()
 
 
+def test_search_memory_returns_structured_hits_with_source(tmp_path):
+    state, tools = make_tools(tmp_path)
+    message_id = state.append_message(tools.session_id, {"role": "user", "content": "needle in a remembered message"})
+
+    result = tools.call("search_memory", {"query": "needle"})
+
+    assert "[needle] in a remembered message" in result.content
+    assert result.presentation["type"] == "memory"
+    assert len(result.presentation["artifacts"]) == 1
+    hit = result.presentation["artifacts"][0]
+    assert hit["message_id"] == message_id
+    assert hit["session_id"] == tools.session_id
+    assert hit["role"] == "user"
+    assert hit["snippet"] == "[needle] in a remembered message"
+    assert isinstance(hit["created_at"], str)
+    assert result.presentation["diagnostics"]["match_count"] == 1
+    state.close()
+
+
 def test_file_tools_reject_paths_outside_workspace(tmp_path):
     state, tools = make_tools(tmp_path)
     outside = tmp_path / "outside.txt"
