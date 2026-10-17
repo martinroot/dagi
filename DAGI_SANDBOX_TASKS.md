@@ -5,8 +5,8 @@ This is the single repository-level status map for the sandbox roadmap supplied 
 - Umbrella: [#16 — sandbox UI integration](https://github.com/martinroot/dagi/issues/16) (open until all remaining acceptance criteria are complete).
 - Integration umbrella: [#20 — incremental 0.3.0 integration](https://github.com/martinroot/dagi/issues/20).
 - Current branch: `main`.
-- Verified code checkpoint: `084af5f0f7e5dcd54680cf6ebbe3359fdca2e15d`; remote `main` matched before this roadmap-only update.
-- Verification at this checkpoint: `pytest -q` — **139 passed**; Node UI — **21 passed**; `node --check` passed; `uv build` produced wheel and sdist; both static assets are in the wheel.
+- Verified code checkpoint: `0da2d8ad56235ee6a0a4bb6644ef182d1d0390a7`; remote `main` matched before this roadmap-only update.
+- Verification at this checkpoint: `pytest -q` — **141 passed**; Node UI — **21 passed**; `bash -n` passed; `uv build` produced wheel and sdist; both static assets are in the wheel.
 - Deployment boundary: no service restart or live `DAGI_HOME` migration has been performed. Backend changes are not claimed as active in the running service; #15 backup/restore rehearsal remains required before any live schema migration.
 
 ## Ten implementation iterations
@@ -16,7 +16,7 @@ This is the single repository-level status map for the sandbox roadmap supplied 
 | 1 | Reconcile HEAD; reproduce CORE-01…04; record workspace/event contracts | Done | #21–#23, #34–#35 |
 | 2 | Canonical UI state, snapshots/cursors, dedupe and reconnect | Done | #24, #28 |
 | 3 | Updating generic tool cards and explicit outcomes | Done | #25 |
-| 4 | Structured tool metadata and built-in renderers | In progress | #26 |
+| 4 | Structured tool metadata and built-in renderers | Done | #26 (closed) |
 | 5 | Safe live chat, Markdown, drafts, input and autoscroll | Pending | #27 |
 | 6 | Agent tree, child-resume/workspaces, async delegation | Pending | #29; foundation #8/#16 |
 | 7 | Safe per-session artifacts and workspace browsing | Pending | #30 |
@@ -28,8 +28,8 @@ This is the single repository-level status map for the sandbox roadmap supplied 
 
 | ID | Status | Issue | Verified implementation/evidence |
 |---|---|---|---|
-| SB-01 — stable UI state keyed by session/run/tool call; saved message IDs; no duplicate replay | Done | [#24 closed](https://github.com/martinroot/dagi/issues/24) | `b44931e`, `eff6f5d`; snapshot/replay tests; included in latest 139-test suite |
-| SB-02 — one updating generic tool card with status, duration, result/error and unknown-outcome handling | Done | [#25 closed](https://github.com/martinroot/dagi/issues/25) | `371a42f`, `2484c12`; Node UI regressions and explicit tool outcome event, included in latest 139-test suite |
+| SB-01 — stable UI state keyed by session/run/tool call; saved message IDs; no duplicate replay | Done | [#24 closed](https://github.com/martinroot/dagi/issues/24) | `b44931e`, `eff6f5d`; snapshot/replay tests; included in latest 141-test suite |
+| SB-02 — one updating generic tool card with status, duration, result/error and unknown-outcome handling | Done | [#25 closed](https://github.com/martinroot/dagi/issues/25) | `371a42f`, `2484c12`; Node UI regressions and explicit tool outcome event, included in latest 141-test suite |
 | SB-03 — backward-compatible structured presentation metadata and specialized built-in renderers | Done | [#26 closed](https://github.com/martinroot/dagi/issues/26) | `33657ab` metadata persistence; `e49e401` read; `c579232` write/list; `947e263` memory; `8bf6bbf`, `062d265`, `2decc50` skills; `dd96a3d` commands; `b9f91e2` delegation; `2b5287a` bounded diff; `084af5f` raw text fallback. Safe file-browser navigation remains in SB-07/#30 |
 | SB-04 — truthful live chat, safe Markdown, drafts, input and history-preserving scroll | Pending | [#27 open](https://github.com/martinroot/dagi/issues/27) | Not started |
 | SB-05 — consistent snapshot cursor, bounded event paging, gap-free SSE recovery and long-run replay | Done | [#28 closed](https://github.com/martinroot/dagi/issues/28) | `55d7f09`, `49ae883`; tests cover snapshot/subscription gap, 501 events over multiple pages, terminal cursor ordering |
@@ -47,7 +47,7 @@ This is the single repository-level status map for the sandbox roadmap supplied 
 | CORE-02 — goal checks must use the goal owner's workspace | Open | [#35](https://github.com/martinroot/dagi/issues/35), parent #21 | Reproduced on `ff6fba0`; foreign root file passed child check |
 | CORE-03 — CLI must honor the `DAGI_HOME` runtime lease before `/resume` | Open | [#22](https://github.com/martinroot/dagi/issues/22) | Reproduced; CLI recovery mutated a run while Web lease was held |
 | CORE-04 — malformed built-in tool arguments must be recoverable errors | Open | [#23](https://github.com/martinroot/dagi/issues/23) | Reproduced; `read_file({})` became uncertain and blocked next turn |
-| CORE-05 — command checks must bound output and clean up process trees | Open | [#18](https://github.com/martinroot/dagi/issues/18) | Cleanup defect still unverified; baseline test's 200 ms startup race reproduced in 16/30 runs and documented on #18 |
+| CORE-05 — command checks must bound output and clean up process trees | Open | [#18](https://github.com/martinroot/dagi/issues/18) | Timeout fixture now waits for a valid child PID before starting the timeout; 30/30 targeted runs passed on `10cfb3f`. Broader #18 acceptance remains open |
 
 ## Future layer
 
@@ -63,6 +63,12 @@ This is the single repository-level status map for the sandbox roadmap supplied 
 6. Keep generic fallback and make original tool text available for transformed renderers; metadata size/shape, legacy extension compatibility, and safe text rendering are covered (`084af5f`).
 
 ## Operational constraints
+
+### Fast issue-level testing (DX)
+
+- [#37 — focused test runner](https://github.com/martinroot/dagi/issues/37) is closed; `scripts/test-focused.sh` accepts pytest selectors and an optional Node UI pattern, runs both in parallel, and reports each failure.
+- Focused diff example completed in **1.26 s**; prior full-suite baseline was **32.24 s**. This improves red/green iterations without removing or weakening tests.
+- Before issue closure/release, still run full pytest + Node UI + package build. `README.md` documents both loops.
 
 - Continue on `main` in small, reversible, issue-linked commits; push each green slice and verify local/remote SHA.
 - Do not deploy/restart the active service or migrate live `DAGI_HOME` as part of these code slices. Preserve cookie-session auth and verify logged-out API rejection.
