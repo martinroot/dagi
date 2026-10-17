@@ -26,7 +26,8 @@ from .delegation import DelegationManager
 from .provider import OpenAICompatibleProvider
 from .runtime import RuntimeLease
 from .state import StateStore
-from .tools import ToolRegistry
+from .tools import ToolRegistry, _resolve
+from .goals import validate_checks, verify
 from .worker import load_workers
 
 ProviderFactory = Callable[[str, str, str], Any]
@@ -210,7 +211,11 @@ class WebApp:
                     elif path.startswith("/api/") and not app._is_authenticated(self.headers):
                         self._send_json(401, {"error": "authentication required"})
                     elif path == "/api/health":
-                        self._send_json(200, {"healthy": True, "active_runs": len(app._runs)})
+                        self._send_json(200, {
+                            "healthy": True,
+                            "active_runs": len(app._runs),
+                            "active_goals": len(app._goals),
+                        })
                     elif path == "/api/workers":
                         self._send_json(200, {"workers": [
                             {"id": name, "url": worker.url}
@@ -223,6 +228,7 @@ class WebApp:
                             sessions = state.list_sessions(100)
                             for session in sessions:
                                 session["runs"] = state.list_runs(session["id"], 20)
+                                session["goals"] = state.list_goals(session["id"])
                             self._send_json(200, {"sessions": sessions})
                     elif match := re.fullmatch(r"/api/sessions/(\d+)", path):
                         session_id = int(match.group(1))
@@ -235,7 +241,15 @@ class WebApp:
                                 "session": session,
                                 "runs": state.list_runs(session_id, 100),
                                 "messages": state.message_records(session_id),
+                                "goals": state.list_goals(session_id),
                             })
+                    elif match := re.fullmatch(r"/api/goals/([^/]+)", path):
+                        with _StateContext(self._state()) as state:
+                            goal = state.get_goal(match.group(1))
+                            if goal is None:
+                                self._send_json(404, {"error": "goal not found"})
+                                return
+                            self._send_json(200, {"goal": goal})
                     elif match := re.fullmatch(r"/api/runs/([^/]+)/events", path):
                         self._stream_events(match.group(1), parsed.query)
                     elif match := re.fullmatch(r"/api/runs/([^/]+)", path):
@@ -299,6 +313,10 @@ class WebApp:
                         self._send_json(401, {"error": "authentication required"})
                     elif match := re.fullmatch(r"/api/workers/([A-Za-z0-9_-]+)/proxy(/api/.*)", parsed.path):
                         self._proxy(match.group(1), match.group(2), body)
+                    elif match := re.fullmatch(r"/api/sessions/(\d+)/goals", parsed.path):
+                        self._send_json(202, app.start_goal(int(match.group(1)), body))
+                    elif match := re.fullmatch(r"/api/goals/([^/]+)/(stop|resume)", parsed.path):
+                        self._send_json(202, app.control_goal(match.group(1), match.group(2)))
                     elif parsed.path == "/api/sessions":
                         title = body.get("title")
                         if title is not None and not isinstance(title, str):
@@ -312,6 +330,8 @@ class WebApp:
                         self._cancel_run(match.group(1))
                     else:
                         self._send_json(404, {"error": "not found"})
+                except RuntimeError as exc:
+                    self._send_json(409, {"error": str(exc)})
                 except (ValueError, json.JSONDecodeError) as exc:
                     self._send_json(400, {"error": str(exc)})
                 except Exception:
@@ -320,7 +340,7 @@ class WebApp:
             def _proxy(self, worker_id: str, path: str, body: dict[str, Any] | None = None) -> None:
                 worker = app.workers.get(worker_id)
                 allowed = re.fullmatch(
-                    r"/api/(?:health|sessions|sessions/\d+|sessions/\d+/runs|runs/[^/]+(?:/events|/cancel)?)",
+                    r"/api/(?:health|sessions|sessions/\d+(?:/(?:runs|goals))?|runs/[^/]+(?:/events|/cancel)?|goals/[^/]+(?:/(?:stop|resume))?)",
                     path,
                 )
                 if worker is None or not allowed:
@@ -427,7 +447,7 @@ class WebApp:
                     )
                 control = _RunControl(session_id)
                 with app._lock:
-                    if any(item.session_id == session_id for item in app._runs.values()):
+                    if any(item.session_id == session_id for item in [*app._runs.values(), *app._goals.values()]):
                         with _StateContext(self._state()) as state:
                             state.finish_run(run_id, "error", "another run is already active in this session")
                         self._send_json(409, {"error": "a run is already active for this session"})
@@ -469,6 +489,159 @@ class WebApp:
         except BaseException:
             app.close()
             raise
+
+    def _session_busy(self, session_id: int) -> bool:
+        return any(
+            control.session_id == session_id
+            for control in [*self._runs.values(), *self._goals.values()]
+        )
+
+    def start_goal(self, session_id: int, body: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(body, dict):
+            raise ValueError("goal request must be a JSON object")
+        allowed_fields = {"objective", "checks", "max_iterations"}
+        extra_fields = set(body) - allowed_fields
+        if extra_fields:
+            raise ValueError("goal capability settings are operator-configured, not request fields")
+        objective = body.get("objective")
+        cap = body.get("max_iterations", 5)
+        if not isinstance(objective, str) or not objective.strip() or len(objective) > 8_000:
+            raise ValueError("objective must be non-empty text of at most 8000 characters")
+        if isinstance(cap, bool) or not isinstance(cap, int) or not 1 <= cap <= 10:
+            raise ValueError("max_iterations must be 1..10")
+        checks = validate_checks(body.get("checks"))
+        if any(check["type"] == "command" for check in checks) and not self.config.enable_check_commands:
+            raise ValueError("command checks are disabled by operator configuration")
+        workspace = self.config.workspace.expanduser().resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+        for check in checks:
+            if check["type"] != "command":
+                _resolve(workspace, check["path"])
+
+        with self._lock, _StateContext(StateStore(self.config.database)) as state:
+            if state.get_session(session_id) is None:
+                raise ValueError("session not found")
+            if self._session_busy(session_id):
+                raise RuntimeError("a run or goal is already active for this session")
+            goal_id = state.create_goal(session_id, objective, checks, cap)
+            self._launch_goal(goal_id, session_id)
+            created = state.get_goal(goal_id)
+            if created is None:
+                raise RuntimeError("created goal could not be read back")
+            return created
+
+    def _launch_goal(self, goal_id: str, session_id: int) -> None:
+        control = _RunControl(session_id)
+        self._goals[goal_id] = control
+        control.thread = Thread(target=self._drive_goal, args=(goal_id, control), daemon=True)
+        control.thread.start()
+
+    def control_goal(self, goal_id: str, action: str) -> dict[str, Any]:
+        if action not in {"stop", "resume"}:
+            raise ValueError("goal action must be stop or resume")
+        if action == "stop":
+            with self._lock:
+                control = self._goals.get(goal_id)
+            if control is not None:
+                self._cancel_control(control)
+            with _StateContext(StateStore(self.config.database)) as state:
+                goal = state.get_goal(goal_id)
+                if goal is None:
+                    raise ValueError("goal not found")
+                if control is None and goal["status"] == "running":
+                    state.update_goal(goal_id, "interrupted")
+                updated = state.get_goal(goal_id)
+                if updated is None:
+                    raise RuntimeError("goal disappeared while stopping")
+                return updated
+
+        with self._lock, _StateContext(StateStore(self.config.database)) as state:
+            goal = state.get_goal(goal_id)
+            if goal is None:
+                raise ValueError("goal not found")
+            if goal["status"] not in {"interrupted", "error"}:
+                raise ValueError("only interrupted or error goals can resume")
+            if self._session_busy(goal["session_id"]):
+                raise RuntimeError("a run or goal is already active for this session")
+            state.update_goal(goal_id, "running")
+            self._launch_goal(goal_id, goal["session_id"])
+            updated = state.get_goal(goal_id)
+            if updated is None:
+                raise RuntimeError("goal disappeared while resuming")
+            return updated
+
+    def _drive_goal(self, goal_id: str, control: _RunControl) -> None:
+        state = StateStore(self.config.database)
+        try:
+            while True:
+                goal = state.get_goal(goal_id)
+                if goal is None:
+                    return
+                feedback = verify(
+                    self.config.workspace,
+                    goal["checks"],
+                    allow_commands=self.config.enable_check_commands,
+                    cancellation=control.cancellation,
+                )
+                if control.cancellation.is_set():
+                    state.update_goal(goal_id, "interrupted", feedback=feedback)
+                    return
+                if all(item["passed"] for item in feedback):
+                    state.update_goal(goal_id, "completed", feedback=feedback)
+                    return
+                if goal["iteration"] >= goal["max_iterations"]:
+                    state.update_goal(goal_id, "capped", feedback=feedback)
+                    return
+                if goal["runs"]:
+                    budget_summary = state.usage_summary_for_budget(goal["runs"][-1])
+                else:
+                    budget_summary = {"provider_calls": 0, "cost_usd": 0}
+                if self.config.usage_policy.stop_reason(budget_summary):
+                    state.update_goal(goal_id, "limit", feedback=feedback)
+                    return
+
+                iteration = goal["iteration"] + 1
+                state.update_goal(goal_id, "running", iteration=iteration, feedback=feedback)
+                run_id = state.create_run(
+                    goal["session_id"],
+                    agent_id=self.agent_id,
+                    agent_name=self.config.model,
+                    budget_group_id=goal_id,
+                )
+                state.link_goal_run(goal_id, run_id)
+                with self._lock:
+                    self._runs[run_id] = control
+                message = (
+                    f"Goal: {goal['objective']}\nIteration {iteration}/{goal['max_iterations']}.\n"
+                    "Complete the work, but do not claim success unless the deterministic checks pass.\n"
+                    "Acceptance checks and latest failures:\n"
+                    + json.dumps(feedback, ensure_ascii=False)
+                )
+                self._execute_run(run_id, goal["session_id"], message, control)
+                completed_run = state.get_run(run_id)
+                if completed_run is None:
+                    state.update_goal(goal_id, "error", feedback=feedback)
+                    return
+                if completed_run["status"] != "completed":
+                    goal_status = {
+                        "limit": "limit",
+                        "cancelled": "interrupted",
+                        "error": "error",
+                    }.get(completed_run["status"], "error")
+                    state.update_goal(goal_id, goal_status, feedback=feedback)
+                    return
+        except Exception as exc:
+            goal = state.get_goal(goal_id)
+            if goal is not None and goal["status"] == "running":
+                state.update_goal(
+                    goal_id,
+                    "error",
+                    feedback=[{"passed": False, "detail": f"goal controller error: {type(exc).__name__}"}],
+                )
+        finally:
+            state.close()
+            with self._lock:
+                self._goals.pop(goal_id, None)
 
     def _register_provider(self, control: _RunControl, provider: Any) -> None:
         with self._lock:

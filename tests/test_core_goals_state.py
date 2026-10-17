@@ -11,6 +11,16 @@ def test_goal_lifecycle_persists_checks_feedback_and_budget_group(tmp_path):
     goal_id = state.create_goal(session_id, "write a result", checks, max_iterations=2)
     run_id = state.create_run(session_id, budget_group_id=goal_id)
     state.link_goal_run(goal_id, run_id)
+    call_id = state.create_provider_call(run_id, "test-model", "agent")
+    state.record_usage(call_id, {
+        "source": "actual", "input_tokens": 10, "output_tokens": 5, "cost_usd": "0.01",
+    })
+    second_run = state.create_run(session_id, budget_group_id=goal_id, agent_name="test-model")
+    state.link_goal_run(goal_id, second_run)
+    compression_id = state.create_provider_call(second_run, "test-model", "context_compression")
+    state.record_usage(compression_id, {
+        "source": "actual", "input_tokens": 4, "output_tokens": 2, "cost_usd": "0.02",
+    })
     state.update_goal(goal_id, "running", iteration=1, feedback=[{"passed": False}])
     state.close()
 
@@ -21,8 +31,12 @@ def test_goal_lifecycle_persists_checks_feedback_and_budget_group(tmp_path):
     assert goal["status"] == "running"
     assert goal["iteration"] == 1
     assert goal["feedback"] == [{"passed": False}]
-    assert goal["runs"] == [run_id]
-    assert reopened.get_run(run_id)["budget_group_id"] == goal_id
+    assert goal["runs"] == [run_id, second_run]
+    first_run = reopened.get_run(run_id)
+    assert first_run is not None and first_run["budget_group_id"] == goal_id
+    budget = reopened.usage_summary_for_budget(second_run)
+    assert budget["provider_calls"] == 2
+    assert str(budget["cost_usd"]) == "0.03"
     reopened.update_goal(goal_id, "completed", iteration=1, feedback=[{"passed": True}])
     assert reopened.get_goal(goal_id)["status"] == "completed"
     reopened.close()

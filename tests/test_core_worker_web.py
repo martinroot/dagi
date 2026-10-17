@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from threading import Thread
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -85,7 +86,9 @@ def test_authenticated_worker_list_and_proxy_keep_peer_tokens_server_side(tmp_pa
         assert "hub-private-token" not in listing_text
         assert "alpha-private-token" not in repr(hub.workers)
 
-        for name, _app, _base, worker_token in workers:
+        for name, worker_app, worker_base, worker_token in workers:
+            worker_app.config.workspace.mkdir(parents=True, exist_ok=True)
+            (worker_app.config.workspace / "ready.txt").write_text("ready", encoding="utf-8")
             status, health = _request(
                 hub_base, f"/api/workers/{name}/proxy/api/health", token="hub-private-token"
             )
@@ -98,8 +101,25 @@ def test_authenticated_worker_list_and_proxy_keep_peer_tokens_server_side(tmp_pa
                 token="hub-private-token",
             )
             assert status == 200 and isinstance(receipt["session_id"], int)
-            assert _request(_base, "/api/health")[0] == 401
-            assert _request(_base, "/api/health", token=worker_token)[0] == 200
+            status, goal = _request(
+                hub_base,
+                f"/api/workers/{name}/proxy/api/sessions/{receipt['session_id']}/goals",
+                method="POST",
+                payload={
+                    "objective": "check ready file",
+                    "checks": [{"type": "file_exists", "path": "ready.txt"}],
+                    "max_iterations": 1,
+                },
+                token="hub-private-token",
+            )
+            assert status == 200 and "goal_id" in goal
+            status, detail = _request(
+                hub_base, f"/api/workers/{name}/proxy/api/goals/{goal['goal_id']}",
+                token="hub-private-token",
+            )
+            assert status == 200 and detail["goal"]["status"] in {"running", "completed"}
+            assert _request(worker_base, "/api/health")[0] == 401
+            assert _request(worker_base, "/api/health", token=worker_token)[0] == 200
 
         status, error = _request(
             hub_base,
