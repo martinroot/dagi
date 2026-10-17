@@ -89,6 +89,53 @@ def test_agent_returns_tool_error_without_skipping_follow_up(tmp_path: Path):
     state.close()
 
 
+def test_malformed_builtin_arguments_are_recoverable_and_do_not_block_later_turns(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "known.txt").write_text("verified input", encoding="utf-8")
+    tools = ToolRegistry(workspace, state, session)
+    provider = FakeProvider([
+        [
+            StreamEvent(kind="tool_call", tool_call={
+                "id": "bad-path", "name": "read_file", "arguments": {},
+            }),
+            StreamEvent(kind="finish", finish_reason="tool_calls"),
+        ],
+        [
+            StreamEvent(kind="tool_call", tool_call={
+                "id": "good-path", "name": "read_file", "arguments": {"path": "known.txt"},
+            }),
+            StreamEvent(kind="finish", finish_reason="tool_calls"),
+        ],
+        [StreamEvent(kind="text", text="The corrected read succeeded."), StreamEvent(kind="finish", finish_reason="stop")],
+        [StreamEvent(kind="text", text="The next user turn also works."), StreamEvent(kind="finish", finish_reason="stop")],
+    ])
+    agent = Agent(provider, tools, state, session)
+
+    first_turn = list(agent.run_turn("read the file"))
+
+    bad_result = next(event for event in first_turn if event.kind == "tool_result" and event.tool_call_id == "bad-path")
+    assert bad_result.outcome == "failed"
+    assert "missing required argument 'path'" in bad_result.text
+    assert state.get_tool_call("bad-path")["status"] == "failed"
+    assert len(provider.requests) == 3
+    assert any(
+        message.get("role") == "tool" and "missing required argument 'path'" in message.get("content", "")
+        for message in provider.requests[1]
+    )
+    assert first_turn[-1].status == "completed"
+
+    second_turn = list(agent.run_turn("a follow-up user message"))
+
+    assert second_turn[-1].status == "completed"
+    assert len(provider.requests) == 4
+    assert any(message["role"] == "user" and message["content"] == "a follow-up user message" for message in state.messages(session))
+    assert state.get_tool_call("good-path")["status"] == "succeeded"
+    state.close()
+
+
 def test_tool_result_event_exposes_explicit_uncertain_outcome(tmp_path):
     state = StateStore(tmp_path / "state.sqlite3")
     session = state.create_session()

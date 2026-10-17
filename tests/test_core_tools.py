@@ -23,6 +23,20 @@ def test_workspace_file_tools_roundtrip(tmp_path):
     state.close()
 
 
+def test_builtin_arguments_reject_missing_and_wrong_typed_values_before_side_effects(tmp_path):
+    state, tools = make_tools(tmp_path)
+
+    with pytest.raises(ToolError, match="missing required argument 'path'"):
+        tools.call("read_file", {})
+    with pytest.raises(ToolError, match="argument 'path' must be string"):
+        tools.call("read_file", {"path": None})
+    with pytest.raises(ToolError, match="argument 'content' must be string"):
+        tools.call("write_file", {"path": "must-not-exist.txt", "content": 7})
+
+    assert not (tools.workspace / "must-not-exist.txt").exists()
+    state.close()
+
+
 def test_read_file_returns_structured_path_size_line_count_and_truncation(tmp_path):
     state, tools = make_tools(tmp_path)
     path = tools.workspace / "notes" / "a.txt"

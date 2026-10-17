@@ -84,6 +84,43 @@ def _truncate(text: str) -> str:
     return text[:MAX_OUTPUT_CHARS] + f"\n...[truncated {len(text) - MAX_OUTPUT_CHARS} chars]"
 
 
+def _validate_builtin_arguments(parameters: dict[str, Any], arguments: dict[str, Any]) -> None:
+    """Validate built-in tool arguments against the supported JSON Schema subset."""
+    required = parameters.get("required", [])
+    properties = parameters.get("properties", {})
+    for name in required:
+        if name not in arguments:
+            raise ToolError(f"missing required argument '{name}'")
+
+    def validate_value(name: str, value: Any, schema: dict[str, Any]) -> None:
+        expected = schema.get("type")
+        if expected is None:
+            return
+        matches = {
+            "string": lambda item: isinstance(item, str),
+            "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+            "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool),
+            "boolean": lambda item: isinstance(item, bool),
+            "object": lambda item: isinstance(item, dict),
+            "array": lambda item: isinstance(item, list),
+            "null": lambda item: item is None,
+        }
+        predicate = matches.get(expected)
+        if predicate is not None and not predicate(value):
+            raise ToolError(f"argument '{name}' must be {expected}")
+        if expected == "array" and isinstance(value, list):
+            item_schema = schema.get("items")
+            if isinstance(item_schema, dict):
+                for index, item in enumerate(value):
+                    validate_value(f"{name}[{index}]", item, item_schema)
+
+    if isinstance(properties, dict):
+        for name, value in arguments.items():
+            schema = properties.get(name)
+            if isinstance(schema, dict):
+                validate_value(name, value, schema)
+
+
 @dataclass(frozen=True)
 class Tool:
     name: str
@@ -125,6 +162,7 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
         self._execution_context: ToolExecutionContext | None = None
         self._register_builtins(shell_enabled)
+        self._builtin_tool_names = frozenset(self._tools)
 
     def register(self, tool: Tool) -> None:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tool.name):
@@ -147,6 +185,8 @@ class ToolRegistry:
             raise ToolError(f"unknown tool: {name!r}")
         if not isinstance(arguments, dict):
             raise ToolError("tool arguments must be a JSON object")
+        if name in self._builtin_tool_names:
+            _validate_builtin_arguments(tool.parameters, arguments)
         if tool.context_aware:
             if self._execution_context is None:
                 raise ToolError(f"tool {name!r} requires an agent execution context")
