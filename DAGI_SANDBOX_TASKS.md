@@ -5,8 +5,8 @@ This is the single repository-level status map for the sandbox roadmap and cross
 - Umbrella: [#16 — sandbox UI integration](https://github.com/martinroot/dagi/issues/16) (open until all remaining acceptance criteria are complete).
 - Integration umbrella: [#20 — incremental 0.3.0 integration](https://github.com/martinroot/dagi/issues/20).
 - Current branch: `main`.
-- Verified code checkpoint: `3929cdc239441dba6651e549bfc1d77a9004f0d6`; remote `main` matched before this roadmap-only update.
-- Verification at this checkpoint: `pytest -q` — **159 passed**; Node UI — **21 passed**; `bash -n` and `git diff --check` passed; `uv build` produced wheel and sdist, including `dagi_core/runtime_context.py`, `dagi_core/workspace.py`, and both static assets.
+- Verified code checkpoint: `de659717dcc69f17146d226328029d2a95fca307`; remote `main` matched before this roadmap-only update.
+- Verification at this checkpoint: `pytest -q` — **160 passed**; Node UI — **21 passed**; `bash -n` and `git diff --check` passed; `uv build` produced wheel and sdist, including `dagi_core/runtime_context.py`, `dagi_core/workspace.py`, and both static assets.
 - Deployment boundary: no service restart or live `DAGI_HOME` migration has been performed. Backend changes are not claimed as active in the running service; #15 backup/restore rehearsal remains required before any live schema migration.
 
 ## Ten implementation iterations
@@ -59,8 +59,8 @@ Full proposal: [`DAGI_SELF_AWARENESS_MVP.md`](DAGI_SELF_AWARENESS_MVP.md). This 
 
 | ID | Status | GitHub issue | Dependencies / order |
 |---|---|---|---|
-| SELF-01 — bounded runtime identity, capability, and task-position context | In progress | [#38 open](https://github.com/martinroot/dagi/issues/38) | `dd718d9` adds bounded per-request context; `1ba992e` adds allowlisted `inspect_runtime`; `3929cdc` verifies resumed CLI child identity/workspace/current-limit refresh. Full pytest 159, Node UI 21, build passed. Structured delegation purpose/output/check references remain; no live model smoke was run |
-| SELF-02 — tool semantics and persisted outcomes visible to the acting model | Pending | [#39 open](https://github.com/martinroot/dagi/issues/39) | After/alongside SELF-01 request-context work; depends on recoverable malformed arguments (#23) |
+| SELF-01 — bounded runtime identity, capability, and task-position context | In progress | [#38 open](https://github.com/martinroot/dagi/issues/38) | `dd718d9` bounded per-request context; `1ba992e` allowlisted `inspect_runtime`; `de65971` persists optional delegation purpose/output/check IDs in the child prompt and restores them after resume. Full pytest 160, Node UI 21, build passed. No live model smoke was run |
+| SELF-02 — tool semantics and persisted outcomes visible to the acting model | Pending | [#39 open](https://github.com/martinroot/dagi/issues/39) | Runtime context and recoverable malformed arguments (#23) are in place; tool outcome/capability envelope remains to implement |
 | SELF-03 — bounded corrective reflection and scoped evidence-backed lessons | Pending | [#40 open](https://github.com/martinroot/dagi/issues/40) | After SELF-01/02 and correct owning-workspace checks (#35) |
 
 Execution order from the proposal: prerequisites #34, #35, and #23 are closed. Next implement SELF-01, followed by SELF-02 and SELF-03 as separate, test-backed slices. Keep every observed runtime fact distinct from task-supplied text and model hypotheses.
