@@ -422,7 +422,73 @@ async function api(path, options = {}) {
   return value;
 }
 
+function runtimeStatusText(value) {
+  if (value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) return "Unknown";
+  if (Array.isArray(value)) return value.map((item) => typeof item === "object" ? JSON.stringify(item) : String(item)).join(", ");
+  if (typeof value === "object") return JSON.stringify(value, null, 2);
+  return String(value);
+}
+
+function renderRuntimeStatus(status) {
+  const root = $("runtime-status");
+  root.replaceChildren();
+  const lessons = Array.isArray(status?.lessons) ? status.lessons.map((item) => {
+    const scope = `${item.check_type || "check"}:${item.check_key || "Unknown"}`;
+    const evidence = Array.isArray(item.evidence_ids) ? item.evidence_ids.join(", ") : "Unknown";
+    const support = item.support_count === undefined ? "Unknown" : item.support_count;
+    return `${item.status || "Unknown"} · ${scope} — ${item.lesson || "Unknown"} (support ${support}; evidence ${evidence})`;
+  }).join("\n") : null;
+  const fields = [
+    ["Role", status?.role],
+    ["Agent", status?.agent],
+    ["Assigned task", status?.assignment],
+    ["Purpose", status?.purpose],
+    ["Required output", status?.required_output],
+    ["Acceptance checks", status?.acceptance_check_ids],
+    ["Workspace", status?.workspace],
+    ["Phase", status?.phase],
+    ["Last evidence", status?.last_evidence],
+    ["Blocker", status?.blocker],
+    ["Next observed action", status?.next_action],
+    ["Recovery guidance", status?.recovery_guidance],
+    ["Tool outcome", status?.tool_outcome],
+    ["Acceptance check", status?.check_result],
+    ["Goal status", status?.goal_status],
+    ["Latest reflection", status?.latest_reflection],
+    ["Lessons", lessons],
+  ];
+  for (const [label, value] of fields) {
+    const row = document.createElement("div");
+    row.className = "runtime-status-row";
+    row.dataset.field = label;
+    const name = document.createElement("strong");
+    name.textContent = label;
+    const content = document.createElement("span");
+    content.textContent = runtimeStatusText(value);
+    row.append(name, content);
+    root.append(row);
+  }
+}
+
+async function refreshRuntimeStatus() {
+  const sessionId = selectedSession;
+  if (sessionId === null) return;
+  try {
+    if (selectedRunId) {
+      const runId = selectedRunId;
+      const detail = await api(`/api/runs/${encodeURIComponent(runId)}`);
+      if (sessionId === selectedSession && runId === selectedRunId) renderRuntimeStatus(detail.runtime_status);
+      return;
+    }
+    const snapshot = await api(`/api/sessions/${sessionId}`);
+    if (sessionId === selectedSession) renderRuntimeStatus(snapshot.runtime_status);
+  } catch (error) {
+    if (sessionId === selectedSession) $("runtime-status").textContent = `Refresh failed: ${error}`;
+  }
+}
+
 function resetRunInspector() {
+  renderRuntimeStatus(null);
   $("run-status").textContent = "Select a saved run or start one.";
   $("requests").textContent = "[]";
   $("tools").textContent = "[]";
@@ -609,6 +675,7 @@ async function selectSession(sessionId) {
   const data = await api(`/api/sessions/${sessionId}`);
   if (!isCurrentSession(sessionId, generation)) return;
   applySessionSnapshot(sessionId, data);
+  renderRuntimeStatus(data.runtime_status);
   $("session-title").textContent = `${data.session.title || "Untitled session"} · #${sessionId}`;
   $("chat").replaceChildren();
   for (const message of data.messages) {
@@ -711,6 +778,7 @@ async function inspectRun(runId, generation = sessionGeneration, sessionId = sel
   selectedRunId = runId;
   const detail = await api(`/api/runs/${encodeURIComponent(runId)}`);
   if (!isCurrentSession(sessionId, generation) || inspection !== inspectionGeneration) return;
+  renderRuntimeStatus(detail.runtime_status);
   $("run-status").textContent = `Run ${runId}: ${detail.run.status}${detail.run.error ? ` · ${detail.run.error}` : ""}`;
   $("requests").textContent = JSON.stringify(detail.requests, null, 2);
   $("tools").textContent = JSON.stringify(detail.tool_calls, null, 2);
@@ -759,6 +827,8 @@ $("chat-form").onsubmit = async (event) => {
     if (isCurrentSession(sessionId, generation)) addChatLine("error", String(error), "Request error");
   }
 };
+
+$("refresh-runtime").onclick = refreshRuntimeStatus;
 
 $("stop-run").onclick = async () => {
   if (!activeRunId) return;

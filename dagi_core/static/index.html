@@ -56,6 +56,11 @@
     #children button { text-align: left; overflow-wrap: anywhere; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 9px; background: #171d27; border-radius: 5px; max-height: 30vh; overflow: auto; font-size: 12px; }
     .muted { color: #96a2b6; font-size: 12px; }
+    .runtime-status { display: grid; gap: 3px; }
+    .runtime-status-row { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 8px; padding: 4px 0; border-bottom: 1px solid #30394a; font-size: 12px; }
+    .runtime-status-row strong { color: #96a2b6; font-weight: 600; }
+    .runtime-status-row span { white-space: pre-wrap; overflow-wrap: anywhere; }
+    #refresh-runtime { padding: 4px 8px; margin: 2px 0 6px; }
     @media (max-width: 900px) { main { grid-template-columns: 180px minmax(250px, 1fr); } .inspector { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #30394a; } }
     @media (max-width: 600px) { main { grid-template-columns: 1fr; } nav { max-height: 180px; border-right: 0; border-bottom: 1px solid #30394a; } }
   </style>
@@ -90,6 +95,7 @@
         <details open><summary>Tool calls and errors</summary><pre id="tools">[]</pre></details>
         <details open><summary>Run usage and cost</summary><pre id="usage">{}</pre></details>
         <details open><summary>Shared tree budget</summary><pre id="budget-usage">{}</pre></details>
+        <details open><summary>Runtime and reflection</summary><button id="refresh-runtime" type="button">Refresh</button><div id="runtime-status" class="runtime-status" aria-live="polite"></div></details>
         <details open><summary>Parent and child runs</summary><div id="children" class="run-list"></div></details>
       </aside>
     </main>

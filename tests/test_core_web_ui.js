@@ -747,3 +747,67 @@ test("session restore drains every event page before opening SSE", async () => {
   assert.match(elements.get("chat").children[0].children[1].textContent, /end$/);
   assert.match(sources.at(-1).url, /after=501$/);
 });
+
+test("runtime status card shows bounded persisted facts and safe unknowns", () => {
+  const {context, elements} = makeUi(async () => jsonResponse({}));
+  context.renderRuntimeStatus({
+    role: "child",
+    agent: "test-model",
+    assignment: "Validate JSON",
+    purpose: "Parent needs valid data",
+    required_output: "One-sentence answer",
+    acceptance_check_ids: ["parent-check-1"],
+    phase: "verification",
+    last_evidence: ["run:r1", "tool:t1"],
+    blocker: "Same action repeated",
+    next_action: "Use a different write",
+    latest_reflection: {trigger: "acceptance_check_failed", observed: {passed: false}},
+    tool_outcome: {tool_name: "write_file", status: "succeeded"},
+    check_result: {observed_passed: false, followup_passed: true},
+    goal_status: "running",
+    lessons: [{status: "candidate", lesson: "<img src=x onerror=alert(1)>", evidence_ids: ["tool:t1"]}],
+  });
+  const card = elements.get("runtime-status");
+  const rows = new Map(card.children.map((row) => [row.dataset.field, row.children[1].textContent]));
+  assert.equal(rows.get("Role"), "child");
+  assert.equal(rows.get("Assigned task"), "Validate JSON");
+  assert.equal(rows.get("Required output"), "One-sentence answer");
+  assert.equal(rows.get("Acceptance checks"), "parent-check-1");
+  assert.equal(rows.get("Phase"), "verification");
+  assert.match(rows.get("Last evidence"), /run:r1/);
+  assert.match(rows.get("Latest reflection"), /acceptance_check_failed/);
+  assert.equal(rows.get("Next observed action"), "Use a different write");
+  assert.equal(rows.get("Recovery guidance"), "Unknown");
+  assert.match(rows.get("Tool outcome"), /succeeded/);
+  assert.match(rows.get("Acceptance check"), /followup_passed/);
+  assert.equal(rows.get("Goal status"), "running");
+  assert.notEqual(rows.get("Goal status"), "completed");
+  assert.match(rows.get("Lessons"), /<img src=x onerror=alert\(1\)>/);
+  assert.equal(card.children.find((row) => row.dataset.field === "Lessons").children[1].innerHTML, undefined);
+
+  context.renderRuntimeStatus(null);
+  const unknownRows = new Map(elements.get("runtime-status").children.map((row) => [row.dataset.field, row.children[1].textContent]));
+  assert.equal(unknownRows.get("Role"), "Unknown");
+  assert.equal(unknownRows.get("Blocker"), "Unknown");
+});
+
+test("runtime card refresh performs only a read-only current-session request", async () => {
+  const calls = [];
+  const snapshot = {
+    session: {id: 7, title: "read-only"},
+    messages: [], runs: [], tool_calls: [], event_cursors: {},
+    runtime_status: {role: "root", phase: "provider_request", last_evidence: [], lessons: []},
+  };
+  const {context, elements} = makeUi(async (url, options = {}) => {
+    calls.push({url, method: options.method || "GET"});
+    return jsonResponse(url === "/api/sessions/7" ? snapshot : {});
+  });
+  await context.selectSession(7);
+  await elements.get("refresh-runtime").onclick();
+  const reads = calls.filter((call) => call.url === "/api/sessions/7");
+  assert.equal(reads.length, 2);
+  assert.ok(calls.every((call) => call.method === "GET"));
+  assert.ok(calls.every((call) => !call.url.includes("/api/runs/") && !call.url.includes("/api/tools")));
+  const rows = new Map(elements.get("runtime-status").children.map((row) => [row.dataset.field, row.children[1].textContent]));
+  assert.equal(rows.get("Role"), "root");
+});
