@@ -465,6 +465,46 @@ test("skill use and creation render structured metadata with safe procedure text
   assert.ok(cards[1].children[3].textContent.includes("Review PRs"));
 });
 
+test("command presentation exposes exit state and warns that host privileges are not sandboxed", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "approved command"},
+      runs: [{run_id: "run-command", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-command": 0},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({lastEventId: "1", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-command", tool_call_id: "cmd-1",
+    tool_name: "run_bash", tool_args: {command: "printf 'hello'; exit 7"},
+  })});
+  source.onmessage({lastEventId: "2", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-command", tool_call_id: "cmd-1",
+    tool_name: "run_bash", text: "exit_code=7\\nhello", is_error: false, outcome: "succeeded",
+    presentation: {
+      type: "command", summary: "Exited with code 7",
+      artifacts: [{exit_code: 7, timed_out: false}],
+      diagnostics: {
+        duration_ms: 12, output_truncated: false, command_truncated: false,
+        operator_approved: true, execution_boundary: "service-user host permissions; not an OS sandbox",
+      },
+    },
+  })});
+  const card = elements.get("chat").children[0];
+  assert.equal(card.dataset.renderer, "command");
+  assert.ok(card.children[0].textContent.includes("Approved shell command"));
+  assert.ok(card.children[3].textContent.includes("Exited with code 7"));
+  assert.ok(card.children[4].children[1].textContent.includes("operator approved"));
+  assert.ok(card.children[4].children[1].textContent.includes("not an OS sandbox"));
+  assert.ok(card.children[4].children[3].textContent.includes("hello"));
+});
+
 test("saved messages keep their persisted message identity in the UI model", async () => {
   const fetchImpl = async (url) => {
     if (url === "/api/auth/session") return jsonResponse({authenticated: true});

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -409,21 +410,42 @@ class ToolRegistry:
             },
         )
 
-    def _run_bash(self, args: dict[str, Any]) -> str:
+    def _run_bash(self, args: dict[str, Any]) -> ToolResult:
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             raise ToolError("command must be non-empty text")
         if self.approve_shell is None or not self.approve_shell(command):
             raise ToolError("shell command declined")
+        started = time.monotonic()
         try:
             completed = subprocess.run(
                 command, shell=True, cwd=self.workspace, text=True,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 timeout=SHELL_TIMEOUT_SECONDS, check=False,
             )
+            exit_code = completed.returncode
+            timed_out = False
+            output = f"exit_code={exit_code}\n{completed.stdout or ''}"
         except subprocess.TimeoutExpired as exc:
-            return _truncate(f"[timeout after {SHELL_TIMEOUT_SECONDS}s]\n{exc.stdout or ''}")
-        return _truncate(f"exit_code={completed.returncode}\n{completed.stdout or ''}")
+            exit_code = None
+            timed_out = True
+            output = f"[timeout after {SHELL_TIMEOUT_SECONDS}s]\n{exc.stdout or ''}"
+        duration_ms = max(0, int((time.monotonic() - started) * 1000))
+        return ToolResult(
+            _truncate(output),
+            presentation={
+                "type": "command",
+                "summary": f"Timed out after {SHELL_TIMEOUT_SECONDS}s" if timed_out else f"Exited with code {exit_code}",
+                "artifacts": [{"exit_code": exit_code, "timed_out": timed_out}],
+                "diagnostics": {
+                    "duration_ms": duration_ms,
+                    "output_truncated": len(output) > MAX_OUTPUT_CHARS,
+                    "command_truncated": len(command) > 1_000,
+                    "operator_approved": True,
+                    "execution_boundary": "service-user host permissions; not an OS sandbox",
+                },
+            },
+        )
 
     @staticmethod
     def arguments_for_call(raw: str) -> dict[str, Any]:

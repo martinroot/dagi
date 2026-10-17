@@ -199,6 +199,23 @@ def test_list_skills_bounds_structured_metadata_for_large_catalog(tmp_path):
     state.close()
 
 
+def test_approved_shell_command_returns_structured_execution_metadata(tmp_path):
+    state, tools = make_tools(tmp_path, shell=True, approve=lambda _command: True)
+
+    result = tools.call("run_bash", {"command": "printf 'hello'; exit 7"})
+
+    assert result.content == "exit_code=7\nhello"
+    assert result.presentation is not None
+    assert result.presentation["type"] == "command"
+    assert result.presentation["summary"] == "Exited with code 7"
+    assert result.presentation["artifacts"] == [{"exit_code": 7, "timed_out": False}]
+    assert result.presentation["diagnostics"]["output_truncated"] is False
+    assert result.presentation["diagnostics"]["operator_approved"] is True
+    assert result.presentation["diagnostics"]["execution_boundary"] == "service-user host permissions; not an OS sandbox"
+    assert isinstance(result.presentation["diagnostics"]["duration_ms"], int)
+    state.close()
+
+
 def test_file_tools_reject_paths_outside_workspace(tmp_path):
     state, tools = make_tools(tmp_path)
     outside = tmp_path / "outside.txt"

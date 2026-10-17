@@ -193,6 +193,20 @@ function renderDirectoryPresentation(presentation) {
   };
 }
 
+function renderCommandPresentation(presentation, resultText) {
+  const diagnostics = presentation.diagnostics || {};
+  const duration = Number.isFinite(diagnostics.duration_ms) ? ` · ${diagnostics.duration_ms} ms` : "";
+  const output = diagnostics.output_truncated === true ? " · output truncated" : "";
+  const command = diagnostics.command_truncated === true ? " · command preview truncated" : "";
+  return {
+    icon: "⌨️",
+    title: "Approved shell command",
+    summary: presentation.summary || "Command result unavailable",
+    resultText: resultText || "(no command output)",
+    metadata: `operator approved · ${diagnostics.execution_boundary || "host permissions apply"}${duration}${output}${command}`,
+  };
+}
+
 function renderSkillPresentation(presentation, resultText) {
   const skill = Array.isArray(presentation.artifacts) ? presentation.artifacts[0] || {} : {};
   const created = presentation.type === "skill_created";
@@ -248,6 +262,7 @@ function renderMemoryPresentation(presentation) {
 const toolPresentationRenderers = new Map([
   ["file", renderFilePresentation],
   ["directory", renderDirectoryPresentation],
+  ["command", renderCommandPresentation],
   ["memory", renderMemoryPresentation],
   ["skills", renderSkillsPresentation],
   ["skill", renderSkillPresentation],
