@@ -1,6 +1,6 @@
 # Dagi Sandbox — Canonical Task Map
 
-This is the single repository-level status map for the sandbox roadmap supplied by Martin. Every new requirement or defect must be captured in a GitHub issue before implementation; update this file and the corresponding issue after each verified slice. Keep issue text in English. Close an item only after its acceptance checks pass and the issue's remote closed state is read back.
+This is the single repository-level status map for the sandbox roadmap and cross-cutting runtime-awareness proposal supplied by Martin. Every new requirement or defect must be captured in a GitHub issue before implementation; update this file and the corresponding issue after each verified slice. Keep issue text in English. Close an item only after its acceptance checks pass and the issue's remote closed state is read back.
 
 - Umbrella: [#16 — sandbox UI integration](https://github.com/martinroot/dagi/issues/16) (open until all remaining acceptance criteria are complete).
 - Integration umbrella: [#20 — incremental 0.3.0 integration](https://github.com/martinroot/dagi/issues/20).
@@ -52,6 +52,18 @@ This is the single repository-level status map for the sandbox roadmap supplied 
 ## Future layer
 
 - Visual-world debugger as a read-only renderer over persisted entities/events: [#36 open](https://github.com/martinroot/dagi/issues/36). Do not start a game engine before the event model, tool cards, artifacts, and agent tree are stable.
+
+## Runtime awareness proposal (SELF)
+
+Full proposal: [`DAGI_SELF_AWARENESS_MVP.md`](DAGI_SELF_AWARENESS_MVP.md). This is bounded operational knowledge of identity, task, tools, evidence, limits, and corrective action; it makes no claim of subjective consciousness.
+
+| ID | Status | GitHub issue | Dependencies / order |
+|---|---|---|---|
+| SELF-01 — bounded runtime identity, capability, and task-position context | Pending | [#38 open](https://github.com/martinroot/dagi/issues/38) | First resolve session workspace and goal-owner checks (#34/#35); preserve runtime lease (#22) |
+| SELF-02 — tool semantics and persisted outcomes visible to the acting model | Pending | [#39 open](https://github.com/martinroot/dagi/issues/39) | After/alongside SELF-01 request-context work; depends on recoverable malformed arguments (#23) |
+| SELF-03 — bounded corrective reflection and scoped evidence-backed lessons | Pending | [#40 open](https://github.com/martinroot/dagi/issues/40) | After SELF-01/02 and correct owning-workspace checks (#35) |
+
+Execution order from the proposal: close prerequisites #34, #35, and #23 first; then implement SELF-01, SELF-02, and SELF-03 as separate, test-backed slices. Keep every observed runtime fact distinct from task-supplied text and model hypotheses.
 
 ## Current SB-03 sequence
 
