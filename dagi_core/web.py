@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -33,6 +34,30 @@ from .goals import validate_checks, verify
 from .worker import load_workers
 
 ProviderFactory = Callable[[str, str, str], Any]
+_REFLECTION_VOLATILE_KEYS = {"timestamp", "created_at", "updated_at", "request_id", "event_id", "nonce"}
+
+
+def _normalize_reflection_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _normalize_reflection_value(item)
+            for key, item in sorted(value.items())
+            if str(key).lower() not in _REFLECTION_VOLATILE_KEYS
+        }
+    if isinstance(value, list):
+        return [_normalize_reflection_value(item) for item in value]
+    return value
+
+
+def _reflection_fingerprint(value: Any) -> str:
+    serialized = json.dumps(
+        _normalize_reflection_value(value),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -626,6 +651,11 @@ class WebApp:
                     [call for call in state.list_tool_calls(goal["session_id"]) if call["run_id"] == latest_run_id]
                     if latest_run_id else []
                 )
+                action_fingerprint = _reflection_fingerprint([
+                    {"name": call["name"], "arguments": call["arguments"]}
+                    for call in latest_calls
+                ])
+                stop_for_repeated_failure = False
                 for check_index, item in enumerate(feedback):
                     if item["passed"]:
                         continue
@@ -652,14 +682,23 @@ class WebApp:
                     if latest_run_id:
                         evidence_ids.append(latest_run_id)
                         evidence_ids.extend(call["tool_call_id"] for call in latest_calls[:10])
-                    state.record_goal_reflection(
+                    observed = {"passed": False, "detail": observed_detail}
+                    reflection = state.record_goal_reflection(
                         goal_id=goal_id,
                         iteration=goal["iteration"],
                         check_index=check_index,
                         expected=expected,
-                        observed={"passed": False, "detail": observed_detail},
+                        observed=observed,
                         evidence_ids=evidence_ids[:12],
+                        failure_fingerprint=_reflection_fingerprint({
+                            "check_index": check_index, "expected": expected, "observed": observed,
+                        }),
+                        action_fingerprint=action_fingerprint,
                     )
+                    stop_for_repeated_failure = stop_for_repeated_failure or bool(reflection["blocker"])
+                if stop_for_repeated_failure:
+                    state.update_goal(goal_id, "capped", feedback=feedback)
+                    return
                 if goal["iteration"] >= goal["max_iterations"]:
                     state.update_goal(goal_id, "capped", feedback=feedback)
                     return

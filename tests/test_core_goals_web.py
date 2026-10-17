@@ -159,9 +159,11 @@ def test_failed_goal_check_is_recorded_and_drives_corrective_tool_action(tmp_pat
         assert reflections[0]["cause_hypothesis"] is None
         assert reflections[0]["next_change"] is None
         assert reflections[0]["following_check_passed"] is False
+        assert reflections[0]["repeat_count"] == 0
         assert completed["runs"][0] in reflections[1]["evidence_ids"]
         assert "reflection-invalid-write" in reflections[1]["evidence_ids"]
         assert reflections[1]["observed"]["passed"] is False
+        assert reflections[1]["repeat_count"] == 0
         assert reflections[1]["following_check_passed"] is True
         state = StateStore(config.database)
         invalid_call = state.get_tool_call("reflection-invalid-write")
@@ -170,6 +172,51 @@ def test_failed_goal_check_is_recorded_and_drives_corrective_tool_action(tmp_pat
         assert valid_call is not None and valid_call["status"] == "succeeded"
         state.close()
         assert json.loads((config.workspace / "result.json").read_text(encoding="utf-8")) == {"ok": True}
+    finally:
+        app.close()
+
+
+class RepeatingInvalidJsonProvider:
+    model = "test-model"
+
+    def __init__(self):
+        self.requests = []
+        self.calls = 0
+
+    def stream(self, messages, _tools):
+        self.requests.append(deepcopy(messages))
+        self.calls += 1
+        if self.calls % 2 == 1:
+            yield StreamEvent(kind="tool_call", tool_call={
+                "id": f"repeat-invalid-{self.calls}",
+                "name": "write_file",
+                "arguments": {"path": "result.json", "content": json.dumps({"ok": True}).replace("true", "")},
+            })
+            yield StreamEvent(kind="finish", finish_reason="tool_calls")
+            return
+        yield StreamEvent(kind="text", text="The requested action was attempted.")
+        yield StreamEvent(kind="finish", finish_reason="stop")
+
+
+def test_equivalent_failed_check_and_unchanged_action_stop_before_goal_budget(tmp_path):
+    config = replace(_config(tmp_path), usage_policy=UsagePolicy(max_calls_per_run=100))
+    provider = RepeatingInvalidJsonProvider()
+    app = WebApp(config, lambda *_args: provider)
+    session_id = _create_session(config)
+    try:
+        goal = app.start_goal(session_id, {
+            "objective": "create valid JSON",
+            "checks": [{"type": "json_valid", "path": "result.json"}],
+            "max_iterations": 10,
+        })
+        capped = _wait_goal_terminal(config, goal["goal_id"])
+
+        assert capped["status"] == "capped", (capped["status"], capped["iteration"], len(provider.requests))
+        assert capped["iteration"] == 3
+        assert len(provider.requests) == 6
+        last_reflection = capped["reflections"][-1]
+        assert last_reflection["repeat_count"] == 2
+        assert "unchanged" in last_reflection["blocker"]
     finally:
         app.close()
 

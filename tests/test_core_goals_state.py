@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 from dagi_core.state import StateStore
@@ -57,6 +58,8 @@ def test_goal_reflection_is_idempotent_and_records_the_following_check(tmp_path)
         "expected": {"type": "json_valid", "path": "result.json"},
         "observed": observation,
         "evidence_ids": ["goal-check:goal-1:0:0"],
+        "failure_fingerprint": "f" * 64,
+        "action_fingerprint": "a" * 64,
     }
 
     first = state.record_goal_reflection(**kwargs)
@@ -73,6 +76,60 @@ def test_goal_reflection_is_idempotent_and_records_the_following_check(tmp_path)
     assert reflections[0]["next_change"] is None
     assert reflections[0]["following_check_passed"] is True
     reopened.close()
+
+
+def test_goal_reflection_schema_upgrade_preserves_existing_record(tmp_path):
+    path = tmp_path / "state.sqlite3"
+    state = StateStore(path)
+    session_id = state.create_session("legacy-reflection")
+    goal_id = state.create_goal(
+        session_id, "create valid JSON", [{"type": "json_valid", "path": "result.json"}], 2
+    )
+    state.close()
+
+    db = sqlite3.connect(path)
+    db.execute("DROP INDEX IF EXISTS goal_reflections_goal_iteration")
+    db.execute("DROP TABLE goal_reflections")
+    db.executescript("""
+        CREATE TABLE goal_reflections (
+            reflection_id TEXT PRIMARY KEY,
+            goal_id TEXT NOT NULL REFERENCES goals(goal_id) ON DELETE CASCADE,
+            iteration INTEGER NOT NULL,
+            check_index INTEGER NOT NULL,
+            trigger TEXT NOT NULL,
+            expected_json TEXT NOT NULL,
+            observed_json TEXT NOT NULL,
+            evidence_ids_json TEXT NOT NULL,
+            cause_hypothesis TEXT,
+            next_change TEXT,
+            following_check_passed INTEGER,
+            created_at TEXT NOT NULL,
+            UNIQUE(goal_id, iteration, check_index)
+        );
+    """)
+    db.execute(
+        """INSERT INTO goal_reflections(
+               reflection_id, goal_id, iteration, check_index, trigger, expected_json,
+               observed_json, evidence_ids_json, created_at
+           ) VALUES(?, ?, 0, 0, 'acceptance_check_failed', ?, ?, ?, '2026-01-01T00:00:00+00:00')""",
+        (
+            "legacy-reflection-id", goal_id,
+            json.dumps({"type": "json_valid", "path": "result.json"}),
+            json.dumps({"passed": False, "detail": "file is absent"}),
+            json.dumps(["goal-check:legacy:0:0"]),
+        ),
+    )
+    db.commit()
+    db.close()
+
+    upgraded = StateStore(path)
+    reflection = upgraded.list_goal_reflections(goal_id)[0]
+    assert reflection["id"] == "legacy-reflection-id"
+    assert reflection["observed"]["detail"] == "file is absent"
+    assert reflection["failure_fingerprint"] == ""
+    assert reflection["action_fingerprint"] == ""
+    assert reflection["repeat_count"] == 0
+    upgraded.close()
 
 
 def test_startup_recovery_marks_running_goals_interrupted(tmp_path):

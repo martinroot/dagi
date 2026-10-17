@@ -149,6 +149,10 @@ CREATE TABLE IF NOT EXISTS goal_reflections (
     expected_json TEXT NOT NULL,
     observed_json TEXT NOT NULL,
     evidence_ids_json TEXT NOT NULL,
+    failure_fingerprint TEXT NOT NULL,
+    action_fingerprint TEXT NOT NULL,
+    repeat_count INTEGER NOT NULL DEFAULT 0 CHECK (repeat_count >= 0),
+    blocker TEXT,
     cause_hypothesis TEXT,
     next_change TEXT,
     following_check_passed INTEGER CHECK (following_check_passed IN (0, 1)),
@@ -217,6 +221,16 @@ class StateStore:
             self._db.execute("ALTER TABLE tool_executions ADD COLUMN has_verifier INTEGER NOT NULL DEFAULT 0")
         if "presentation_json" not in tool_columns:
             self._db.execute("ALTER TABLE tool_executions ADD COLUMN presentation_json TEXT")
+        reflection_columns = {row[1] for row in self._db.execute("PRAGMA table_info(goal_reflections)")}
+        reflection_migrations = {
+            "failure_fingerprint": "TEXT NOT NULL DEFAULT ''",
+            "action_fingerprint": "TEXT NOT NULL DEFAULT ''",
+            "repeat_count": "INTEGER NOT NULL DEFAULT 0",
+            "blocker": "TEXT",
+        }
+        for name, declaration in reflection_migrations.items():
+            if name not in reflection_columns:
+                self._db.execute(f"ALTER TABLE goal_reflections ADD COLUMN {name} {declaration}")
         self._db.commit()
         if os.name == "posix":
             os.chmod(self.path, 0o600)
@@ -1052,6 +1066,8 @@ class StateStore:
         expected: dict[str, Any],
         observed: dict[str, Any],
         evidence_ids: list[str],
+        failure_fingerprint: str,
+        action_fingerprint: str,
     ) -> dict[str, Any]:
         goal = self.get_goal(goal_id)
         if goal is None:
@@ -1070,19 +1086,40 @@ class StateStore:
                 raise ValueError("reflection evidence IDs must be non-empty text of at most 256 characters")
             if evidence_id not in unique_ids:
                 unique_ids.append(evidence_id)
+        for fingerprint in (failure_fingerprint, action_fingerprint):
+            if not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
+                raise ValueError("reflection fingerprints must be lowercase SHA-256 hex")
         expected_json = json.dumps(expected, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         observed_json = json.dumps(observed, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         if len(expected_json) > 4096 or len(observed_json) > 2048:
             raise ValueError("reflection observation exceeds its size limit")
+        previous = self._db.execute(
+            """SELECT failure_fingerprint, action_fingerprint, repeat_count
+               FROM goal_reflections WHERE goal_id=? AND check_index=? AND iteration<?
+               ORDER BY iteration DESC LIMIT 1""",
+            (goal_id, check_index, iteration),
+        ).fetchone()
+        repeat_count = 0
+        if previous and (
+            previous["failure_fingerprint"] == failure_fingerprint
+            and previous["action_fingerprint"] == action_fingerprint
+        ):
+            repeat_count = int(previous["repeat_count"]) + 1
+        blocker = (
+            "same normalized failure and tool action repeated twice unchanged; stopping to avoid budget drain"
+            if repeat_count >= 2 else None
+        )
         reflection_id = str(uuid.uuid4())
         self._db.execute(
             """INSERT INTO goal_reflections(
                    reflection_id, goal_id, iteration, check_index, trigger, expected_json,
-                   observed_json, evidence_ids_json, created_at
-               ) VALUES(?, ?, ?, ?, 'acceptance_check_failed', ?, ?, ?, ?)
+                   observed_json, evidence_ids_json, failure_fingerprint, action_fingerprint,
+                   repeat_count, blocker, created_at
+               ) VALUES(?, ?, ?, ?, 'acceptance_check_failed', ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(goal_id, iteration, check_index) DO NOTHING""",
             (reflection_id, goal_id, iteration, check_index, expected_json, observed_json,
-             json.dumps(unique_ids, ensure_ascii=False), _now()),
+             json.dumps(unique_ids, ensure_ascii=False), failure_fingerprint, action_fingerprint,
+             repeat_count, blocker, _now()),
         )
         self._db.commit()
         saved = self._db.execute(
