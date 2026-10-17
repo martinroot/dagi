@@ -1,3 +1,6 @@
+import os
+import signal
+import subprocess
 import sys
 from pathlib import Path
 import threading
@@ -30,13 +33,37 @@ def test_execution_requires_argv_and_never_uses_shell(tmp_path):
         execute(["/usr/bin/printf", ""], tmp_path)
 
 
-def test_execution_timeout_kills_process_group_and_caps_output(tmp_path):
+def test_execution_timeout_kills_process_group_and_caps_output(tmp_path, monkeypatch):
     child_pid_file = tmp_path / "child.pid"
     child_code = (
         "import subprocess,sys,time,pathlib; "
         "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
         "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(30)"
     )
+    original_popen = subprocess.Popen
+
+    def wait_until_child_is_ready(*args, **kwargs):
+        process = original_popen(*args, **kwargs)
+        ready_deadline = time.monotonic() + 5
+        while time.monotonic() < ready_deadline:
+            try:
+                int(child_pid_file.read_text(encoding="ascii"))
+                return process
+            except (FileNotFoundError, ValueError):
+                if process.poll() is not None:
+                    raise AssertionError("command exited before publishing child PID")
+                time.sleep(0.01)
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        else:
+            process.kill()
+        process.wait()
+        raise AssertionError("command did not publish child PID before readiness deadline")
+
+    monkeypatch.setattr(subprocess, "Popen", wait_until_child_is_ready)
     result = execute([sys.executable, "-c", child_code, str(child_pid_file)], tmp_path, timeout=0.2)
     assert result["reason"] == "timeout" and not result["passed"]
     child_pid = int(child_pid_file.read_text())
