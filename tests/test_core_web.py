@@ -504,3 +504,27 @@ def test_run_event_json_pages_stop_at_snapshot_cursor(tmp_path):
         assert second["has_more"] is False
     finally:
         _stop(server, thread)
+
+
+def test_web_run_uses_the_session_workspace(tmp_path):
+    providers = []
+    app = WebApp(_config(tmp_path), provider_factory=lambda *_args: ToolThenAnswerProvider(providers))
+    server, thread, base = _start(app)
+    try:
+        _, _, created = _request(f"{base}/api/sessions", "POST", {"title": "child workspace"})
+        session_id = json.loads(created)["session_id"]
+        state = StateStore(app.config.database)
+        state.set_session_workspace(session_id, ".dagi-children/web-child")
+        state.close()
+
+        _, _, started = _request(
+            f"{base}/api/sessions/{session_id}/runs", "POST", {"message": "create a child file"}
+        )
+        run_id = json.loads(started)["run_id"]
+        _wait_for_status(base, run_id, "completed")
+
+        child_workspace = tmp_path / "workspace" / ".dagi-children" / "web-child"
+        assert (child_workspace / "web.txt").read_text(encoding="utf-8") == "created from web"
+        assert not (tmp_path / "workspace" / "web.txt").exists()
+    finally:
+        _stop(server, thread)

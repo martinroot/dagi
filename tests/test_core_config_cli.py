@@ -209,3 +209,54 @@ def test_cli_can_resume_an_existing_session(tmp_path, monkeypatch, capsys):
     assert [item[1] for item in selected][2] == saved_session
     assert [item[1] for item in selected][1] != saved_session
     assert f"Resumed session {saved_session}" in capsys.readouterr().out
+
+
+def test_cli_resume_uses_saved_session_workspace(tmp_path, monkeypatch, capsys):
+    import dagi_core.cli as cli
+    from dagi_core.provider import StreamEvent
+    from dagi_core.state import StateStore
+
+    home = tmp_path / "home"
+    seed = StateStore(home / "state.sqlite3")
+    saved_session = seed.create_session("saved")
+    seed.set_session_workspace(saved_session, ".dagi-children/cli-child")
+    seed.close()
+
+    monkeypatch.setenv("DAGI_API_KEY", "placeholder-for-test")
+    monkeypatch.setenv("DAGI_HOME", str(home))
+    monkeypatch.setenv("DAGI_WORKSPACE", str(tmp_path / "workspace"))
+    inputs = iter([f"/resume {saved_session}", "create a file", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
+
+    class ToolProvider:
+        model = "main-model"
+
+        def __init__(self):
+            self.calls = 0
+
+        def stream(self, _messages, _tools):
+            self.calls += 1
+            if self.calls == 1:
+                return iter([
+                    StreamEvent(kind="tool_call", tool_call={
+                        "id": "cli-workspace-call", "name": "write_file",
+                        "arguments": {"path": "from-cli.txt", "content": "session scoped"},
+                    }),
+                    StreamEvent(kind="usage", usage={"input_tokens": 10, "output_tokens": 2}),
+                    StreamEvent(kind="finish", finish_reason="tool_calls"),
+                ])
+            return iter([
+                StreamEvent(kind="text", text="Saved in this session."),
+                StreamEvent(kind="usage", usage={"input_tokens": 8, "output_tokens": 3}),
+                StreamEvent(kind="finish", finish_reason="stop"),
+            ])
+
+    provider = ToolProvider()
+    monkeypatch.setattr(cli, "OpenAICompatibleProvider", lambda *_args: provider)
+
+    cli.run()
+
+    child_workspace = tmp_path / "workspace" / ".dagi-children" / "cli-child"
+    assert (child_workspace / "from-cli.txt").read_text(encoding="utf-8") == "session scoped"
+    assert not (tmp_path / "workspace" / "from-cli.txt").exists()
+    assert "Saved in this session." in capsys.readouterr().out

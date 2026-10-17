@@ -11,6 +11,7 @@ from .delegation import DelegationManager
 from .provider import OpenAICompatibleProvider
 from .state import StateStore
 from .tools import ToolRegistry
+from .workspace import resolve_session_workspace
 
 HELP = """Commands:
   /help                 show commands
@@ -37,8 +38,12 @@ def approve_shell_command(command: str) -> bool:
 
 def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
     def tools_for(active_session_id: int) -> ToolRegistry:
+        session = state.get_session(active_session_id)
+        if session is None:
+            raise ValueError("session not found")
+        workspace = resolve_session_workspace(config.workspace, session["workspace"])
         tools = ToolRegistry(
-            config.workspace,
+            workspace,
             state,
             active_session_id,
             shell_enabled=config.enable_shell,

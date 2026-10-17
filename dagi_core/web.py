@@ -27,6 +27,7 @@ from .provider import OpenAICompatibleProvider
 from .runtime import RuntimeLease
 from .state import StateStore
 from .tools import ToolRegistry, _resolve
+from .workspace import resolve_session_workspace
 from .goals import validate_checks, verify
 from .worker import load_workers
 
@@ -694,7 +695,11 @@ class WebApp:
                     cancel = getattr(active_provider, "cancel", None)
                     if callable(cancel):
                         cancel()
-            tools = ToolRegistry(self.config.workspace, state, session_id, shell_enabled=False)
+            session = state.get_session(session_id)
+            if session is None:
+                raise ValueError("session not found")
+            workspace = resolve_session_workspace(self.config.workspace, session["workspace"])
+            tools = ToolRegistry(workspace, state, session_id, shell_enabled=False)
             delegation = DelegationManager(
                 state,
                 self.config.workspace,
