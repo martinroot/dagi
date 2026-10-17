@@ -119,6 +119,24 @@ CREATE TABLE IF NOT EXISTS skills (
     use_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS goals (
+    goal_id TEXT PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    objective TEXT NOT NULL,
+    checks_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'capped', 'interrupted', 'error', 'limit')),
+    iteration INTEGER NOT NULL DEFAULT 0 CHECK (iteration >= 0),
+    max_iterations INTEGER NOT NULL CHECK (max_iterations BETWEEN 1 AND 10),
+    feedback_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS goals_session_id ON goals(session_id, created_at);
+CREATE TABLE IF NOT EXISTS goal_runs (
+    goal_id TEXT NOT NULL REFERENCES goals(goal_id) ON DELETE CASCADE,
+    run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS goal_runs_goal_id ON goal_runs(goal_id);
 """
 
 
@@ -184,12 +202,15 @@ class StateStore:
         agent_id: str = "dagi",
         parent_run_id: str | None = None,
         depth: int | None = None,
+        budget_group_id: str | None = None,
         agent_name: str = "dagi",
     ) -> str:
         run_id = str(uuid.uuid4())
+        if budget_group_id is not None and (not isinstance(budget_group_id, str) or not budget_group_id.strip()):
+            raise ValueError("budget_group_id must be non-empty text")
         if parent_run_id is None:
             actual_depth = 0 if depth is None else depth
-            budget_group_id = run_id
+            actual_group = budget_group_id or run_id
         else:
             parent = self.get_run(parent_run_id)
             if parent is None:
@@ -198,13 +219,16 @@ class StateStore:
             if depth is not None and depth != expected_depth:
                 raise ValueError("child run depth must be exactly parent depth plus one")
             actual_depth = expected_depth
-            budget_group_id = parent["budget_group_id"] or parent_run_id
+            inherited_group = parent["budget_group_id"] or parent_run_id
+            if budget_group_id is not None and budget_group_id != inherited_group:
+                raise ValueError("child run must inherit its parent's budget group")
+            actual_group = inherited_group
         if actual_depth < 0:
             raise ValueError("run depth must not be negative")
         self._db.execute(
             """INSERT INTO runs(run_id, session_id, agent_id, parent_run_id, depth, budget_group_id, agent_name, status, started_at)
                VALUES(?, ?, ?, ?, ?, ?, ?, 'running', ?)""",
-            (run_id, session_id, agent_id, parent_run_id, actual_depth, budget_group_id, agent_name, _now()),
+            (run_id, session_id, agent_id, parent_run_id, actual_depth, actual_group, agent_name, _now()),
         )
         self._db.commit()
         return run_id
@@ -703,6 +727,94 @@ class StateStore:
             item["triggers"] = json.loads(item["triggers"])
             result.append(item)
         return result
+
+    def create_goal(self, session_id: int, objective: str, checks: list, max_iterations: int) -> str:
+        if self.get_session(session_id) is None:
+            raise ValueError("session not found")
+        if not isinstance(objective, str) or not objective.strip() or len(objective) > 8_000:
+            raise ValueError("goal objective must be non-empty text of at most 8000 characters")
+        if not isinstance(checks, list) or not 1 <= len(checks) <= 20:
+            raise ValueError("a goal requires 1..20 acceptance checks")
+        if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or not 1 <= max_iterations <= 10:
+            raise ValueError("max_iterations must be 1..10")
+        goal_id = str(uuid.uuid4())
+        now = _now()
+        self._db.execute(
+            """INSERT INTO goals(goal_id, session_id, objective, checks_json, status,
+                      iteration, max_iterations, feedback_json, created_at, updated_at)
+               VALUES(?, ?, ?, ?, 'running', 0, ?, '[]', ?, ?)""",
+            (goal_id, session_id, objective.strip(), json.dumps(checks, ensure_ascii=False),
+             max_iterations, now, now),
+        )
+        self._db.commit()
+        return goal_id
+
+    def get_goal(self, goal_id: str) -> dict[str, Any] | None:
+        row = self._db.execute("SELECT * FROM goals WHERE goal_id=?", (goal_id,)).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["checks"] = json.loads(result.pop("checks_json"))
+        result["feedback"] = json.loads(result.pop("feedback_json"))
+        result["runs"] = [item[0] for item in self._db.execute(
+            "SELECT run_id FROM goal_runs WHERE goal_id=? ORDER BY rowid", (goal_id,)
+        ).fetchall()]
+        return result
+
+    def list_goals(self, session_id: int) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            "SELECT goal_id FROM goals WHERE session_id=? ORDER BY created_at DESC, rowid DESC",
+            (session_id,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            goal = self.get_goal(row[0])
+            if goal is not None:
+                result.append(goal)
+        return result
+
+    def update_goal(
+        self,
+        goal_id: str,
+        status: str,
+        *,
+        iteration: int | None = None,
+        feedback: list | None = None,
+    ) -> None:
+        if status not in {"running", "completed", "capped", "interrupted", "error", "limit"}:
+            raise ValueError("invalid goal status")
+        goal = self.get_goal(goal_id)
+        if goal is None:
+            raise ValueError("goal not found")
+        next_iteration = goal["iteration"] if iteration is None else iteration
+        if isinstance(next_iteration, bool) or not isinstance(next_iteration, int) or not 0 <= next_iteration <= goal["max_iterations"]:
+            raise ValueError("goal iteration is out of range")
+        next_feedback = goal["feedback"] if feedback is None else feedback
+        if not isinstance(next_feedback, list):
+            raise ValueError("goal feedback must be a list")
+        self._db.execute(
+            "UPDATE goals SET status=?, iteration=?, feedback_json=?, updated_at=? WHERE goal_id=?",
+            (status, next_iteration, json.dumps(next_feedback, ensure_ascii=False), _now(), goal_id),
+        )
+        self._db.commit()
+
+    def link_goal_run(self, goal_id: str, run_id: str) -> None:
+        goal = self.get_goal(goal_id)
+        run = self.get_run(run_id)
+        if goal is None or run is None:
+            raise ValueError("goal and run must exist before linking")
+        if goal["session_id"] != run["session_id"]:
+            raise ValueError("goal run must belong to the goal session")
+        self._db.execute("INSERT INTO goal_runs(goal_id, run_id) VALUES(?, ?)", (goal_id, run_id))
+        self._db.commit()
+
+    def recover_goals(self) -> int:
+        cursor = self._db.execute(
+            "UPDATE goals SET status='interrupted', updated_at=? WHERE status='running'",
+            (_now(),),
+        )
+        self._db.commit()
+        return cursor.rowcount
 
     def record_skill_use(self, name: str) -> bool:
         cursor = self._db.execute(
