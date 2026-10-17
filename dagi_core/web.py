@@ -24,6 +24,7 @@ from .config import Config, load_config
 from .context import ContextBuilder
 from .delegation import DelegationManager
 from .provider import OpenAICompatibleProvider
+from .runtime import RuntimeLease
 from .state import StateStore
 from .tools import ToolRegistry
 from .worker import load_workers
@@ -56,7 +57,9 @@ class WebApp:
         self.provider_factory = provider_factory or OpenAICompatibleProvider
         self.agent_id = str(uuid4())
         self._runs: dict[str, _RunControl] = {}
+        self._goals: dict[str, _RunControl] = {}
         self._lock = Lock()
+        self._lease: RuntimeLease | None = None
         self._session_secret = secrets.token_bytes(32)
         self._revoked_sessions: dict[str, int] = {}
         self._failed_logins: dict[str, tuple[int, float]] = {}
@@ -120,7 +123,43 @@ class WebApp:
         with self._lock:
             self._revoked_sessions[token] = int(time.time()) + 43_200
 
+    @staticmethod
+    def _cancel_control(control: _RunControl) -> None:
+        control.cancellation.set()
+        for provider in tuple(control.providers):
+            cancel = getattr(provider, "cancel", None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:
+                    pass
+
+    def close(self) -> None:
+        with self._lock:
+            controls = list({id(item): item for item in [*self._runs.values(), *self._goals.values()]}.values())
+        for control in controls:
+            self._cancel_control(control)
+        for control in controls:
+            if control.thread is not None:
+                control.thread.join(timeout=3)
+        if all(control.thread is None or not control.thread.is_alive() for control in controls):
+            if self._lease is not None:
+                self._lease.close()
+                self._lease = None
+
     def create_server(self, host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
+        if self._lease is not None:
+            raise ValueError("this WebApp already owns a runtime lease")
+        lease = RuntimeLease(self.config.home)
+        self._lease = lease
+        try:
+            with _StateContext(StateStore(self.config.database)) as state:
+                state.recover_interrupted()
+                state.recover_goals()
+        except BaseException:
+            lease.close()
+            self._lease = None
+            raise
         app = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -418,9 +457,18 @@ class WebApp:
                             pass
                 self._send_json(202, {"run_id": run_id, "status": "cancelling"})
 
-        server = ThreadingHTTPServer((host, port), Handler)
-        server.daemon_threads = True
-        return server
+        class OwnedServer(ThreadingHTTPServer):
+            daemon_threads = True
+
+            def server_close(self) -> None:
+                app.close()
+                super().server_close()
+
+        try:
+            return OwnedServer((host, port), Handler)
+        except BaseException:
+            app.close()
+            raise
 
     def _register_provider(self, control: _RunControl, provider: Any) -> None:
         with self._lock:
