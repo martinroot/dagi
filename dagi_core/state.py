@@ -310,13 +310,28 @@ class StateStore:
         return int(cursor.lastrowid)
 
     def list_run_events(
-        self, run_id: str, *, after_id: int = 0, limit: int = 1000
+        self,
+        run_id: str,
+        *,
+        after_id: int = 0,
+        through_id: int | None = None,
+        limit: int = 1000,
     ) -> list[dict[str, Any]]:
-        rows = self._db.execute(
-            """SELECT id, run_id, session_id, event_json, created_at FROM run_events
-               WHERE run_id=? AND id>? ORDER BY id LIMIT ?""",
-            (run_id, max(0, int(after_id)), max(1, min(int(limit), 5000))),
-        ).fetchall()
+        after = max(0, int(after_id))
+        page_limit = max(1, min(int(limit), 5000))
+        if through_id is None:
+            rows = self._db.execute(
+                """SELECT id, run_id, session_id, event_json, created_at FROM run_events
+                   WHERE run_id=? AND id>? ORDER BY id LIMIT ?""",
+                (run_id, after, page_limit),
+            ).fetchall()
+        else:
+            through = max(0, int(through_id))
+            rows = self._db.execute(
+                """SELECT id, run_id, session_id, event_json, created_at FROM run_events
+                   WHERE run_id=? AND id>? AND id<=? ORDER BY id LIMIT ?""",
+                (run_id, after, through, page_limit),
+            ).fetchall()
         return [
             {
                 "id": row["id"], "run_id": row["run_id"], "session_id": row["session_id"],
@@ -714,11 +729,14 @@ class StateStore:
             runs = self.list_runs(session_id, 100)
             event_cursors: dict[str, int] = {}
             for run in runs:
-                row = self._db.execute(
-                    "SELECT COALESCE(MAX(id), 0) AS cursor FROM run_events WHERE run_id=?",
+                rows = self._db.execute(
+                    "SELECT id, event_json FROM run_events WHERE run_id=? ORDER BY id DESC LIMIT 2",
                     (run["run_id"],),
-                ).fetchone()
-                event_cursors[run["run_id"]] = int(row["cursor"])
+                ).fetchall()
+                cursor = int(rows[0]["id"]) if rows else 0
+                if run["status"] == "running" and rows and json.loads(rows[0]["event_json"]).get("kind") == "done":
+                    cursor = int(rows[1]["id"]) if len(rows) > 1 else 0
+                event_cursors[run["run_id"]] = cursor
             snapshot = {
                 "session": session,
                 "runs": runs,

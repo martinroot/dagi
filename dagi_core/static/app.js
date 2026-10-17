@@ -306,8 +306,46 @@ async function selectSession(sessionId) {
   }
   renderRuns(data.runs);
   const running = data.runs.find((run) => run.status === "running");
-  if (running) connectRun(running.run_id, 0, sessionId, generation);
-  else if (data.runs.length) inspectRun(data.runs[0].run_id, generation, sessionId);
+  if (running) {
+    await restoreRunEvents(
+      running.run_id, data.event_cursors?.[running.run_id] ?? 0, sessionId, generation,
+    );
+  } else if (data.runs.length) inspectRun(data.runs[0].run_id, generation, sessionId);
+}
+
+async function restoreRunEvents(runId, cursor, sessionId, generation) {
+  if (!isCurrentSession(sessionId, generation)) return;
+  activeRunId = runId;
+  selectedRunId = runId;
+  $("stop-run").disabled = false;
+  let through = String(cursor ?? 0);
+  if (!/^\d+$/.test(through)) through = "0";
+  let after = "0";
+  try {
+    while (BigInt(after) < BigInt(through)) {
+      const page = await api(
+        `/api/runs/${encodeURIComponent(runId)}/events?format=json&after=${after}&through=${through}&limit=500`,
+      );
+      if (!isCurrentSession(sessionId, generation) || activeRunId !== runId) return;
+      for (const row of page.events || []) {
+        addEvent(row.event, {sessionId, generation, runId, eventId: String(row.id), replay: true});
+      }
+      const nextAfter = String(page.next_after ?? after);
+      if (BigInt(nextAfter) <= BigInt(after)) throw new Error("event replay cursor did not advance");
+      after = nextAfter;
+      if (!page.has_more) {
+        after = through;
+        break;
+      }
+    }
+  } catch (error) {
+    if (isCurrentSession(sessionId, generation) && activeRunId === runId) {
+      $("run-status").textContent = `Snapshot replay incomplete; catching up from event ${after}: ${error}`;
+    }
+  }
+  if (isCurrentSession(sessionId, generation) && activeRunId === runId) {
+    connectRun(runId, after, sessionId, generation);
+  }
 }
 
 function connectRun(runId, afterId = 0, sessionId = selectedSession, generation = sessionGeneration) {

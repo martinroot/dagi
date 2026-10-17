@@ -254,3 +254,28 @@ test("replaying persisted active-run tool events does not duplicate snapshot con
   assert.equal(transcript.split("read_file").length - 1, 1);
   assert.equal(transcript.split("file contents").length - 1, 1);
 });
+
+test("session restore replays the snapshot events before opening SSE after its cursor", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "active"},
+      runs: [{run_id: "run-active", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-active": 37},
+    });
+    if (url === "/api/runs/run-active/events?format=json&after=0&through=37&limit=500") return jsonResponse({
+      run_id: "run-active", through: 37, has_more: false, next_after: 37,
+      events: [{
+        id: 37, run_id: "run-active", session_id: 1,
+        event: {kind: "text", session_id: 1, run_id: "run-active", text: "restored output"},
+      }],
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  assert.match(elements.get("chat").children.map((item) => item.children[1].textContent).join("\n"), /restored output/);
+  assert.match(sources.at(-1).url, /after=37$/);
+});

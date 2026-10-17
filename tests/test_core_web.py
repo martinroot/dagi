@@ -422,3 +422,51 @@ def test_session_detail_snapshot_includes_message_ids_tool_state_and_event_curso
         assert call["status"] == "running"
     finally:
         _stop(server, thread)
+
+
+def test_running_snapshot_cursor_does_not_skip_uncommitted_terminal_event(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session_id = state.create_session("terminal race")
+    run_id = state.create_run(session_id)
+    before_terminal = state.append_run_event(session_id, run_id, {
+        "kind": "text", "session_id": session_id, "run_id": run_id, "text": "work",
+    })
+    uncommitted_terminal = state.append_run_event(session_id, run_id, {
+        "kind": "done", "session_id": session_id, "run_id": run_id, "status": "completed",
+    })
+    snapshot = state.session_snapshot(session_id)
+    assert snapshot is not None
+    assert snapshot["event_cursors"][run_id] == before_terminal
+    assert snapshot["event_cursors"][run_id] < uncommitted_terminal
+    state.close()
+
+
+def test_run_event_json_pages_stop_at_snapshot_cursor(tmp_path):
+    app = WebApp(_config(tmp_path), provider_factory=lambda *_args: SlowProvider())
+    server, thread, base = _start(app)
+    try:
+        _, _, created = _request(f"{base}/api/sessions", "POST", {"title": "event page test"})
+        session_id = json.loads(created)["session_id"]
+        state = StateStore(app.config.database)
+        run_id = state.create_run(session_id)
+        first_id = state.append_run_event(session_id, run_id, {"kind": "text", "session_id": session_id, "run_id": run_id, "text": "first"})
+        cursor = state.append_run_event(session_id, run_id, {"kind": "text", "session_id": session_id, "run_id": run_id, "text": "second"})
+        state.append_run_event(session_id, run_id, {"kind": "text", "session_id": session_id, "run_id": run_id, "text": "after snapshot"})
+        state.finish_run(run_id, "completed")
+        state.close()
+
+        _, content_type, body = _request(
+            f"{base}/api/runs/{run_id}/events?format=json&after=0&through={cursor}&limit=1"
+        )
+        assert "application/json" in content_type
+        first = json.loads(body)
+        assert [row["id"] for row in first["events"]] == [first_id]
+        assert first["has_more"] is True
+        _, _, body = _request(
+            f"{base}/api/runs/{run_id}/events?format=json&after={first['next_after']}&through={cursor}&limit=1"
+        )
+        second = json.loads(body)
+        assert [row["event"]["text"] for row in second["events"]] == ["second"]
+        assert second["has_more"] is False
+    finally:
+        _stop(server, thread)

@@ -246,7 +246,10 @@ class WebApp:
                                 return
                             self._send_json(200, {"goal": goal})
                     elif match := re.fullmatch(r"/api/runs/([^/]+)/events", path):
-                        self._stream_events(match.group(1), parsed.query)
+                        if parse_qs(parsed.query).get("format") == ["json"]:
+                            self._event_page(match.group(1), parsed.query)
+                        else:
+                            self._stream_events(match.group(1), parsed.query)
                     elif match := re.fullmatch(r"/api/runs/([^/]+)", path):
                         self._run_detail(match.group(1))
                     else:
@@ -390,6 +393,31 @@ class WebApp:
                         "children": state.list_child_runs(run_id),
                         "messages": state.message_records(run["session_id"]),
                         "event_count": len(state.list_run_events(run_id, limit=5000)),
+                    })
+
+            def _event_page(self, run_id: str, query: str) -> None:
+                params = parse_qs(query)
+                if "through" not in params:
+                    raise ValueError("a through cursor is required for event paging")
+                after = int(params.get("after", ["0"])[0])
+                through = int(params["through"][0])
+                limit = int(params.get("limit", ["500"])[0])
+                if after < 0 or through < 0 or not 1 <= limit <= 1000:
+                    raise ValueError("event cursors must be non-negative and page size must be 1..1000")
+                with _StateContext(self._state()) as state:
+                    if state.get_run(run_id) is None:
+                        self._send_json(404, {"error": "run not found"})
+                        return
+                    rows = state.list_run_events(
+                        run_id, after_id=after, through_id=through, limit=limit + 1
+                    )
+                    events = rows[:limit]
+                    self._send_json(200, {
+                        "run_id": run_id,
+                        "through": through,
+                        "events": events,
+                        "has_more": len(rows) > limit,
+                        "next_after": events[-1]["id"] if events else after,
                     })
 
             def _stream_events(self, run_id: str, query: str) -> None:
