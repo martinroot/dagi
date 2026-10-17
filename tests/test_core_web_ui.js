@@ -268,6 +268,54 @@ test("file presentation renders path, size, truncation, and numbered text", asyn
   assert.ok(card.children[4].children[3].textContent.includes("2 | beta"));
 });
 
+test("file update renderer shows bounded diffs and explains when capture is skipped", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "file changes"},
+      runs: [{run_id: "run-diffs", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-diffs": 0},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({lastEventId: "1", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-diffs", tool_call_id: "write-1",
+    tool_name: "write_file", tool_args: {path: "notes/release.md"},
+  })});
+  source.onmessage({lastEventId: "2", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-diffs", tool_call_id: "write-1",
+    tool_name: "write_file", text: "saved notes/release.md (11 chars)", is_error: false, outcome: "succeeded",
+    presentation: {
+      type: "file", summary: "Updated notes/release.md",
+      artifacts: [{path: "notes/release.md", operation: "update", diff: "--- a/notes/release.md\\n+++ b/notes/release.md\\n@@ -1 +1 @@\\n-old\\n+new\\n"}],
+      diagnostics: {size_bytes: 4, created: false, diff_available: true, diff_truncated: false},
+    },
+  })});
+  source.onmessage({lastEventId: "3", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-diffs", tool_call_id: "write-2",
+    tool_name: "write_file", tool_args: {path: "large.txt"},
+  })});
+  source.onmessage({lastEventId: "4", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-diffs", tool_call_id: "write-2",
+    tool_name: "write_file", text: "saved large.txt (11 chars)", is_error: false, outcome: "succeeded",
+    presentation: {
+      type: "file", summary: "Updated large.txt",
+      artifacts: [{path: "large.txt", operation: "update"}],
+      diagnostics: {size_bytes: 11, created: false, diff_available: false, diff_truncated: false, diff_reason: "previous file exceeds 4096 bytes"},
+    },
+  })});
+  const cards = elements.get("chat").children;
+  assert.ok(cards[0].children[4].children[3].textContent.includes("-old"));
+  assert.ok(cards[0].children[4].children[3].textContent.includes("+new"));
+  assert.ok(cards[1].children[3].textContent.includes("previous file exceeds 4096 bytes"));
+  assert.ok(cards[1].children[4].children[3].textContent.includes("saved large.txt"));
+});
+
 test("a registered custom presentation renderer is used without changing chat plumbing", async () => {
   const fetchImpl = async (url) => {
     if (url === "/api/auth/session") return jsonResponse({authenticated: true});

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 import subprocess
@@ -15,6 +16,8 @@ from .state import StateStore
 
 MAX_OUTPUT_CHARS = 8_000
 MAX_FILE_BYTES = 250_000
+MAX_FILE_DIFF_SOURCE_BYTES = 4_096
+MAX_FILE_DIFF_BYTES = 8_000
 MAX_PRESENTATION_BYTES = 16_000
 SHELL_TIMEOUT_SECONDS = 30
 
@@ -263,6 +266,43 @@ class ToolRegistry:
         except Exception:
             return None
 
+    def _bounded_file_diff(self, path: Path, relative: str, content: str) -> tuple[str | None, str | None, bool]:
+        if len(relative.encode("utf-8")) > 512:
+            return None, "path exceeds 512 bytes for diff metadata", False
+        if not path.exists():
+            return None, "new file", False
+        if not path.is_file():
+            return None, "previous path is not a regular file", False
+        try:
+            if path.stat().st_size > MAX_FILE_DIFF_SOURCE_BYTES:
+                return None, f"previous file exceeds {MAX_FILE_DIFF_SOURCE_BYTES} bytes", False
+            with path.open("rb") as stream:
+                previous = stream.read(MAX_FILE_DIFF_SOURCE_BYTES + 1)
+        except OSError:
+            return None, "previous file could not be read", False
+        if len(previous) > MAX_FILE_DIFF_SOURCE_BYTES:
+            return None, f"previous file exceeds {MAX_FILE_DIFF_SOURCE_BYTES} bytes", False
+        current = content.encode("utf-8")
+        if len(current) > MAX_FILE_DIFF_SOURCE_BYTES:
+            return None, f"new file exceeds {MAX_FILE_DIFF_SOURCE_BYTES} bytes", False
+        try:
+            previous_text = previous.decode("utf-8")
+        except UnicodeDecodeError:
+            return None, "previous file is not UTF-8 text", False
+        diff = "".join(difflib.unified_diff(
+            previous_text.splitlines(keepends=True),
+            content.splitlines(keepends=True),
+            fromfile=f"a/{relative}",
+            tofile=f"b/{relative}",
+        ))
+        encoded = diff.encode("utf-8")
+        if len(encoded) <= MAX_FILE_DIFF_BYTES:
+            return diff, None, False
+        marker = "\n[diff preview truncated]"
+        budget = MAX_FILE_DIFF_BYTES - len(marker.encode("utf-8"))
+        bounded = encoded[:budget].decode("utf-8", errors="ignore") + marker
+        return bounded, None, True
+
     def _write_file(self, args: dict[str, Any]) -> ToolResult:
         path = _resolve(self.workspace, str(args["path"]))
         content = args["content"]
@@ -272,17 +312,29 @@ class ToolRegistry:
         if size_bytes > MAX_FILE_BYTES:
             raise ToolError(f"file content exceeds {MAX_FILE_BYTES} bytes")
         existed = path.exists()
+        relative = path.relative_to(self.workspace).as_posix()
+        diff, diff_reason, diff_truncated = self._bounded_file_diff(path, relative, content)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        relative = path.relative_to(self.workspace).as_posix()
         operation = "update" if existed else "create"
+        artifact = {"path": relative, "operation": operation}
+        if diff is not None:
+            artifact["diff"] = diff
+        diagnostics = {
+            "size_bytes": size_bytes,
+            "created": not existed,
+            "diff_available": diff is not None,
+            "diff_truncated": diff_truncated,
+        }
+        if diff_reason:
+            diagnostics["diff_reason"] = diff_reason
         return ToolResult(
             f"saved {relative} ({len(content)} chars)",
             presentation={
                 "type": "file",
                 "summary": f"{'Updated' if existed else 'Created'} {relative}",
-                "artifacts": [{"path": relative, "operation": operation}],
-                "diagnostics": {"size_bytes": size_bytes, "created": not existed},
+                "artifacts": [artifact],
+                "diagnostics": diagnostics,
             },
         )
 

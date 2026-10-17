@@ -159,19 +159,28 @@ function renderFilePresentation(presentation, resultText) {
   const artifact = (presentation.artifacts || []).find((item) => item && typeof item.path === "string");
   const path = artifact?.path || "";
   const operation = artifact?.operation;
+  const diffAvailable = diagnostics.diff_available === true;
+  const diffReason = typeof diagnostics.diff_reason === "string" ? diagnostics.diff_reason : "not captured";
+  const diffText = typeof artifact?.diff === "string" ? artifact.diff : null;
   const summary = [
     presentation.summary,
     Number.isFinite(diagnostics.size_bytes) ? `${diagnostics.size_bytes} bytes` : "",
     Number.isFinite(diagnostics.line_count) ? `${diagnostics.line_count} lines` : "",
     diagnostics.truncated === true ? "preview truncated" : "",
+    operation === "update" && !diffAvailable ? `diff unavailable: ${diffReason}` : "",
+    operation === "update" && diagnostics.diff_truncated === true ? "diff preview truncated" : "",
   ].filter(Boolean).join(" · ");
+  const titleVerb = operation === "read" ? "Read" : operation === "create" ? "Created" : operation === "update" ? "Updated" : "File";
+  let presentationText = resultText;
+  if (operation === "read") presentationText = numberedLines(resultText);
+  else if (operation === "update" && diffAvailable) presentationText = diffText || "(no content changes)";
   return {
     icon: "📄",
-    title: path ? `${operation === "read" ? "Read" : "File"} · ${path}` : (presentation.summary || "File"),
+    title: path ? `${titleVerb} · ${path}` : (presentation.summary || "File"),
     summary,
-    resultText: operation === "read" ? numberedLines(resultText) : resultText,
+    resultText: presentationText,
     artifactPath: path,
-    metadata: path ? `artifact: ${path}` : "",
+    metadata: path ? `artifact: ${path}${operation === "update" && diffAvailable ? " · bounded textual diff" : ""}` : "",
   };
 }
 

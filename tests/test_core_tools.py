@@ -68,11 +68,44 @@ def test_write_file_reports_created_and_updated_artifact_metadata(tmp_path):
         "type": "file",
         "summary": "Created notes/a.txt",
         "artifacts": [{"path": "notes/a.txt", "operation": "create"}],
-        "diagnostics": {"size_bytes": 5, "created": True},
+        "diagnostics": {"size_bytes": 5, "created": True, "diff_available": False, "diff_truncated": False, "diff_reason": "new file"},
     }
     assert updated.presentation["summary"] == "Updated notes/a.txt"
     assert updated.presentation["artifacts"][0]["operation"] == "update"
     assert updated.presentation["diagnostics"]["created"] is False
+    state.close()
+
+
+def test_write_file_returns_bounded_unified_diff_for_small_text_update(tmp_path):
+    state, tools = make_tools(tmp_path)
+    target = tools.workspace / "notes" / "release.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+
+    result = tools.call("write_file", {"path": "notes/release.md", "content": "alpha\ngamma\n"})
+
+    assert result.presentation is not None
+    artifact = result.presentation["artifacts"][0]
+    assert artifact["operation"] == "update"
+    assert artifact["diff"].startswith("--- a/notes/release.md\n+++ b/notes/release.md\n")
+    assert "-beta\n" in artifact["diff"]
+    assert "+gamma\n" in artifact["diff"]
+    assert result.presentation["diagnostics"]["diff_available"] is True
+    assert result.presentation["diagnostics"]["diff_truncated"] is False
+    state.close()
+
+
+def test_write_file_skips_diff_when_prior_file_exceeds_source_limit(tmp_path):
+    state, tools = make_tools(tmp_path)
+    target = tools.workspace / "large.txt"
+    target.write_text("x" * 4_097, encoding="utf-8")
+
+    result = tools.call("write_file", {"path": "large.txt", "content": "replacement"})
+
+    assert result.presentation is not None
+    assert "diff" not in result.presentation["artifacts"][0]
+    assert result.presentation["diagnostics"]["diff_available"] is False
+    assert result.presentation["diagnostics"]["diff_reason"] == "previous file exceeds 4096 bytes"
     state.close()
 
 
