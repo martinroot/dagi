@@ -110,7 +110,7 @@ class ContextBuilder:
         provider = self.compression_provider
         if provider is None:
             raise ContextLimitError("history needs compression; configure a compression model")
-        reason = self.usage_policy.stop_reason(self.state.usage_summary(run_id))
+        reason = self.usage_policy.stop_reason(self.state.usage_summary_for_budget(run_id))
         if reason:
             raise ContextLimitError(reason)
 
@@ -173,7 +173,7 @@ class ContextBuilder:
 
         if finish_reason != "stop" or not text_parts:
             raise ContextLimitError("compression model did not return a complete summary")
-        reason = self.usage_policy.stop_reason(self.state.usage_summary(run_id))
+        reason = self.usage_policy.stop_reason(self.state.usage_summary_for_budget(run_id))
         if reason:
             raise ContextLimitError(reason)
         max_summary_chars = max(64, min(self.max_tool_result_chars, self.max_tokens * 2))

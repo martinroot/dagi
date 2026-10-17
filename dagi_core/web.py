@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import re
+import secrets
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from threading import Event, Lock, Thread
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 from .agent import Agent
+from .auth import create_session_token, verify_password, verify_session_token
 from .config import Config, load_config
 from .context import ContextBuilder
+from .delegation import DelegationManager
 from .provider import OpenAICompatibleProvider
 from .state import StateStore
 from .tools import ToolRegistry
@@ -36,10 +42,76 @@ class WebApp:
     """A threaded HTTP shell; each request/worker opens its own SQLite connection."""
 
     def __init__(self, config: Config, provider_factory: ProviderFactory | None = None):
+        if not config.web_username or not config.web_password_hash:
+            raise ValueError("DAGI_WEB_USERNAME and DAGI_WEB_PASSWORD_HASH are required for dagi-web")
+        if (
+            not config.web_cookie_path.startswith("/")
+            or ";" in config.web_cookie_path
+            or "\r" in config.web_cookie_path
+            or "\n" in config.web_cookie_path
+        ):
+            raise ValueError("DAGI_WEB_COOKIE_PATH must be an absolute cookie path")
         self.config = config
         self.provider_factory = provider_factory or OpenAICompatibleProvider
+        self.agent_id = str(uuid4())
         self._runs: dict[str, _RunControl] = {}
         self._lock = Lock()
+        self._session_secret = secrets.token_bytes(32)
+        self._revoked_sessions: dict[str, int] = {}
+        self._failed_logins: dict[str, tuple[int, float]] = {}
+
+    def _cookie_token(self, headers: Any) -> str | None:
+        cookie = SimpleCookie()
+        try:
+            cookie.load(headers.get("Cookie", ""))
+            return cookie["dagi_session"].value if "dagi_session" in cookie else None
+        except Exception:
+            return None
+
+    def _is_authenticated(self, headers: Any) -> bool:
+        token = self._cookie_token(headers)
+        if not token or not verify_session_token(
+            token, self.config.web_username, self._session_secret
+        ):
+            return False
+        now = int(time.time())
+        with self._lock:
+            for revoked, expiry in list(self._revoked_sessions.items()):
+                if expiry <= now:
+                    del self._revoked_sessions[revoked]
+            return token not in self._revoked_sessions
+
+    def _origin_allowed(self, headers: Any) -> bool:
+        origin = headers.get("Origin")
+        expected = self.config.web_public_origin
+        return not origin or not expected or origin.rstrip("/") == expected
+
+    def _login_blocked(self, remote_addr: str) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            attempts, blocked_until = self._failed_logins.get(remote_addr, (0, 0.0))
+            if blocked_until > now:
+                return True
+            if blocked_until:
+                self._failed_logins.pop(remote_addr, None)
+        return False
+
+    def _failed_login(self, remote_addr: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            attempts, blocked_until = self._failed_logins.get(remote_addr, (0, 0.0))
+            if blocked_until > now:
+                return
+            attempts += 1
+            self._failed_logins[remote_addr] = (0, now + 60.0) if attempts >= 5 else (attempts, 0.0)
+
+    def _successful_login(self, remote_addr: str) -> None:
+        with self._lock:
+            self._failed_logins.pop(remote_addr, None)
+
+    def _revoke_session(self, token: str) -> None:
+        with self._lock:
+            self._revoked_sessions[token] = int(time.time()) + 43_200
 
     def create_server(self, host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
         app = self
@@ -50,12 +122,17 @@ class WebApp:
             def log_message(self, _format: str, *_args: Any) -> None:
                 return
 
-            def _send_json(self, status: int, payload: Any) -> None:
+            def _send_json(
+                self, status: int, payload: Any, headers: dict[str, str] | None = None
+            ) -> None:
                 data = json.dumps(_json_safe(payload), ensure_ascii=False).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(data)))
                 self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -79,6 +156,13 @@ class WebApp:
                 try:
                     if path == "/" or path == "/app.js":
                         self._static(path)
+                    elif path == "/api/auth/session":
+                        if app._is_authenticated(self.headers):
+                            self._send_json(200, {"authenticated": True})
+                        else:
+                            self._send_json(401, {"error": "authentication required"})
+                    elif path.startswith("/api/") and not app._is_authenticated(self.headers):
+                        self._send_json(401, {"error": "authentication required"})
                     elif path == "/api/sessions":
                         with _StateContext(self._state()) as state:
                             sessions = state.list_sessions(100)
@@ -112,7 +196,53 @@ class WebApp:
                 parsed = urlparse(self.path)
                 try:
                     body = self._read_json()
-                    if parsed.path == "/api/sessions":
+                    if not app._origin_allowed(self.headers):
+                        self._send_json(403, {"error": "request origin is not allowed"})
+                        return
+                    if parsed.path == "/api/auth/login":
+                        remote_addr = self.headers.get("X-Real-IP", self.client_address[0])
+                        if app._login_blocked(remote_addr):
+                            self._send_json(429, {"error": "too many login attempts"}, {"Retry-After": "60"})
+                            return
+                        username = body.get("username")
+                        password = body.get("password")
+                        valid_user = isinstance(username, str) and hmac.compare_digest(
+                            username.encode("utf-8"), app.config.web_username.encode("utf-8")
+                        )
+                        valid_password = isinstance(password, str) and len(password) <= 4096 and verify_password(
+                            password, app.config.web_password_hash
+                        )
+                        if not valid_user or not valid_password:
+                            app._failed_login(remote_addr)
+                            self._send_json(401, {"error": "invalid username or password"})
+                            return
+                        app._successful_login(remote_addr)
+                        token = create_session_token(app.config.web_username, app._session_secret)
+                        cookie = (
+                            f"dagi_session={token}; Path={app.config.web_cookie_path}; "
+                            "HttpOnly; SameSite=Strict; Max-Age=43200"
+                        )
+                        if app.config.web_cookie_secure:
+                            cookie += "; Secure"
+                        self._send_json(
+                            200,
+                            {"authenticated": True},
+                            {"Set-Cookie": cookie},
+                        )
+                    elif parsed.path == "/api/auth/logout":
+                        token = app._cookie_token(self.headers)
+                        if token and app._is_authenticated(self.headers):
+                            app._revoke_session(token)
+                        cookie = (
+                            f"dagi_session=; Path={app.config.web_cookie_path}; "
+                            "HttpOnly; SameSite=Strict; Max-Age=0"
+                        )
+                        if app.config.web_cookie_secure:
+                            cookie += "; Secure"
+                        self._send_json(200, {"authenticated": False}, {"Set-Cookie": cookie})
+                    elif parsed.path.startswith("/api/") and not app._is_authenticated(self.headers):
+                        self._send_json(401, {"error": "authentication required"})
+                    elif parsed.path == "/api/sessions":
                         title = body.get("title")
                         if title is not None and not isinstance(title, str):
                             raise ValueError("title must be text")
@@ -162,10 +292,13 @@ class WebApp:
                     ]
                     self._send_json(200, {
                         "run": run,
+                        "parent": state.get_run(run["parent_run_id"]) if run["parent_run_id"] else None,
                         "usage": state.usage_summary(run_id),
+                        "budget_usage": state.usage_summary_for_budget(run_id),
                         "provider_calls": provider_calls,
                         "requests": requests,
                         "tool_calls": tool_calls,
+                        "children": state.list_child_runs(run_id),
                         "messages": state.message_records(run["session_id"]),
                         "event_count": len(state.list_run_events(run_id, limit=5000)),
                     })
@@ -213,7 +346,11 @@ class WebApp:
                     if state.get_session(session_id) is None:
                         self._send_json(404, {"error": "session not found"})
                         return
-                    run_id = state.create_run(session_id)
+                    run_id = state.create_run(
+                        session_id,
+                        agent_id=app.agent_id,
+                        agent_name=app.config.model,
+                    )
                 control = _RunControl(session_id)
                 with app._lock:
                     if any(item.session_id == session_id for item in app._runs.values()):
@@ -250,6 +387,19 @@ class WebApp:
         server.daemon_threads = True
         return server
 
+    def _register_provider(self, control: _RunControl, provider: Any) -> None:
+        with self._lock:
+            if not any(active is provider for active in control.providers):
+                control.providers.append(provider)
+            already_cancelled = control.cancellation.is_set()
+        if already_cancelled:
+            cancel = getattr(provider, "cancel", None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:
+                    pass
+
     def _execute_run(self, run_id: str, session_id: int, message: str, control: _RunControl) -> None:
         state = StateStore(self.config.database)
         try:
@@ -266,6 +416,21 @@ class WebApp:
                     if callable(cancel):
                         cancel()
             tools = ToolRegistry(self.config.workspace, state, session_id, shell_enabled=False)
+            delegation = DelegationManager(
+                state,
+                self.config.workspace,
+                api_key=self.config.api_key,
+                base_url=self.config.base_url,
+                provider_factory=self.provider_factory,
+                usage_policy=self.config.usage_policy,
+                compression_model=self.config.compression_model,
+                context_limit_tokens=self.config.context_limit_tokens,
+                context_max_tool_result_chars=self.config.context_max_tool_result_chars,
+                max_depth=self.config.max_delegation_depth,
+                max_children=self.config.max_child_agents_per_run,
+                shell_enabled=False,
+            )
+            delegation.register(tools)
             context = ContextBuilder(
                 state,
                 max_tokens=self.config.context_limit_tokens,
@@ -274,10 +439,21 @@ class WebApp:
                 usage_policy=self.config.usage_policy,
             )
             agent = Agent(
-                provider, tools, state, session_id,
-                usage_policy=self.config.usage_policy, context_builder=context,
+                provider,
+                tools,
+                state,
+                session_id,
+                usage_policy=self.config.usage_policy,
+                context_builder=context,
+                agent_id=self.agent_id,
+                agent_name=self.config.model,
             )
-            for _event in agent.run_turn(message, run_id=run_id, cancel_event=control.cancellation):
+            for _event in agent.run_turn(
+                message,
+                run_id=run_id,
+                cancel_event=control.cancellation,
+                register_provider=lambda active: self._register_provider(control, active),
+            ):
                 pass
         except Exception as exc:
             run = state.get_run(run_id)

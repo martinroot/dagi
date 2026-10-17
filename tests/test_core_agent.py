@@ -116,6 +116,50 @@ def test_provider_error_and_tool_round_limit_have_distinct_run_statuses(tmp_path
     limit_state.close()
 
 
+def test_agent_can_run_against_independent_sessions(tmp_path):
+    class Provider:
+        model = "shared-model"
+
+        def __init__(self):
+            self.requests = []
+
+        def stream(self, messages, _tools):
+            self.requests.append(deepcopy(messages))
+            return iter([
+                StreamEvent(kind="text", text=f"reply-{len(self.requests)}"),
+                StreamEvent(kind="finish", finish_reason="stop"),
+            ])
+
+    state = StateStore(tmp_path / "state.sqlite3")
+    first = state.create_session("first")
+    second = state.create_session("second")
+    provider = Provider()
+    tool_sessions = []
+
+    def tools_for(session_id):
+        tool_sessions.append(session_id)
+        return ToolRegistry(tmp_path / f"workspace-{session_id}", state, session_id)
+
+    agent = Agent(provider, tools_for, state)
+    first_events = list(agent.run_turn("first prompt", session_id=first))
+    second_events = list(agent.run_turn("second prompt", session_id=second))
+
+    assert state.messages(first)[-1]["content"] == "reply-1"
+    assert state.messages(second)[-1]["content"] == "reply-2"
+    first_run_id = first_events[-1].run_id
+    second_run_id = second_events[-1].run_id
+    assert first_run_id is not None and second_run_id is not None
+    first_run = state.get_run(first_run_id)
+    second_run = state.get_run(second_run_id)
+    assert first_run is not None and second_run is not None
+    assert first_run["session_id"] == first
+    assert second_run["session_id"] == second
+    assert first_run["agent_id"] == second_run["agent_id"]
+    assert first_run["agent_id"] != first_run["run_id"]
+    assert tool_sessions == [first, second]
+    state.close()
+
+
 def test_closing_a_live_run_marks_it_cancelled(tmp_path):
     state = StateStore(tmp_path / "state.sqlite3")
     session = state.create_session()

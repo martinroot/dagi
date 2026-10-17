@@ -14,11 +14,12 @@ A compact terminal agent, not a reduced copy of the full Hermes platform. This i
 - Bounded model-context assembly with tool-result truncation, source-preserving history summaries, and exact request snapshots.
 - Stream finish reasons are validated; partial responses are stored as incomplete, and unfinalized tool calls are never executed.
 - Publicly extensible tools with structured results and persisted recovery metadata.
+- Bounded parent/child agent delegation with separate sessions, explicit context transfer, and a shared budget.
 - Workspace-scoped file tools; a tool call is persisted before its side effect.
-- A terminal CLI with session listing/resume and no web panel, gateway, or TUI framework.
+- A terminal CLI with session listing/resume plus a separate loopback visual sandbox.
 - Interrupted tool actions are recovered by state: safe pending calls may resume, while unknown outcomes are never replayed automatically.
 
-The runtime has one direct dependency, `openai`; SQLite and the CLI use the Python standard library. There is no web UI, messaging gateway, MCP, cron, voice, multi-agent, profile, or remote-backend integration in this version.
+The runtime has one direct dependency, `openai`; SQLite and the CLI use the Python standard library. There is no messaging gateway, MCP, cron, voice, profile, or remote-backend integration in this version.
 
 ## Safety
 
@@ -44,18 +45,30 @@ Environment variables:
 - `DAGI_BASE_URL` — API endpoint; defaults to `https://api.openai.com/v1`.
 - `DAGI_MODEL` — model; defaults to `gpt-4o-mini`.
 - `DAGI_MODEL_PRICES` — JSON model map with `input_per_million` and `output_per_million` prices in USD per million tokens.
-- `DAGI_MAX_PROVIDER_CALLS_PER_RUN` — maximum primary and auxiliary provider calls; defaults to `32`.
-- `DAGI_BUDGET_USD` — optional per-run spend limit; requires a price entry for `DAGI_MODEL`.
+- `DAGI_MAX_PROVIDER_CALLS_PER_RUN` — maximum primary and auxiliary provider calls across the parent/child budget group; defaults to `32`.
+- `DAGI_BUDGET_USD` — optional shared parent/child spend limit; requires price entries for every selected model.
 - `DAGI_ESTIMATE_MISSING_USAGE` — estimate missing token usage (default `true`); set to `false` to retain it as unavailable.
 - `DAGI_CONTEXT_LIMIT_TOKENS` — approximate request-context limit; defaults to `32768`.
 - `DAGI_CONTEXT_MAX_TOOL_RESULT_CHARS` — maximum tool-result characters sent in context; defaults to `4000`.
 - `DAGI_COMPRESSION_MODEL` — history-compression model; defaults to `DAGI_MODEL` and can be priced separately.
+- `DAGI_MAX_DELEGATION_DEPTH` — maximum nested child-agent depth; defaults to `2`.
+- `DAGI_MAX_CHILD_AGENTS_PER_RUN` — maximum child agents across the shared budget group; defaults to `3`.
 - `DAGI_HOME` — database and skill storage; defaults to `~/.dagi`.
 - `DAGI_WORKSPACE` — root for file tools; defaults to the current directory.
 - `DAGI_ENABLE_SHELL=1` — enables shell execution with per-command approval in the CLI.
 - `DAGI_WEB_HOST` / `DAGI_WEB_PORT` — sandbox bind address; defaults to `127.0.0.1:8765`.
+- `DAGI_WEB_USERNAME` / `DAGI_WEB_PASSWORD_HASH` — login credentials; store a PBKDF2-SHA256 password hash, never a plaintext password.
+- `DAGI_WEB_COOKIE_PATH` — session-cookie path; use `/dagi/` when mounted under that prefix.
+- `DAGI_WEB_PUBLIC_ORIGIN` — exact HTTPS origin used to validate state-changing requests.
+- `DAGI_WEB_COOKIE_SECURE` — marks the session cookie Secure; keep enabled behind HTTPS.
 
 Budget checks happen between provider calls. A single provider response may exceed the configured budget before its final usage is available; missing usage is treated as unknown, never as zero. Context-compression calls are stored separately and count toward the same provider-call and budget limits.
+
+## Agent delegation
+
+The `delegate_task` tool accepts a required `task`, an optional `model`, and an optional `context` string. Each child has a distinct agent ID, session, and run. Parent history is not copied into a child; the child receives only the task and explicitly supplied context, and its memory search is limited to its own session. Child failures are returned to the parent as structured tool errors. The parent receives the result in its normal tool loop and is instructed to inspect and verify it before relying on it.
+
+Depth and total child counts are bounded by `DAGI_MAX_DELEGATION_DEPTH` and `DAGI_MAX_CHILD_AGENTS_PER_RUN`. The root run has depth 0; at the default depth limit 2, agents at depth 2 cannot delegate further. The child cap counts all descendants in the shared budget group. Provider-call counts, usage, and configured USD budget are shared across the entire parent/child tree.
 
 Example price configuration:
 
@@ -74,7 +87,7 @@ Run the local web shell with one command:
 uv run dagi-web
 ```
 
-It binds to `127.0.0.1:8765` by default. The sandbox shows sessions, runs, chat/events, exact provider requests, tool outcomes, errors, and usage. Run events are persisted and replayed after reconnect; opening a saved run only inspects it and never starts it again. Each HTTP handler and run worker opens its own SQLite connection. Shell tools are disabled in the web sandbox; use the CLI for individually approved shell actions. Keep the server on loopback unless you add an authenticated reverse proxy.
+It binds to `127.0.0.1:8765` by default. The sandbox shows sessions, runs, chat/events, exact provider requests, tool outcomes, errors, and usage. The login form creates an HttpOnly, SameSite=Strict session cookie; APIs reject unauthenticated requests, login attempts are rate-limited, and logout revokes the current session. Configure a PBKDF2-SHA256 password hash and exact public HTTPS origin in the protected service environment file. Run events are persisted and replayed after reconnect; opening a saved run only inspects it and never starts it again. Each HTTP handler and run worker opens its own SQLite connection. Shell tools are disabled in the web sandbox; use the CLI for individually approved shell actions. Keep the server on loopback unless you add an authenticated reverse proxy.
 
 ## Custom tools
 

@@ -69,9 +69,9 @@ def test_cli_displays_run_id_and_terminal_status(tmp_path, monkeypatch, capsys):
     import dagi_core.cli as cli
 
     class FinishedAgent:
-        def run_turn(self, _text):
+        def run_turn(self, _text, session_id=None):
             yield SimpleNamespace(
-                kind="done", session_id=1, run_id="run-123", tool_call_id=None,
+                kind="done", session_id=session_id, run_id="run-123", tool_call_id=None,
                 tool_name=None, tool_args=None, text=None, status="completed",
             )
 
@@ -132,6 +132,18 @@ def test_config_loads_context_limit_and_compression_model(tmp_path, monkeypatch)
     assert config.compression_model == "small-compressor"
 
 
+def test_config_parses_delegation_depth_and_child_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAGI_API_KEY", "placeholder-for-test")
+    monkeypatch.setenv("DAGI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("DAGI_MAX_DELEGATION_DEPTH", "2")
+    monkeypatch.setenv("DAGI_MAX_CHILD_AGENTS_PER_RUN", "3")
+
+    config = load_config()
+
+    assert config.max_delegation_depth == 2
+    assert config.max_child_agents_per_run == 3
+
+
 def test_cli_can_resume_an_existing_session(tmp_path, monkeypatch, capsys):
     from types import SimpleNamespace
 
@@ -146,27 +158,28 @@ def test_cli_can_resume_an_existing_session(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("DAGI_API_KEY", "placeholder-for-test")
     monkeypatch.setenv("DAGI_HOME", str(home))
     monkeypatch.setenv("DAGI_WORKSPACE", str(tmp_path / "workspace"))
-    inputs = iter([f"/resume {saved_session}", "hello", "/exit"])
+    inputs = iter([f"/resume {saved_session}", "hello", "/new", "new-session turn", f"/resume {saved_session}", "again", "/exit"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(inputs))
     selected = []
+    agent_builds = []
 
     class FinishedAgent:
-        def __init__(self, session_id):
-            self.session_id = session_id
-
-        def run_turn(self, _text):
+        def run_turn(self, text, session_id=None):
+            selected.append((text, session_id))
             yield SimpleNamespace(
-                kind="done", session_id=self.session_id, run_id="resumed-run",
+                kind="done", session_id=session_id, run_id="resumed-run",
                 tool_call_id=None, tool_name=None, tool_args=None, text=None, status="completed",
             )
 
-    def build_agent(_config, _provider, state, session_id=None):
-        selected_id = session_id if session_id is not None else state.create_session()
-        selected.append(selected_id)
-        return FinishedAgent(selected_id)
+    def build_agent(_config, _provider, _state, session_id=None):
+        agent_builds.append(session_id)
+        return FinishedAgent()
 
     monkeypatch.setattr(cli, "_new_agent", build_agent)
     cli.run()
 
-    assert selected[-1] == saved_session
+    assert len(agent_builds) == 1
+    assert [item[1] for item in selected][0] == saved_session
+    assert [item[1] for item in selected][2] == saved_session
+    assert [item[1] for item in selected][1] != saved_session
     assert f"Resumed session {saved_session}" in capsys.readouterr().out

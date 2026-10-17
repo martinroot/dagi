@@ -7,6 +7,7 @@ import sys
 from .agent import Agent
 from .config import load_config
 from .context import ContextBuilder
+from .delegation import DelegationManager
 from .provider import OpenAICompatibleProvider
 from .state import StateStore
 from .tools import ToolRegistry
@@ -35,15 +36,31 @@ def approve_shell_command(command: str) -> bool:
 
 
 def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
-    if session_id is None:
-        session_id = state.create_session()
-    tools = ToolRegistry(
-        config.workspace,
-        state,
-        session_id,
-        shell_enabled=config.enable_shell,
-        approve_shell=approve_shell_command if config.enable_shell else None,
-    )
+    def tools_for(active_session_id: int) -> ToolRegistry:
+        tools = ToolRegistry(
+            config.workspace,
+            state,
+            active_session_id,
+            shell_enabled=config.enable_shell,
+            approve_shell=approve_shell_command if config.enable_shell else None,
+        )
+        delegation = DelegationManager(
+            state,
+            config.workspace,
+            api_key=config.api_key,
+            base_url=config.base_url,
+            usage_policy=config.usage_policy,
+            compression_model=config.compression_model,
+            context_limit_tokens=config.context_limit_tokens,
+            context_max_tool_result_chars=config.context_max_tool_result_chars,
+            max_depth=config.max_delegation_depth,
+            max_children=config.max_child_agents_per_run,
+            shell_enabled=config.enable_shell,
+            approve_shell=approve_shell_command if config.enable_shell else None,
+        )
+        delegation.register(tools)
+        return tools
+
     compressor = OpenAICompatibleProvider(config.compression_model, config.api_key, config.base_url)
     context_builder = ContextBuilder(
         state,
@@ -53,7 +70,7 @@ def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
         usage_policy=config.usage_policy,
     )
     return Agent(
-        provider, tools, state, session_id,
+        provider, tools_for, state, session_id,
         usage_policy=config.usage_policy,
         context_builder=context_builder,
     )
@@ -63,8 +80,9 @@ def run() -> None:
     config = load_config()
     state = StateStore(config.database)
     provider = OpenAICompatibleProvider(config.model, config.api_key, config.base_url)
+    session_id = state.create_session()
     agent = _new_agent(config, provider, state)
-    print(f"Dagi Core | {config.model} | workspace: {config.workspace}")
+    print(f"Dagi Core | {config.model} | session: {session_id} | workspace: {config.workspace}")
     print("Type /help. Shell is disabled unless DAGI_ENABLE_SHELL=1.\n")
 
     try:
@@ -82,8 +100,8 @@ def run() -> None:
                 if command == "/help":
                     print(HELP)
                 elif command == "/new":
-                    agent = _new_agent(config, provider, state)
-                    print("Started a new session.")
+                    session_id = state.create_session()
+                    print(f"Started a new session: {session_id}.")
                 elif command == "/sessions":
                     sessions = state.list_sessions()
                     print("\n".join(
@@ -101,7 +119,6 @@ def run() -> None:
                             print(f"No saved session {session_id}.")
                         else:
                             calls = state.recover_interrupted(session_id)
-                            agent = _new_agent(config, provider, state, session_id)
                             pending = sum(call["status"] == "pending" for call in calls)
                             uncertain = sum(call["status"] == "uncertain" for call in calls)
                             print(f"Resumed session {session_id}; pending tools: {pending}, uncertain tools: {uncertain}.")
@@ -117,7 +134,7 @@ def run() -> None:
                     print("Usage: /help, /new, /sessions, /resume <session_id>, /memory <query>, /skills, /model, /exit")
                 continue
 
-            for event in agent.run_turn(text):
+            for event in agent.run_turn(text, session_id=session_id):
                 if event.kind == "text" and event.text:
                     print(event.text, end="", flush=True)
                 elif event.kind == "tool_call":

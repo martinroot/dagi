@@ -119,6 +119,68 @@ def test_run_events_are_persisted_and_resumable_by_cursor(tmp_path):
     store.close()
 
 
+def test_legacy_run_rows_migrate_to_agent_and_budget_fields(tmp_path):
+    path = tmp_path / "legacy.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        CREATE TABLE sessions (id INTEGER PRIMARY KEY, title TEXT, created_at TEXT NOT NULL);
+        CREATE TABLE runs (
+            run_id TEXT PRIMARY KEY,
+            session_id INTEGER NOT NULL REFERENCES sessions(id),
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            error TEXT
+        );
+        INSERT INTO sessions(id, title, created_at) VALUES(1, 'legacy session', '2026-01-01T00:00:00Z');
+        INSERT INTO runs(run_id, session_id, status, started_at)
+        VALUES('legacy-run', 1, 'completed', '2026-01-01T00:00:00Z');
+    """)
+    connection.close()
+
+    store = StateStore(path)
+    legacy = store.get_run("legacy-run")
+
+    assert legacy is not None
+    assert legacy["agent_id"] == "dagi"
+    assert legacy["parent_run_id"] is None
+    assert legacy["depth"] == 0
+    assert legacy["budget_group_id"] == "legacy-run"
+    assert legacy["agent_name"] == "dagi"
+    store.close()
+
+
+def test_child_runs_inherit_parent_budget_scope_and_keep_separate_usage(tmp_path):
+    from decimal import Decimal
+
+    store = StateStore(tmp_path / "state.sqlite3")
+    parent_session = store.create_session("parent")
+    parent_run = store.create_run(parent_session)
+    child_session = store.create_session("child")
+    child_run = store.create_run(
+        child_session, agent_id="child-agent-id", parent_run_id=parent_run, agent_name="child-model"
+    )
+    parent_call = store.create_provider_call(parent_run, "parent-model", "agent")
+    child_call = store.create_provider_call(child_run, "child-model", "agent")
+    store.record_usage(parent_call, {"source": "actual", "input_tokens": 10, "output_tokens": 2, "cost_usd": "0.01"})
+    store.record_usage(child_call, {"source": "actual", "input_tokens": 20, "output_tokens": 3, "cost_usd": "0.02"})
+
+    child = store.get_run(child_run)
+    parent = store.get_run(parent_run)
+    assert child is not None and parent is not None
+    assert child["parent_run_id"] == parent_run
+    assert child["agent_id"] == "child-agent-id"
+    assert child["agent_id"] != parent["agent_id"]
+    assert child["depth"] == 1
+    assert child["agent_name"] == "child-model"
+    assert child["budget_group_id"] == parent_run
+    assert store.count_child_runs_in_budget_group(parent_run) == 1
+    assert store.usage_summary(child_run)["provider_calls"] == 1
+    assert store.usage_summary_for_budget(child_run)["provider_calls"] == 2
+    assert store.usage_summary_for_budget(child_run)["cost_usd"] == Decimal("0.03")
+    store.close()
+
+
 def test_state_database_has_owner_only_permissions_on_posix(tmp_path):
     if os.name != "posix":
         return

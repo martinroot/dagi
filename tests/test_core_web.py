@@ -1,9 +1,13 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 import time
-from threading import Thread
-from urllib.request import Request, urlopen
+from threading import Event, Thread
+from http.cookiejar import CookieJar
+from urllib.error import HTTPError
+from urllib.parse import urlparse
+from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
+from dagi_core.auth import hash_password
 from dagi_core.config import Config
 from dagi_core.provider import StreamEvent
 from dagi_core.usage import UsagePolicy
@@ -22,13 +26,39 @@ def _config(tmp_path):
         compression_model="summary-model",
         context_limit_tokens=8_000,
         context_max_tool_result_chars=1_000,
+        max_delegation_depth=2,
+        max_child_agents_per_run=3,
+        web_username="admin",
+        web_password_hash=hash_password("local-test-password", salt=b"0123456789abcdef", iterations=1_000),
+        web_cookie_path="/",
+        web_public_origin="",
+        web_cookie_secure=False,
     )
 
 
+_test_openers = {}
+
+
 def _request(base, method="GET", payload=None):
+    parsed = urlparse(base)
+    if parsed.path.startswith("/api/") and "/api/auth/" not in parsed.path:
+        opener = _test_openers.get(parsed.netloc)
+        if opener is None:
+            opener = build_opener(HTTPCookieProcessor(CookieJar()))
+            login = Request(
+                f"{parsed.scheme}://{parsed.netloc}/api/auth/login",
+                data=json.dumps({"username": "admin", "password": "local-test-password"}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with opener.open(login, timeout=5) as response:
+                assert response.status == 200
+            _test_openers[parsed.netloc] = opener
+    else:
+        opener = None
     data = json.dumps(payload).encode() if payload is not None else None
     request = Request(base, data=data, headers={"Content-Type": "application/json"}, method=method)
-    with urlopen(request, timeout=5) as response:
+    with (opener.open(request, timeout=5) if opener else urlopen(request, timeout=5)) as response:
         return response.status, response.headers.get("Content-Type", ""), response.read()
 
 
@@ -91,6 +121,47 @@ class SlowProvider:
             time.sleep(0.01)
             yield StreamEvent(kind="text", text=f"chunk-{index} ")
         yield StreamEvent(kind="finish", finish_reason="stop")
+
+
+def test_web_uses_js_session_login_and_protects_the_api(tmp_path):
+    app = WebApp(_config(tmp_path), provider_factory=lambda *_args: SlowProvider())
+    server, thread, base = _start(app)
+    opener = build_opener(HTTPCookieProcessor())
+
+    def request(path, method="GET", payload=None):
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = Request(
+            base + path,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method=method,
+        )
+        try:
+            with opener.open(req, timeout=5) as response:
+                return response.status, response.headers, response.read()
+        except HTTPError as response:
+            return response.code, response.headers, response.read()
+
+    try:
+        status, _, page = request("/")
+        assert status == 200 and b"login-form" in page
+        assert request("/api/sessions")[0] == 401
+        assert request("/api/auth/login", "POST", {
+            "username": "admin", "password": "wrong-password",
+        })[0] == 401
+
+        status, headers, body = request("/api/auth/login", "POST", {
+            "username": "admin", "password": "local-test-password",
+        })
+        assert status == 200 and json.loads(body)["authenticated"] is True
+        cookie = headers.get("Set-Cookie", "")
+        assert "HttpOnly" in cookie and "SameSite=Strict" in cookie and "Path=/" in cookie
+        assert request("/api/auth/session")[0] == 200
+        assert request("/api/sessions")[0] == 200
+        assert request("/api/auth/logout", "POST", {})[0] == 200
+        assert request("/api/auth/session")[0] == 401
+    finally:
+        _stop(server, thread)
 
 
 def test_web_sandbox_starts_inspects_and_replays_saved_run(tmp_path):
@@ -161,6 +232,134 @@ def test_web_run_inspector_exposes_provider_error_and_unavailable_usage(tmp_path
         _, _, stream = _request(f"{base}/api/runs/{run_id}/events?after=0")
         frames = [json.loads(line[6:]) for line in stream.decode().splitlines() if line.startswith("data: ")]
         assert any(event["kind"] == "error" for event in frames)
+    finally:
+        _stop(server, thread)
+
+
+def test_web_inspector_exposes_parent_child_runs_and_child_model(tmp_path):
+    from copy import deepcopy
+
+    class DelegatingProvider:
+        def __init__(self, model):
+            self.model = model
+            self.requests = []
+
+        def stream(self, messages, _tools):
+            self.requests.append(deepcopy(messages))
+            if self.model == "main-model" and len(self.requests) == 1:
+                return iter([
+                    StreamEvent(kind="tool_call", tool_call={
+                        "id": "delegate-web-1", "name": "delegate_task",
+                        "arguments": {"task": "Find a concise answer", "model": "child-model", "context": "approved fact"},
+                    }),
+                    StreamEvent(kind="finish", finish_reason="tool_calls"),
+                ])
+            if self.model == "child-model":
+                return iter([
+                    StreamEvent(kind="text", text="Child answer."),
+                    StreamEvent(kind="finish", finish_reason="stop"),
+                ])
+            return iter([
+                StreamEvent(kind="text", text="Parent verified the child answer."),
+                StreamEvent(kind="finish", finish_reason="stop"),
+            ])
+
+    providers = []
+    def factory(model, *_args):
+        provider = DelegatingProvider(model)
+        providers.append(provider)
+        return provider
+
+    app = WebApp(_config(tmp_path), provider_factory=factory)
+    server, thread, base = _start(app)
+    try:
+        _, _, created = _request(f"{base}/api/sessions", "POST", {"title": "parent session"})
+        parent_session = json.loads(created)["session_id"]
+        _, _, started = _request(
+            f"{base}/api/sessions/{parent_session}/runs", "POST", {"message": "delegate"}
+        )
+        parent_run_id = json.loads(started)["run_id"]
+        parent = _wait_for_status(base, parent_run_id, "completed")
+
+        assert len(parent["children"]) == 1
+        assert parent["budget_usage"]["provider_calls"] == 3
+        child = parent["children"][0]
+        assert child["parent_run_id"] == parent_run_id
+        assert child["depth"] == 1
+        child_detail = _wait_for_status(base, child["run_id"], "completed")
+        assert child_detail["run"]["parent_run_id"] == parent_run_id
+        assert child_detail["parent"]["run_id"] == parent_run_id
+        assert child_detail["provider_calls"][0]["model"] == "child-model"
+        main = next(provider for provider in providers if provider.model == "main-model")
+        assert "Child answer." in str(main.requests[1])
+        _, _, page = _request(base)
+        assert b"Parent and child runs" in page
+    finally:
+        _stop(server, thread)
+
+
+def test_web_stop_cascades_to_an_active_child_agent(tmp_path):
+    class MainProvider:
+        model = "main-model"
+
+        def __init__(self):
+            self.calls = 0
+
+        def stream(self, *_args):
+            self.calls += 1
+            if self.calls == 1:
+                return iter([
+                    StreamEvent(kind="tool_call", tool_call={
+                        "id": "delegate-cancel", "name": "delegate_task",
+                        "arguments": {"task": "wait for cancellation", "model": "child-model"},
+                    }),
+                    StreamEvent(kind="finish", finish_reason="tool_calls"),
+                ])
+            return iter([StreamEvent(kind="finish", finish_reason="stop")])
+
+    child_started = Event()
+
+    class ChildProvider:
+        model = "child-model"
+
+        def __init__(self):
+            self.cancelled = Event()
+
+        def stream(self, *_args):
+            child_started.set()
+            self.cancelled.wait(timeout=5)
+            if self.cancelled.is_set():
+                raise RuntimeError("child stream closed")
+            yield StreamEvent(kind="finish", finish_reason="stop")
+
+        def cancel(self):
+            self.cancelled.set()
+
+    main_provider = MainProvider()
+    child_provider = ChildProvider()
+
+    def factory(model, *_args):
+        if model == "main-model": return main_provider
+        if model == "child-model": return child_provider
+        return SlowProvider()
+
+    app = WebApp(_config(tmp_path), provider_factory=factory)
+    server, thread, base = _start(app)
+    try:
+        _, _, created = _request(f"{base}/api/sessions", "POST", {"title": "cancel child"})
+        session_id = json.loads(created)["session_id"]
+        _, _, started = _request(
+            f"{base}/api/sessions/{session_id}/runs", "POST", {"message": "delegate"}
+        )
+        run_id = json.loads(started)["run_id"]
+        assert child_started.wait(timeout=3)
+        _, _, stopped = _request(f"{base}/api/runs/{run_id}/cancel", "POST", {})
+        assert json.loads(stopped)["status"] == "cancelling"
+        parent = _wait_for_status(base, run_id, "cancelled")
+        assert child_provider.cancelled.is_set()
+        assert len(parent["children"]) == 1
+        child_run = parent["children"][0]["run_id"]
+        assert _wait_for_status(base, child_run, "cancelled")["run"]["status"] == "cancelled"
     finally:
         _stop(server, thread)
 

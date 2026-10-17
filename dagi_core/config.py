@@ -30,6 +30,13 @@ class Config:
     compression_model: str
     context_limit_tokens: int
     context_max_tool_result_chars: int
+    max_delegation_depth: int
+    max_child_agents_per_run: int
+    web_username: str = ""
+    web_password_hash: str = ""
+    web_cookie_path: str = "/"
+    web_public_origin: str = ""
+    web_cookie_secure: bool = True
 
     @property
     def database(self) -> Path:
@@ -72,8 +79,12 @@ def load_config() -> Config:
         context_limit = int(os.environ.get("DAGI_CONTEXT_LIMIT_TOKENS", "32768"))
         max_tool_result_chars = int(os.environ.get("DAGI_CONTEXT_MAX_TOOL_RESULT_CHARS", "4000"))
         compression_model = os.environ.get("DAGI_COMPRESSION_MODEL", model).strip() or model
+        max_delegation_depth = int(os.environ.get("DAGI_MAX_DELEGATION_DEPTH", "2"))
+        max_child_agents = int(os.environ.get("DAGI_MAX_CHILD_AGENTS_PER_RUN", "3"))
         if context_limit < 1 or max_tool_result_chars < 1:
             raise ValueError("context limits must be positive")
+        if max_delegation_depth < 0 or max_child_agents < 0:
+            raise ValueError("delegation limits must not be negative")
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
         raise ValueError(f"invalid usage/budget configuration: {exc}") from exc
     usage_policy = UsagePolicy(
@@ -95,4 +106,11 @@ def load_config() -> Config:
         compression_model=compression_model,
         context_limit_tokens=context_limit,
         context_max_tool_result_chars=max_tool_result_chars,
+        max_delegation_depth=max_delegation_depth,
+        max_child_agents_per_run=max_child_agents,
+        web_username=os.environ.get("DAGI_WEB_USERNAME", "").strip(),
+        web_password_hash=os.environ.get("DAGI_WEB_PASSWORD_HASH", "").strip(),
+        web_cookie_path=os.environ.get("DAGI_WEB_COOKIE_PATH", "/").strip() or "/",
+        web_public_origin=os.environ.get("DAGI_WEB_PUBLIC_ORIGIN", "").strip().rstrip("/"),
+        web_cookie_secure=_enabled(os.environ.get("DAGI_WEB_COOKIE_SECURE", "true")),
     )

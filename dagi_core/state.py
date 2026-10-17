@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL DEFAULT 'dagi',
+    parent_run_id TEXT REFERENCES runs(run_id) ON DELETE SET NULL,
+    depth INTEGER NOT NULL DEFAULT 0,
+    budget_group_id TEXT NOT NULL DEFAULT '',
+    agent_name TEXT NOT NULL DEFAULT 'dagi',
     status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'error', 'limit', 'cancelled')),
     started_at TEXT NOT NULL,
     finished_at TEXT,
@@ -138,6 +143,18 @@ class StateStore:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
         self._db.executescript(_SCHEMA)
+        run_columns = {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}
+        if "agent_id" not in run_columns:
+            self._db.execute("ALTER TABLE runs ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'dagi'")
+        if "parent_run_id" not in run_columns:
+            self._db.execute("ALTER TABLE runs ADD COLUMN parent_run_id TEXT REFERENCES runs(run_id)")
+        if "depth" not in run_columns:
+            self._db.execute("ALTER TABLE runs ADD COLUMN depth INTEGER NOT NULL DEFAULT 0")
+        if "budget_group_id" not in run_columns:
+            self._db.execute("ALTER TABLE runs ADD COLUMN budget_group_id TEXT NOT NULL DEFAULT ''")
+        if "agent_name" not in run_columns:
+            self._db.execute("ALTER TABLE runs ADD COLUMN agent_name TEXT NOT NULL DEFAULT 'dagi'")
+        self._db.execute("UPDATE runs SET budget_group_id=run_id WHERE budget_group_id=''")
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(messages)")}
         if "is_partial" not in columns:
             self._db.execute("ALTER TABLE messages ADD COLUMN is_partial INTEGER NOT NULL DEFAULT 0")
@@ -160,11 +177,34 @@ class StateStore:
         self._db.commit()
         return int(cursor.lastrowid)
 
-    def create_run(self, session_id: int) -> str:
+    def create_run(
+        self,
+        session_id: int,
+        *,
+        agent_id: str = "dagi",
+        parent_run_id: str | None = None,
+        depth: int | None = None,
+        agent_name: str = "dagi",
+    ) -> str:
         run_id = str(uuid.uuid4())
+        if parent_run_id is None:
+            actual_depth = 0 if depth is None else depth
+            budget_group_id = run_id
+        else:
+            parent = self.get_run(parent_run_id)
+            if parent is None:
+                raise ValueError(f"parent run does not exist: {parent_run_id}")
+            expected_depth = int(parent["depth"]) + 1
+            if depth is not None and depth != expected_depth:
+                raise ValueError("child run depth must be exactly parent depth plus one")
+            actual_depth = expected_depth
+            budget_group_id = parent["budget_group_id"] or parent_run_id
+        if actual_depth < 0:
+            raise ValueError("run depth must not be negative")
         self._db.execute(
-            "INSERT INTO runs(run_id, session_id, status, started_at) VALUES(?, ?, 'running', ?)",
-            (run_id, session_id, _now()),
+            """INSERT INTO runs(run_id, session_id, agent_id, parent_run_id, depth, budget_group_id, agent_name, status, started_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, 'running', ?)""",
+            (run_id, session_id, agent_id, parent_run_id, actual_depth, budget_group_id, agent_name, _now()),
         )
         self._db.commit()
         return run_id
@@ -179,6 +219,23 @@ class StateStore:
             (session_id, max(1, min(int(limit), 500))),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_child_runs(self, parent_run_id: str) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            "SELECT * FROM runs WHERE parent_run_id=? ORDER BY started_at", (parent_run_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_child_runs_in_budget_group(self, run_id: str) -> int:
+        run = self.get_run(run_id)
+        if run is None:
+            raise ValueError(f"run does not exist: {run_id}")
+        group_id = run["budget_group_id"] or run_id
+        row = self._db.execute(
+            "SELECT count(*) AS count FROM runs WHERE parent_run_id IS NOT NULL AND budget_group_id=?",
+            (group_id,),
+        ).fetchone()
+        return int(row["count"])
 
     def append_run_event(self, session_id: int, run_id: str, event: dict[str, Any]) -> int:
         if event.get("session_id") != session_id or event.get("run_id") != run_id:
@@ -335,13 +392,29 @@ class StateStore:
             "SELECT usage_source, input_tokens, output_tokens, cost_usd FROM provider_calls WHERE run_id=? ORDER BY id",
             (run_id,),
         ).fetchall()
+        return self._summarize_usage(rows)
+
+    def usage_summary_for_budget(self, run_id: str) -> dict[str, Any]:
+        run = self.get_run(run_id)
+        if run is None:
+            raise ValueError(f"run does not exist: {run_id}")
+        group_id = run["budget_group_id"] or run_id
+        rows = self._db.execute(
+            """SELECT pc.usage_source, pc.input_tokens, pc.output_tokens, pc.cost_usd
+               FROM provider_calls AS pc JOIN runs AS r ON r.run_id=pc.run_id
+               WHERE r.budget_group_id=? ORDER BY pc.id""",
+            (group_id,),
+        ).fetchall()
+        return self._summarize_usage(rows)
+
+    @staticmethod
+    def _summarize_usage(rows) -> dict[str, Any]:
+        from decimal import Decimal
         if not rows:
-            from decimal import Decimal
             return {
                 "provider_calls": 0, "source": "actual", "input_tokens": 0,
                 "output_tokens": 0, "cost_usd": Decimal("0"),
             }
-        from decimal import Decimal
         sources = {row["usage_source"] for row in rows}
         source = "unavailable" if "unavailable" in sources else (next(iter(sources)) if len(sources) == 1 else "mixed")
         input_tokens = None if any(row["input_tokens"] is None for row in rows) else sum(row["input_tokens"] for row in rows)
@@ -574,18 +647,30 @@ class StateStore:
             result.append(message)
         return result
 
-    def search_memory(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+    def search_memory(
+        self, query: str, limit: int = 10, *, session_id: int | None = None
+    ) -> list[dict[str, Any]]:
         if not query.strip():
             return []
         literal = '"' + query.replace('"', '""') + '"'
-        rows = self._db.execute(
-            """SELECT m.id, m.session_id, m.role,
-                      snippet(messages_fts, 0, '[', ']', '…', 12) AS snippet,
-                      m.created_at
-               FROM messages_fts JOIN messages AS m ON m.id=messages_fts.rowid
-               WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?""",
-            (literal, max(1, min(int(limit), 100))),
-        ).fetchall()
+        if session_id is None:
+            rows = self._db.execute(
+                """SELECT m.id, m.session_id, m.role,
+                          snippet(messages_fts, 0, '[', ']', '…', 12) AS snippet,
+                          m.created_at
+                   FROM messages_fts JOIN messages AS m ON m.id=messages_fts.rowid
+                   WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?""",
+                (literal, max(1, min(int(limit), 100))),
+            ).fetchall()
+        else:
+            rows = self._db.execute(
+                """SELECT m.id, m.session_id, m.role,
+                          snippet(messages_fts, 0, '[', ']', '…', 12) AS snippet,
+                          m.created_at
+                   FROM messages_fts JOIN messages AS m ON m.id=messages_fts.rowid
+                   WHERE messages_fts MATCH ? AND m.session_id=? ORDER BY rank LIMIT ?""",
+                (literal, session_id, max(1, min(int(limit), 100))),
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def create_skill(

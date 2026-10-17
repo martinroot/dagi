@@ -9,6 +9,15 @@
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; display: grid; grid-template-rows: auto 1fr; background: #11151d; color: #edf2fa; }
     header { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid #30394a; background: #171d27; }
+    .header-actions { display: flex; gap: 8px; }
+    .login-panel { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+    .login-form { width: min(360px, 100%); display: grid; gap: 10px; padding: 24px; background: #171d27; border: 1px solid #30394a; border-radius: 8px; }
+    .login-form input { min-width: 0; border: 1px solid #435571; border-radius: 6px; padding: 10px; color: inherit; background: #11151d; }
+    .login-form h1 { margin: 0 0 8px; font-size: 18px; }
+    #login-error:empty { display: none; }
+    #sandbox[hidden], #login-panel[hidden] { display: none; }
+    #sandbox { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+    #sandbox main { min-height: 0; }
     h1 { font-size: 18px; margin: 0; }
     h2 { font-size: 14px; margin: 0 0 10px; color: #aebbd0; }
     button { color: inherit; background: #28374c; border: 1px solid #435571; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
@@ -31,6 +40,8 @@
     form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #30394a; }
     textarea { resize: vertical; min-height: 44px; max-height: 180px; flex: 1; border-radius: 6px; border: 1px solid #435571; background: #171d27; color: inherit; padding: 9px; }
     details { margin: 8px 0; }
+    #children { display: grid; gap: 6px; }
+    #children button { text-align: left; overflow-wrap: anywhere; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 9px; background: #171d27; border-radius: 5px; max-height: 30vh; overflow: auto; font-size: 12px; }
     .muted { color: #96a2b6; font-size: 12px; }
     @media (max-width: 900px) { main { grid-template-columns: 180px minmax(250px, 1fr); } .inspector { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #30394a; } }
@@ -38,24 +49,39 @@
   </style>
 </head>
 <body>
-  <header><h1>Dagi Sandbox</h1><button id="new-session">New session</button></header>
-  <main>
-    <nav>
-      <h2>Sessions</h2><ul id="sessions"></ul>
-      <h2 style="margin-top:18px">Saved runs</h2><ul id="runs"></ul>
-    </nav>
-    <section class="workspace">
-      <div class="toolbar"><span id="session-title">Select or create a session</span><button id="stop-run" disabled>Stop run</button></div>
-      <div id="chat" aria-live="polite"></div>
-      <form id="chat-form"><textarea id="message" placeholder="Send a message…" required></textarea><button id="send" type="submit">Run</button></form>
-    </section>
-    <aside class="inspector">
-      <h2>Run inspector</h2><div id="run-status" class="muted">Select a saved run or start one.</div>
-      <details open><summary>Exact model requests</summary><pre id="requests">[]</pre></details>
-      <details open><summary>Tool calls and errors</summary><pre id="tools">[]</pre></details>
-      <details open><summary>Usage and cost</summary><pre id="usage">{}</pre></details>
-    </aside>
-  </main>
+  <section id="login-panel" class="login-panel" hidden>
+    <form id="login-form" class="login-form">
+      <h1>Dagi Sandbox sign in</h1>
+      <label for="login-username">Username</label>
+      <input id="login-username" name="username" autocomplete="username" required>
+      <label for="login-password">Password</label>
+      <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+      <div id="login-error" class="event error" role="alert"></div>
+    </form>
+  </section>
+  <div id="sandbox" hidden>
+    <header><h1>Dagi Sandbox</h1><div class="header-actions"><button id="logout">Sign out</button><button id="new-session">New session</button></div></header>
+    <main>
+      <nav>
+        <h2>Sessions</h2><ul id="sessions"></ul>
+        <h2 style="margin-top:18px">Saved runs</h2><ul id="runs"></ul>
+      </nav>
+      <section class="workspace">
+        <div class="toolbar"><span id="session-title">Select or create a session</span><button id="stop-run" disabled>Stop run</button></div>
+        <div id="chat" aria-live="polite"></div>
+        <form id="chat-form"><textarea id="message" placeholder="Send a message…" required></textarea><button id="send" type="submit">Run</button></form>
+      </section>
+      <aside class="inspector">
+        <h2>Run inspector</h2><div id="run-status" class="muted">Select a saved run or start one.</div>
+        <details open><summary>Exact model requests</summary><pre id="requests">[]</pre></details>
+        <details open><summary>Tool calls and errors</summary><pre id="tools">[]</pre></details>
+        <details open><summary>Run usage and cost</summary><pre id="usage">{}</pre></details>
+        <details open><summary>Shared tree budget</summary><pre id="budget-usage">{}</pre></details>
+        <details open><summary>Parent and child runs</summary><div id="children" class="run-list"></div></details>
+      </aside>
+    </main>
+  </div>
   <script src="/app.js"></script>
 </body>
 </html>

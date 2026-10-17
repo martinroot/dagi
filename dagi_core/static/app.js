@@ -3,17 +3,80 @@ let selectedSession = null;
 let activeRunId = null;
 let eventSource = null;
 let selectedRunId = null;
+let streamingAssistantBody = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
+    credentials: "same-origin",
     headers: {"Content-Type": "application/json", ...(options.headers || {})},
     ...options,
   });
   const text = await response.text();
   const value = text ? JSON.parse(text) : {};
+  if (response.status === 401 && !path.includes("/auth/")) showLogin("Session expired. Sign in again.");
   if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`);
   return value;
 }
+
+function showLogin(message = "") {
+  $("sandbox").hidden = true;
+  $("login-panel").hidden = false;
+  $("login-error").textContent = message;
+  if (eventSource) eventSource.close();
+  eventSource = null;
+  activeRunId = null;
+  resetAssistantStream();
+  $("stop-run").disabled = true;
+}
+
+async function showSandbox() {
+  $("login-error").textContent = "";
+  $("login-panel").hidden = true;
+  $("sandbox").hidden = false;
+  await refreshSessions();
+}
+
+async function restoreSession() {
+  try {
+    const session = await api("/api/auth/session");
+    if (session.authenticated) await showSandbox();
+    else showLogin();
+  } catch {
+    showLogin();
+  }
+}
+
+$("login-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const button = $("login-form").querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: $("login-username").value,
+        password: $("login-password").value,
+      }),
+    });
+    $("login-password").value = "";
+    await showSandbox();
+  } catch (error) {
+    $("login-error").textContent = String(error);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$("logout").onclick = async () => {
+  try {
+    await api("/api/auth/logout", {method: "POST", body: "{}"});
+    selectedSession = null;
+    selectedRunId = null;
+    showLogin();
+  } catch (error) {
+    $("run-status").textContent = `Logout failed: ${error}`;
+  }
+};
 
 function addChatLine(role, text, extra = "") {
   const item = document.createElement("div");
@@ -25,22 +88,40 @@ function addChatLine(role, text, extra = "") {
   item.append(label, body);
   $("chat").append(item);
   $("chat").scrollTop = $("chat").scrollHeight;
+  return body;
+}
+
+function resetAssistantStream() {
+  streamingAssistantBody = null;
+}
+
+function appendAssistantText(text) {
+  if (!streamingAssistantBody) streamingAssistantBody = addChatLine("assistant", "", "Assistant");
+  streamingAssistantBody.textContent += text || "";
+  $("chat").scrollTop = $("chat").scrollHeight;
 }
 
 function addEvent(event) {
-  if (event.kind === "text") addChatLine("assistant", event.text, "Assistant");
-  else if (event.kind === "tool_call") {
+  if (event.kind === "started") {
+    resetAssistantStream();
+    $("run-status").textContent = `Run ${event.run_id} is running`;
+  } else if (event.kind === "text") {
+    appendAssistantText(event.text);
+  } else if (event.kind === "tool_call") {
+    resetAssistantStream();
     addChatLine("tool", `${event.tool_name}(${JSON.stringify(event.tool_args)})`, `Tool call · ${event.tool_call_id}`);
   } else if (event.kind === "tool_result") {
+    resetAssistantStream();
     addChatLine("tool", event.text, `${event.is_error ? "Tool error" : "Tool result"} · ${event.tool_call_id}`);
   } else if (event.kind === "error") {
+    resetAssistantStream();
     const item = document.createElement("div");
     item.className = "event error";
     item.textContent = event.text || "Run error";
     $("chat").append(item);
   }
-  if (event.kind === "started") $("run-status").textContent = `Run ${event.run_id} is running`;
   if (event.kind === "done") {
+    resetAssistantStream();
     $("run-status").textContent = `Run ${event.run_id}: ${event.status}`;
     if (eventSource) eventSource.close();
     eventSource = null;
@@ -76,7 +157,8 @@ function renderRuns(runs) {
   for (const run of runs) {
     const li = document.createElement("li");
     const button = document.createElement("button");
-    button.textContent = `${run.status} · ${run.run_id.slice(0, 8)}`;
+    const kind = run.parent_run_id ? `Child d${run.depth} · ${run.agent_name}` : `Parent · ${run.agent_name}`;
+    button.textContent = `${kind} · ${run.status} · ${run.run_id.slice(0, 8)}`;
     button.onclick = () => inspectRun(run.run_id);
     li.append(button);
     list.append(li);
@@ -85,6 +167,7 @@ function renderRuns(runs) {
 
 async function selectSession(sessionId) {
   selectedSession = sessionId;
+  resetAssistantStream();
   const data = await api(`/api/sessions/${sessionId}`);
   $("session-title").textContent = `${data.session.title || "Untitled session"} · #${sessionId}`;
   $("chat").replaceChildren();
@@ -120,6 +203,7 @@ function connectRun(runId, afterId = 0) {
   eventSource.onerror = () => {
     // EventSource reconnects automatically and sends Last-Event-ID to the server.
     $("run-status").textContent = `Reconnecting to run ${runId}…`;
+    api("/api/auth/session").catch(() => showLogin("Session expired. Sign in again."));
   };
 }
 
@@ -130,6 +214,20 @@ async function inspectRun(runId) {
   $("requests").textContent = JSON.stringify(detail.requests, null, 2);
   $("tools").textContent = JSON.stringify(detail.tool_calls, null, 2);
   $("usage").textContent = JSON.stringify(detail.usage, null, 2);
+  $("budget-usage").textContent = JSON.stringify(detail.budget_usage, null, 2);
+  const hierarchy = $("children");
+  hierarchy.replaceChildren();
+  const related = [
+    ...(detail.parent ? [{run: detail.parent, relation: "Parent"}] : []),
+    ...(detail.children || []).map((run) => ({run, relation: "Child"})),
+  ];
+  if (!related.length) hierarchy.textContent = "No parent or child runs.";
+  for (const item of related) {
+    const button = document.createElement("button");
+    button.textContent = `${item.relation} d${item.run.depth} · ${item.run.agent_name} · ${item.run.status} · ${item.run.run_id.slice(0, 8)}`;
+    button.onclick = () => inspectRun(item.run.run_id);
+    hierarchy.append(button);
+  }
 }
 
 $("new-session").onclick = async () => {
@@ -144,6 +242,7 @@ $("chat-form").onsubmit = async (event) => {
   const input = $("message");
   const message = input.value.trim();
   if (!message) return;
+  resetAssistantStream();
   addChatLine("user", message, "You");
   input.value = "";
   try {
@@ -168,6 +267,4 @@ $("stop-run").onclick = async () => {
   }
 };
 
-refreshSessions().catch((error) => {
-  $("run-status").textContent = `Could not load sessions: ${error}`;
-});
+restoreSession().catch(() => showLogin());
