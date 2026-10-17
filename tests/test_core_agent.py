@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 from pathlib import Path
 
 from dagi_core.agent import Agent, AgentEvent
@@ -121,10 +122,11 @@ def test_malformed_builtin_arguments_are_recoverable_and_do_not_block_later_turn
     assert "missing required argument 'path'" in bad_result.text
     assert state.get_tool_call("bad-path")["status"] == "failed"
     assert len(provider.requests) == 3
-    assert any(
-        message.get("role") == "tool" and "missing required argument 'path'" in message.get("content", "")
-        for message in provider.requests[1]
-    )
+    tool_message = next(message for message in provider.requests[1] if message.get("role") == "tool")
+    envelope = json.loads(tool_message["content"])
+    assert envelope["tool_call_id"] == "bad-path"
+    assert envelope["outcome"] == "failed"
+    assert "missing required argument 'path'" in envelope["content"]
     assert first_turn[-1].status == "completed"
 
     second_turn = list(agent.run_turn("a follow-up user message"))

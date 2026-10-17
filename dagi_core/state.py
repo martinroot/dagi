@@ -467,6 +467,32 @@ class StateStore:
             records.append(record)
         return records
 
+    def context_message_records(self, session_id: int) -> list[dict[str, Any]]:
+        """Read transcript records with persisted tool outcomes for model context only."""
+        rows = self._db.execute(
+            """SELECT m.id, m.role, m.content, m.tool_calls, m.tool_call_id, m.name, m.is_partial,
+                      t.status AS tool_outcome, t.error AS tool_error,
+                      t.presentation_json AS tool_presentation_json
+               FROM messages AS m
+               LEFT JOIN tool_executions AS t
+                 ON m.role='tool' AND m.tool_call_id=t.tool_call_id AND m.session_id=t.session_id
+               WHERE m.session_id=? ORDER BY m.id""",
+            (session_id,),
+        ).fetchall()
+        records = []
+        for row in rows:
+            record = dict(row)
+            if record["tool_calls"] is not None:
+                record["tool_calls"] = json.loads(record["tool_calls"])
+            if record["tool_presentation_json"] is not None:
+                record["tool_presentation"] = json.loads(record.pop("tool_presentation_json"))
+            else:
+                record.pop("tool_presentation_json")
+                record["tool_presentation"] = None
+            record["is_partial"] = bool(record["is_partial"])
+            records.append(record)
+        return records
+
     def first_user_message(self, session_id: int) -> dict[str, Any] | None:
         row = self._db.execute(
             "SELECT id, content FROM messages WHERE session_id=? AND role='user' ORDER BY id LIMIT 1",

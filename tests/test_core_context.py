@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -58,6 +59,111 @@ def _append_tool_pair(state, session, call_id, content):
         "role": "tool", "tool_call_id": call_id, "name": "read_file", "content": content,
     })
     state.append_message(session, {"role": "assistant", "content": "The file is readable."})
+
+
+def _persisted_tool_result(state, session, run_id, call_id, content, outcome, *, presentation=None, error=None):
+    call = {"id": call_id, "name": "read_file", "arguments": {"path": "notes.txt"}}
+    state.save_tool_round(
+        session,
+        run_id,
+        {"role": "assistant", "content": None, "tool_calls": [{
+            "id": call_id, "type": "function", "function": {
+                "name": "read_file", "arguments": json.dumps(call["arguments"]),
+            },
+        }]},
+        [call],
+    )
+    state.mark_tool_call_running(call_id)
+    state.complete_tool_call(session, run_id, call_id, outcome, content, error, {
+        "kind": "tool_result", "session_id": session, "run_id": run_id,
+        "tool_call_id": call_id, "tool_name": "read_file", "text": content,
+        "is_error": outcome != "succeeded", "outcome": outcome, "presentation": presentation,
+    })
+
+
+def test_context_exposes_persisted_tool_outcome_and_artifact_metadata(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    state.append_message(session, {"role": "user", "content": "read the file"})
+    run = state.create_run(session)
+    original = "[tool error] invalid JSON"
+    presentation = {
+        "type": "file",
+        "summary": "Read notes.txt",
+        "artifacts": [{"path": "notes.txt", "operation": "read"}],
+        "diagnostics": {"truncated": True, "line_count": 20},
+    }
+    _persisted_tool_result(
+        state, session, run, "failed-call", original, "failed",
+        presentation=presentation, error="JSON validation failed",
+    )
+    builder = ContextBuilder(state, max_tokens=2_000, max_tool_result_chars=1_000)
+
+    messages = builder.build(session, run, "system", [])
+
+    tool_message = next(item for item in messages if item["role"] == "tool")
+    envelope = json.loads(tool_message["content"])
+    saved = next(item for item in state.messages(session) if item.get("tool_call_id") == "failed-call")
+    assert envelope["format"] == "dagi_tool_result_v1"
+    assert envelope["tool_call_id"] == "failed-call"
+    assert envelope["outcome"] == "failed"
+    assert envelope["content"] == original
+    assert envelope["error"] == "JSON validation failed"
+    assert envelope["artifact_refs"] == [{"path": "notes.txt", "operation": "read"}]
+    assert envelope["diagnostics"] == {"truncated": True, "line_count": 20}
+    assert saved["content"] == original
+    state.close()
+
+
+def test_context_preserves_uncertain_persisted_tool_outcome(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    state.append_message(session, {"role": "user", "content": "inspect possible side effect"})
+    run = state.create_run(session)
+    _persisted_tool_result(
+        state, session, run, "uncertain-call", "effect may have happened", "uncertain",
+        error="effect could not be verified",
+    )
+
+    messages = ContextBuilder(state, max_tokens=2_000, max_tool_result_chars=1_000).build(
+        session, run, "system", []
+    )
+
+    tool_message = next(item for item in messages if item["role"] == "tool")
+    envelope = json.loads(tool_message["content"])
+    assert envelope["tool_call_id"] == "uncertain-call"
+    assert envelope["outcome"] == "uncertain"
+    assert envelope["content"] == "effect may have happened"
+    assert envelope["error"] == "effect could not be verified"
+    state.close()
+
+
+def test_context_bounds_persisted_outcome_envelope_without_corrupting_json(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    state.append_message(session, {"role": "user", "content": "inspect"})
+    run = state.create_run(session)
+    _persisted_tool_result(
+        state, session, run, "long-call", "x" * 1_000, "succeeded",
+        presentation={
+            "type": "file", "summary": "x" * 1_000,
+            "artifacts": [{"path": "y" * 300, "operation": "read"}] * 20,
+            "diagnostics": {"truncated": False, "line_count": 1},
+        },
+    )
+    builder = ContextBuilder(state, max_tokens=2_000, max_tool_result_chars=250)
+
+    messages = builder.build(session, run, "system", [])
+
+    content = next(item["content"] for item in messages if item["role"] == "tool")
+    envelope = json.loads(content)
+    original = next(item for item in state.messages(session) if item.get("tool_call_id") == "long-call")
+    assert len(content) <= 250
+    assert envelope["outcome"] == "succeeded"
+    assert envelope["result_truncated"] is True
+    assert len(envelope["content"]) < len(original["content"])
+    assert original["content"] == "x" * 1_000
+    state.close()
 
 
 def test_context_builder_truncates_tool_output_without_changing_source(tmp_path):

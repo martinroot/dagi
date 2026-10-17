@@ -46,7 +46,7 @@ class ContextBuilder:
         summary = latest["summary"] if latest else None
         source_ids = set(latest["source_message_ids"] if latest else [])
         units = self._turns([
-            record for record in self.state.message_records(session_id)
+            record for record in self.state.context_message_records(session_id)
             if record["id"] not in source_ids
         ])
         pending_archive: list[list[dict[str, Any]]] = []
@@ -213,6 +213,120 @@ class ContextBuilder:
             messages.extend(self._turn_messages(turn))
         return messages
 
+    def _tool_result_envelope(self, record: dict[str, Any]) -> str | None:
+        outcome = record.get("tool_outcome")
+        if outcome not in {"succeeded", "failed", "uncertain"}:
+            return None
+        tool_call_id = record.get("tool_call_id")
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            return None
+        result = record.get("content") if isinstance(record.get("content"), str) else ""
+        payload: dict[str, Any] = {
+            "format": "dagi_tool_result_v1",
+            "tool_call_id": tool_call_id[:128],
+            "outcome": outcome,
+            "content": "",
+            "result_truncated": False,
+        }
+        error = record.get("tool_error")
+        if isinstance(error, str) and error:
+            payload["error"] = error[:256]
+
+        presentation = record.get("tool_presentation")
+        if isinstance(presentation, dict):
+            view_type = presentation.get("type")
+            summary = presentation.get("summary")
+            if isinstance(view_type, str):
+                payload["presentation"] = {"type": view_type[:80]}
+                if isinstance(summary, str):
+                    payload["presentation"]["summary"] = summary[:160]
+            artifacts = presentation.get("artifacts")
+            if isinstance(artifacts, list):
+                allowed_artifact_fields = {
+                    "path", "name", "operation", "kind", "message_id", "session_id",
+                    "child_session_id", "child_run_id", "parent_run_id", "exit_code", "timed_out",
+                }
+                refs = []
+                for artifact in artifacts[:4]:
+                    if not isinstance(artifact, dict):
+                        continue
+                    ref = {}
+                    for key in allowed_artifact_fields:
+                        value = artifact.get(key)
+                        if isinstance(value, str):
+                            ref[key] = value[:160]
+                        elif isinstance(value, (int, float, bool)) or value is None:
+                            if key in artifact:
+                                ref[key] = value
+                    if ref:
+                        refs.append(ref)
+                if refs:
+                    payload["artifact_refs"] = refs
+            diagnostics = presentation.get("diagnostics")
+            allowed_diagnostics = {
+                "size_bytes", "line_count", "truncated", "diff_available", "diff_truncated",
+                "diff_reason", "entry_count", "empty", "match_count", "displayed_count",
+                "omitted_count", "duration_ms", "output_truncated", "command_truncated",
+                "operator_approved", "timed_out", "exit_code", "task_truncated", "depth",
+            }
+            if isinstance(diagnostics, dict):
+                filtered = {}
+                for key in allowed_diagnostics:
+                    value = diagnostics.get(key)
+                    if isinstance(value, str):
+                        filtered[key] = value[:128]
+                    elif isinstance(value, (int, float, bool)) or value is None:
+                        if key in diagnostics:
+                            filtered[key] = value
+                if filtered:
+                    payload["diagnostics"] = filtered
+
+        return self._fit_tool_result_envelope(payload, result)
+
+    def _fit_tool_result_envelope(self, payload: dict[str, Any], result: str) -> str:
+        bounded = dict(payload)
+        already_truncated = bool(bounded.get("result_truncated", False))
+
+        def serialize(prefix: str) -> str:
+            bounded["content"] = prefix
+            bounded["result_truncated"] = already_truncated or len(prefix) < len(result)
+            return json.dumps(bounded, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+        optional_fields = ("artifact_refs", "diagnostics", "presentation", "error")
+        for field in optional_fields:
+            if len(serialize("")) <= self.max_tool_result_chars:
+                break
+            bounded.pop(field, None)
+        if len(serialize("")) > self.max_tool_result_chars:
+            bounded["tool_call_id"] = str(bounded.get("tool_call_id", ""))[:24]
+        if len(serialize("")) > self.max_tool_result_chars:
+            return self._truncate(result, self.max_tool_result_chars)
+
+        low = 0
+        high = len(result)
+        best = serialize("")
+        while low <= high:
+            middle = (low + high) // 2
+            candidate = serialize(result[:middle])
+            if len(candidate) <= self.max_tool_result_chars:
+                best = candidate
+                low = middle + 1
+            else:
+                high = middle - 1
+        return best
+
+    def _truncate_tool_message(self, content: str) -> str:
+        try:
+            payload = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            return self._truncate(content, self.max_tool_result_chars)
+        if not isinstance(payload, dict) or payload.get("format") != "dagi_tool_result_v1":
+            return self._truncate(content, self.max_tool_result_chars)
+        result = payload.get("content")
+        if not isinstance(result, str):
+            result = ""
+        return self._fit_tool_result_envelope(payload, result)
+
     def _turn_messages(self, turn: list[dict[str, Any]]) -> list[dict[str, Any]]:
         call_ids: set[str] = set()
         result_ids: set[str] = set()
@@ -228,6 +342,10 @@ class ContextBuilder:
         messages = []
         for record in turn:
             message: dict[str, Any] = {"role": record["role"], "content": record["content"]}
+            if record["role"] == "tool":
+                envelope = self._tool_result_envelope(record)
+                if envelope is not None:
+                    message["content"] = envelope
             if record.get("tool_calls") is not None:
                 message["tool_calls"] = record["tool_calls"]
                 if not message["content"]:
@@ -245,7 +363,7 @@ class ContextBuilder:
         bounded = [dict(message) for message in messages]
         for message in bounded:
             if message.get("role") == "tool" and isinstance(message.get("content"), str):
-                message["content"] = self._truncate(message["content"], self.max_tool_result_chars)
+                message["content"] = self._truncate_tool_message(message["content"])
         return bounded
 
     def _truncate_all_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -253,7 +371,10 @@ class ContextBuilder:
         for message in messages:
             copy = dict(message)
             if isinstance(copy.get("content"), str):
-                copy["content"] = self._truncate(copy["content"], self.max_tool_result_chars)
+                if copy.get("role") == "tool":
+                    copy["content"] = self._truncate_tool_message(copy["content"])
+                else:
+                    copy["content"] = self._truncate(copy["content"], self.max_tool_result_chars)
             bounded.append(copy)
         return bounded
 
