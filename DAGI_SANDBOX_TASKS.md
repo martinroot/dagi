@@ -5,8 +5,8 @@ This is the single repository-level status map for the sandbox roadmap and cross
 - Umbrella: [#16 — sandbox UI integration](https://github.com/martinroot/dagi/issues/16) (open until all remaining acceptance criteria are complete).
 - Integration umbrella: [#20 — incremental 0.3.0 integration](https://github.com/martinroot/dagi/issues/20).
 - Current branch: `main`.
-- Verified code checkpoint: `9cd938105fe599f02ae8385a5acaa49507770bb4`; remote `main` matched before this roadmap-only update.
-- Verification at this checkpoint: `pytest -q` — **164 passed**; Node UI — **21 passed**; `bash -n` and `git diff --check` passed; `uv build` produced wheel and sdist, including `dagi_core/runtime_context.py`, `dagi_core/workspace.py`, and both static assets.
+- Verified code checkpoint: `ce5d85fffd76727ba98b7961db56f5084356935a`; remote `main` matched before this roadmap-only update.
+- Verification at this checkpoint: `pytest -q` — **172 passed**; Node UI — **21 passed**; `bash -n` and `git diff --check` passed; `uv build` produced wheel and sdist, including `dagi_core/runtime_context.py`, `dagi_core/workspace.py`, and both static assets.
 - Deployment boundary: no service restart or live `DAGI_HOME` migration has been performed. Backend changes are not claimed as active in the running service; #15 backup/restore rehearsal remains required before any live schema migration.
 
 ## Ten implementation iterations
@@ -61,9 +61,9 @@ Full proposal: [`DAGI_SELF_AWARENESS_MVP.md`](DAGI_SELF_AWARENESS_MVP.md). This 
 |---|---|---|---|
 | SELF-01 — bounded runtime identity, capability, and task-position context | In progress | [#38 open](https://github.com/martinroot/dagi/issues/38) | `dd718d9` bounded per-request context; `1ba992e` allowlisted `inspect_runtime`; `de65971` persists optional delegation purpose/output/check IDs through resume. Structural tests pass, including actual CLI child resume. Remaining: a model-driven smoke, not run without operator approval for possible provider cost |
 | SELF-02 — tool semantics and persisted outcomes visible to the acting model | Done | [#39 closed](https://github.com/martinroot/dagi/issues/39) | `6f4c9f2` adds bounded persisted outcome envelopes with artifact/truncation data and legacy fallback; `9cd9381` describes recovery/effect-verifier semantics while preserving provider JSON schemas. Full pytest 164, Node UI 21, build passed |
-| SELF-03 — bounded corrective reflection and scoped evidence-backed lessons | In progress | [#40 open](https://github.com/martinroot/dagi/issues/40) | `042259f` persists bounded failure observations/evidence; `0f6a4b7` adds normalized failure/action fingerprints and stops after two identical repeats with a persisted blocker. Scripted invalid-JSON repair works; unchanged attempts cap at iteration 3/10. Goal/state/Web tests: 26 passed. Lesson lifecycle remains |
+| SELF-03 — bounded corrective reflection and scoped evidence-backed lessons | In progress | [#40 open](https://github.com/martinroot/dagi/issues/40) | `042259f` persists bounded failure observations/evidence; `0f6a4b7` adds normalized fingerprints, configurable early blocker (`DAGI_GOAL_REPEAT_FAILURE_THRESHOLD`, default 2, range 1–10); `ce5d85f` records candidate/verified same-session lessons with independent-goal support and retrieves at most three for matching checks. Crash/save-failure resume test preserves completed tool outcome. Full pytest 172, Node UI 21, build passed. Contradictory-lesson handling/model smoke remain |
 
-Execution order from the proposal: prerequisites #34, #35, and #23 are closed. SELF-01 structural context and SELF-02 tool outcomes are implemented; SELF-01 remains open for a bounded model-driven smoke. SELF-03 is in progress: persisted failed-check observations, a scripted correction cycle, and a repeated-failure blocker are delivered; scoped lesson lifecycle/retrieval remains. Keep observations distinct from model hypotheses.
+Execution order from the proposal: prerequisites #34, #35, and #23 are closed. SELF-01 structural context and SELF-02 tool outcomes are implemented; SELF-01 remains open for a bounded model-driven smoke. SELF-03 now records failed-check observations, a scripted correction, a configurable repeated-failure blocker, and candidate/verified lessons with same-session retrieval. Contradictory-evidence handling remains; keep observations distinct from model hypotheses.
 
 ## Current SB-03 sequence
 
