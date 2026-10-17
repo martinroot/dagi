@@ -11,9 +11,9 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 from dagi_core.auth import hash_password
 from dagi_core.config import Config
 from dagi_core.provider import StreamEvent
-from dagi_core.state import StateStore
+from dagi_core.state import StateStore, goal_lesson_fingerprint
 from dagi_core.usage import UsagePolicy
-from dagi_core.web import WebApp
+from dagi_core.web import WebApp, _runtime_inspector_status
 
 
 def _config(tmp_path):
@@ -179,6 +179,9 @@ def test_web_sandbox_starts_inspects_and_replays_saved_run(tmp_path):
 
         _, _, created = _request(f"{base}/api/sessions", "POST", {"title": "web test"})
         session_id = json.loads(created)["session_id"]
+        _, _, empty_snapshot = _request(f"{base}/api/sessions/{session_id}")
+        empty_runtime = json.loads(empty_snapshot)["runtime_status"]
+        assert empty_runtime["role"] is None and empty_runtime["latest_reflection"] is None
         _, _, started = _request(
             f"{base}/api/sessions/{session_id}/runs", "POST", {"message": "create a file"}
         )
@@ -190,7 +193,30 @@ def test_web_sandbox_starts_inspects_and_replays_saved_run(tmp_path):
         assert len(detail["requests"]) == 2
         assert detail["tool_calls"][0]["tool_call_id"] == "web-call-1"
         assert (tmp_path / "workspace" / "web.txt").read_text() == "created from web"
+        runtime = detail["runtime_status"]
+        assert runtime["role"] == "root"
+        assert runtime["phase"] == "provider_request"
+        assert runtime["latest_reflection"]["trigger"] == "run_concluded"
+        assert runtime["tool_outcome"] == {"tool_name": "write_file", "status": "succeeded"}
+        assert runtime["goal_status"] is None
+        assert runtime["next_action"] is None
+        assert "provider-turn completion" in runtime["recovery_guidance"]
+        assert "web-call-1" in runtime["last_evidence"]
+        assert "api_key" not in runtime and "environment" not in runtime
+        assert "placeholder-for-test" not in json.dumps(runtime)
         call_count = providers[0].calls
+        persisted_before = StateStore(app.config.database)
+        reflections_before = persisted_before.list_tool_reflections(session_id, limit=3)
+        goals_before = persisted_before.list_goals(session_id)
+        persisted_before.close()
+        _, _, session_snapshot = _request(f"{base}/api/sessions/{session_id}")
+        assert json.loads(session_snapshot)["runtime_status"]["latest_reflection"]["trigger"] == "run_concluded"
+        _, _, unrelated_created = _request(f"{base}/api/sessions", "POST", {"title": "unrelated"})
+        unrelated_id = json.loads(unrelated_created)["session_id"]
+        _, _, unrelated_snapshot = _request(f"{base}/api/sessions/{unrelated_id}")
+        unrelated_runtime = json.loads(unrelated_snapshot)["runtime_status"]
+        assert unrelated_runtime["latest_reflection"] is None
+        assert unrelated_runtime["tool_outcome"] is None
 
         _, content_type, stream = _request(f"{base}/api/runs/{run_id}/events?after=0")
         assert "text/event-stream" in content_type
@@ -208,6 +234,10 @@ def test_web_sandbox_starts_inspects_and_replays_saved_run(tmp_path):
         assert all(result[0] == 200 for result in results)
         _request(f"{base}/api/runs/{run_id}")
         assert providers[0].calls == call_count
+        persisted_after = StateStore(app.config.database)
+        assert persisted_after.list_tool_reflections(session_id, limit=3) == reflections_before
+        assert persisted_after.list_goals(session_id) == goals_before
+        persisted_after.close()
     finally:
         _stop(server, thread)
 
@@ -254,7 +284,11 @@ def test_web_inspector_exposes_parent_child_runs_and_child_model(tmp_path):
                 return iter([
                     StreamEvent(kind="tool_call", tool_call={
                         "id": "delegate-web-1", "name": "delegate_task",
-                        "arguments": {"task": "Find a concise answer", "model": "child-model", "context": "approved fact"},
+                        "arguments": {
+                            "task": "Find a concise answer", "model": "child-model", "context": "approved fact",
+                            "purpose": "Supports the parent objective", "required_output": "One-sentence answer",
+                            "acceptance_check_ids": ["parent-check-1"],
+                        },
                     }),
                     StreamEvent(kind="finish", finish_reason="tool_calls"),
                 ])
@@ -294,6 +328,13 @@ def test_web_inspector_exposes_parent_child_runs_and_child_model(tmp_path):
         assert child_detail["run"]["parent_run_id"] == parent_run_id
         assert child_detail["parent"]["run_id"] == parent_run_id
         assert child_detail["provider_calls"][0]["model"] == "child-model"
+        runtime = child_detail["runtime_status"]
+        assert runtime["role"] == "child"
+        assert runtime["assignment"] == "Find a concise answer"
+        assert runtime["purpose"] == "Supports the parent objective"
+        assert runtime["required_output"] == "One-sentence answer"
+        assert runtime["acceptance_check_ids"] == ["parent-check-1"]
+        assert runtime["phase"] == "provider_request"
         main = next(provider for provider in providers if provider.model == "main-model")
         assert "Child answer." in str(main.requests[1])
         _, _, page = _request(base)
@@ -524,7 +565,8 @@ def test_web_run_uses_the_session_workspace(tmp_path):
             f"{base}/api/sessions/{session_id}/runs", "POST", {"message": "create a child file"}
         )
         run_id = json.loads(started)["run_id"]
-        _wait_for_status(base, run_id, "completed")
+        detail = _wait_for_status(base, run_id, "completed")
+        assert detail["runtime_status"]["workspace"] == ".dagi-children/web-child"
 
         child_workspace = tmp_path / "workspace" / ".dagi-children" / "web-child"
         system_content = providers[0].requests[0][0]["content"]
@@ -535,5 +577,134 @@ def test_web_run_uses_the_session_workspace(tmp_path):
         assert runtime_context["environment"]["workspace"] == ".dagi-children/web-child"
         assert (child_workspace / "web.txt").read_text(encoding="utf-8") == "created from web"
         assert not (tmp_path / "workspace" / "web.txt").exists()
+    finally:
+        _stop(server, thread)
+
+
+def test_runtime_inspector_is_bounded_and_scoped_to_the_session_goal(tmp_path):
+    config = _config(tmp_path)
+    state = StateStore(config.database)
+    session_a = state.create_session("goal-a")
+    session_b = state.create_session("goal-b")
+    session_c = state.create_session("blocked-goal")
+    empty_session = state.create_session("empty")
+    run_a = state.create_run(session_a)
+    run_b = state.create_run(session_b)
+    run_c = state.create_run(session_c)
+
+    checks_a = [{"type": "json_valid", "path": f"result-{index}.json"} for index in range(4)]
+    goal_a = state.create_goal(session_a, "create valid JSON", checks_a, 2)
+    state.link_goal_run(goal_a, run_a)
+
+    def add_lesson(session_id, goal_id, check, label, index):
+        action_fingerprint = f"{index + 1:064x}"
+        state.record_goal_reflection(
+            goal_id=goal_id,
+            iteration=0,
+            check_index=index,
+            expected=check,
+            observed={"passed": False, "detail": "invalid JSON"},
+            evidence_ids=[f"goal-check:{label}{index}"],
+            failure_fingerprint=f"{index + 20:064x}",
+            action_fingerprint=action_fingerprint,
+        )
+        state.update_goal_reflection_followup(
+            goal_id,
+            index,
+            True,
+            next_change="Observed tools: write_file",
+            evidence_ids=[f"run:{label}{index}", f"tool:{label}{index}"],
+            next_action_fingerprint=action_fingerprint,
+        )
+        reflection = state.get_latest_goal_reflection(goal_id, index)
+        return state.record_goal_lesson(
+            session_id=session_id,
+            goal_id=goal_id,
+            reflection_id=reflection["id"],
+            check_type=check["type"],
+            check_key=check["path"],
+            pattern_fingerprint=goal_lesson_fingerprint(check["type"], check["path"], action_fingerprint),
+            lesson=f"Use the verified action for {check['path']}.",
+            evidence_ids=reflection["evidence_ids"],
+        )
+
+    for index, check in enumerate(checks_a):
+        add_lesson(session_a, goal_a, check, "a", index)
+
+    check_b = {"type": "json_valid", "path": "result-0.json"}
+    goal_b = state.create_goal(session_b, "create another JSON", [check_b], 2)
+    state.link_goal_run(goal_b, run_b)
+    lesson_b = add_lesson(session_b, goal_b, check_b, "b", 0)
+
+    check_c = {"type": "file_exists", "path": "blocked.txt"}
+    goal_c = state.create_goal(session_c, "create blocked file", [check_c], 3)
+    state.link_goal_run(goal_c, run_c)
+    for iteration in range(3):
+        blocker_reflection = state.record_goal_reflection(
+            goal_id=goal_c,
+            iteration=iteration,
+            check_index=0,
+            expected=check_c,
+            observed={"passed": False, "detail": "file is absent"},
+            evidence_ids=[f"goal-check:c{iteration}"],
+            failure_fingerprint="e" * 64,
+            action_fingerprint="f" * 64,
+        )
+    state.update_goal(goal_a, "interrupted", feedback=[])
+    state.update_goal(goal_b, "interrupted", feedback=[])
+    state.update_goal(goal_c, "limit", feedback=[])
+
+    blocker_status = _runtime_inspector_status(state, session_c, run_c)
+    assert blocker_reflection["repeat_count"] == 2
+    assert blocker_reflection["blocker"]
+    assert blocker_status["blocker"] == "Repeated check/action failure threshold reached"
+    assert blocker_status["goal_status"] == "limit"
+
+
+    reflections_before = state.list_goal_reflections(goal_a)
+    lessons_before = state.list_goal_lessons(
+        session_a, check_type="json_valid", check_key="result-0.json", limit=3,
+    )
+    status_a = _runtime_inspector_status(state, session_a, run_a)
+    status_b = _runtime_inspector_status(state, session_b, run_b)
+    empty = _runtime_inspector_status(state, empty_session)
+    cross_session = _runtime_inspector_status(state, session_b, run_a)
+    assert state.list_goal_reflections(goal_a) == reflections_before
+    assert state.list_goal_lessons(
+        session_a, check_type="json_valid", check_key="result-0.json", limit=3,
+    ) == lessons_before
+    state.close()
+
+    assert status_a["goal_status"] == "interrupted"
+    assert status_a["check_result"] == {
+        "observed_passed": False, "followup_passed": True, "detail": "invalid JSON",
+    }
+    assert status_a["latest_reflection"]["trigger"] == "acceptance_check_failed"
+    assert status_a["blocker"] is None
+    assert len(status_a["lessons"]) == 3
+    assert all(item["status"] == "candidate" and item["check_type"] == "json_valid" for item in status_a["lessons"])
+    assert all(item["evidence_ids"] and all(value.startswith(("goal-check:a", "run:a", "tool:a")) for value in item["evidence_ids"]) for item in status_a["lessons"])
+    assert all(len(item["lesson"]) <= 512 and len(item["evidence_ids"]) <= 3 for item in status_a["lessons"])
+    assert status_b["lessons"][0]["evidence_ids"] == lesson_b["evidence_ids"]
+    assert empty["role"] is None and empty["goal_status"] is None and empty["lessons"] == []
+    assert cross_session == {}
+
+    app = WebApp(config, provider_factory=lambda *_args: None)
+    server, thread, base = _start(app)
+    try:
+        _, _, detail_a = _request(f"{base}/api/runs/{run_a}")
+        _, _, detail_b = _request(f"{base}/api/runs/{run_b}")
+        _, _, detail_c = _request(f"{base}/api/runs/{run_c}")
+        _, _, empty_snapshot = _request(f"{base}/api/sessions/{empty_session}")
+        api_status_a = json.loads(detail_a)["runtime_status"]
+        api_status_b = json.loads(detail_b)["runtime_status"]
+        api_status_c = json.loads(detail_c)["runtime_status"]
+        api_empty = json.loads(empty_snapshot)["runtime_status"]
+        assert api_status_c["blocker"] == "Repeated check/action failure threshold reached"
+        assert api_status_c["goal_status"] == "limit"
+        assert api_status_a == status_a
+        assert api_status_b["lessons"][0]["evidence_ids"] == lesson_b["evidence_ids"]
+        assert all(not any(value.startswith("goal-check:b") for value in item["evidence_ids"]) for item in api_status_a["lessons"])
+        assert api_empty["role"] is None and api_empty["latest_reflection"] is None
     finally:
         _stop(server, thread)

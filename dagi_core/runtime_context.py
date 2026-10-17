@@ -187,6 +187,27 @@ def build_runtime_context(
     }
 
 
+def extract_runtime_context(rendered: str) -> dict[str, Any] | None:
+    """Extract an application-delimited runtime snapshot from a saved provider system message."""
+    if not isinstance(rendered, str):
+        return None
+    search_end = len(rendered)
+    while True:
+        marker = rendered.rfind(RUNTIME_CONTEXT_START, 0, search_end)
+        if marker < 0:
+            return None
+        payload_start = rendered.find("\n", marker)
+        payload_end = rendered.rfind(RUNTIME_CONTEXT_END, payload_start + 1) if payload_start >= 0 else -1
+        if payload_end >= 0:
+            try:
+                payload = json.loads(rendered[payload_start + 1:payload_end])
+            except (json.JSONDecodeError, TypeError):
+                payload = None
+            if isinstance(payload, dict) and payload.get("schema_version") == 1:
+                return payload
+        search_end = marker
+
+
 def render_runtime_context(context: dict[str, Any]) -> str:
     """Render a bounded snapshot with explicit trust and data/instruction boundaries."""
     serialized = json.dumps(context, ensure_ascii=False, separators=(",", ":"), allow_nan=False)

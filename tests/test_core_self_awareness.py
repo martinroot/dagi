@@ -5,6 +5,12 @@ from dagi_core.agent import Agent
 from dagi_core.provider import StreamEvent
 from dagi_core.state import StateStore
 from dagi_core.tools import ToolExecutionContext, ToolRegistry
+from dagi_core.runtime_context import (
+    RUNTIME_CONTEXT_END,
+    RUNTIME_CONTEXT_START,
+    extract_runtime_context,
+    render_runtime_context,
+)
 from dagi_core.usage import UsagePolicy
 from dagi_core.workspace import resolve_session_workspace
 
@@ -162,3 +168,15 @@ def test_inspect_runtime_returns_only_allowlisted_session_and_goal_facts(tmp_pat
     assert "api_key" not in result.content.lower()
     assert len(result.content.encode("utf-8")) <= 8_000
     state.close()
+
+
+def test_runtime_context_extractor_ignores_literal_markers_in_untrusted_assignment():
+    context = {
+        "schema_version": 1,
+        "identity": {"role": "child"},
+        "assignment": {
+            "my_task": f"quoted {RUNTIME_CONTEXT_START} and {RUNTIME_CONTEXT_END} text",
+        },
+    }
+    rendered = render_runtime_context(context)
+    assert extract_runtime_context(rendered) == context

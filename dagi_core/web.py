@@ -27,6 +27,7 @@ from .context import ContextBuilder
 from .delegation import DelegationManager
 from .provider import OpenAICompatibleProvider
 from .runtime import RuntimeLease
+from .runtime_context import extract_runtime_context
 from .state import StateStore, goal_lesson_fingerprint
 from .tools import ToolRegistry, _resolve
 from .workspace import resolve_session_workspace
@@ -58,6 +59,180 @@ def _reflection_fingerprint(value: Any) -> str:
         allow_nan=False,
     )
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _runtime_inspector_status(state: StateStore, session_id: int, run_id: str | None = None) -> dict[str, Any]:
+    """Build an allowlisted, read-only inspection summary from this session's persisted rows."""
+    run = state.get_run(run_id) if run_id else None
+    if run_id and (run is None or run["session_id"] != session_id):
+        return {}
+    if run is None:
+        runs = state.list_runs(session_id, 20)
+        run = runs[0] if runs else None
+        run_id = run["run_id"] if run else None
+
+    runtime: dict[str, Any] = {}
+    if run_id:
+        for call in reversed(state.list_provider_calls(run_id)):
+            if call["purpose"] != "agent":
+                continue
+            request = state.get_provider_request(call["id"])
+            messages = request.get("messages", []) if isinstance(request, dict) else []
+            for message in messages:
+                if isinstance(message, dict) and message.get("role") == "system":
+                    parsed = extract_runtime_context(message.get("content", ""))
+                    if parsed is not None:
+                        runtime = parsed
+                        break
+            if runtime:
+                break
+
+    goals = state.list_goals(session_id)
+    goal = next((item for item in goals if run_id and run_id in item["runs"]), None)
+    if goal is None and run_id is None and goals:
+        goal = goals[0]
+
+    goal_reflection = goal["reflections"][-1] if goal and goal.get("reflections") else None
+    tool_reflections = state.list_tool_reflections(session_id, limit=3)
+    tool_reflection = next(
+        (item for item in tool_reflections if item["run_id"] == run_id),
+        tool_reflections[0] if run_id is None and tool_reflections else None,
+    )
+    candidates = [item for item in (goal_reflection, tool_reflection) if item]
+    reflection = max(candidates, key=lambda item: item.get("created_at", "")) if candidates else None
+
+    def short(value: Any, limit: int = 512) -> str | None:
+        return value[:limit] if isinstance(value, str) else None
+
+    goal_summary = short(goal.get("status"), 32) if goal else None
+    latest_reflection = None
+    blocker = None
+    next_action = None
+    recovery_guidance = None
+    last_evidence: list[str] = []
+    check_result = None
+    lessons: list[dict[str, Any]] = []
+    if goal:
+        if goal_reflection:
+            observed = goal_reflection.get("observed", {})
+            check_result = {
+                "observed_passed": observed.get("passed") if isinstance(observed, dict) else None,
+                "followup_passed": goal_reflection.get("following_check_passed"),
+                "detail": short(observed.get("detail"), 256) if isinstance(observed, dict) else None,
+            }
+        for check in goal.get("checks", []):
+            if len(lessons) >= 3:
+                break
+            check_type = check.get("type")
+            check_key = (
+                Path(check["argv"][0]).name[:128]
+                if check_type == "command" and isinstance(check.get("argv"), list) and check["argv"]
+                else str(check.get("path", ""))[:256]
+            )
+            if not check_type or not check_key:
+                continue
+            for item in state.list_goal_lessons(
+                session_id, check_type=check_type, check_key=check_key,
+                limit=3 - len(lessons),
+            ):
+                lessons.append({
+                    "check_type": short(item.get("check_type"), 32),
+                    "check_key": short(item.get("check_key"), 256),
+                    "status": short(item.get("status"), 16),
+                    "lesson": short(item.get("lesson"), 512),
+                    "support_count": item.get("support_count"),
+                    "evidence_ids": [short(value, 128) for value in item.get("evidence_ids", [])[:3]],
+                })
+
+    if reflection:
+        is_goal_reflection = "expected" in reflection and "observed" in reflection
+        if is_goal_reflection:
+            observed = reflection.get("observed", {})
+            latest_reflection = {
+                "trigger": short(reflection.get("trigger"), 64) or "unknown",
+                "observed": {
+                    key: observed.get(key)
+                    for key in ("passed", "detail")
+                    if isinstance(observed, dict) and isinstance(observed.get(key), (str, bool))
+                },
+                "evidence_ids": [short(value, 128) for value in reflection.get("evidence_ids", [])[:4]],
+                "cause_hypothesis": short(reflection.get("cause_hypothesis"), 512),
+                "next_change": short(reflection.get("next_change"), 512),
+                "following_check_passed": reflection.get("following_check_passed"),
+                "repeat_count": reflection.get("repeat_count"),
+                "blocker": bool(reflection.get("blocker")),
+            }
+            last_evidence = latest_reflection["evidence_ids"]
+            if reflection.get("blocker"):
+                blocker = "Repeated check/action failure threshold reached"
+            elif reflection.get("following_check_passed") is True:
+                blocker = None
+            elif reflection.get("following_check_passed") is False:
+                blocker = "Follow-up acceptance check still failed"
+            elif isinstance(observed, dict) and observed.get("passed") is False:
+                blocker = short(observed.get("detail"), 256) or "Acceptance check failed"
+            next_action = short(reflection.get("next_change"))
+        else:
+            observed = reflection.get("observed", {})
+            latest_reflection = {
+                "trigger": short(reflection.get("trigger"), 64),
+                "tool_name": short(reflection.get("tool_name"), 64),
+                "observed": {
+                    key: observed.get(key)
+                    for key in ("outcome", "repeat_count", "provider_turn_completed", "goal_status", "successful_tool_count", "known_failure_count")
+                    if isinstance(observed, dict) and isinstance(observed.get(key), (str, int, bool))
+                },
+                "evidence_ids": [short(value, 128) for value in reflection.get("evidence_ids", [])[:4]],
+                "repeat_count": reflection.get("repeat_count"),
+                "blocker": bool(reflection.get("blocker")),
+                "run_id": short(reflection.get("run_id"), 128),
+            }
+            last_evidence = latest_reflection["evidence_ids"]
+            if reflection.get("blocker"):
+                blocker = "Repeated known tool failure threshold reached"
+                recovery_guidance = "Choose a materially different action or report a blocker"
+            elif reflection.get("trigger") == "run_concluded":
+                recovery_guidance = "Check acceptance/goal status; provider-turn completion is not goal completion"
+
+    if not last_evidence:
+        progress = runtime.get("progress", {})
+        raw_evidence = progress.get("evidence_ids", []) if isinstance(progress, dict) else []
+        if isinstance(raw_evidence, list):
+            last_evidence = [short(item, 128) for item in raw_evidence[:4] if isinstance(item, str)]
+
+    tool_outcome = None
+    if run_id:
+        run_tools = [call for call in state.list_tool_calls(session_id) if call["run_id"] == run_id]
+        if run_tools:
+            tool_outcome = {
+                "tool_name": short(run_tools[-1].get("name"), 64),
+                "status": short(run_tools[-1].get("status"), 16),
+            }
+
+    identity = runtime.get("identity", {})
+    assignment = runtime.get("assignment", {})
+    environment = runtime.get("environment", {})
+    progress = runtime.get("progress", {})
+    return {
+        "role": short(identity.get("role"), 64) if isinstance(identity, dict) else None,
+        "agent": short(identity.get("agent_name"), 64) if isinstance(identity, dict) else None,
+        "assignment": short(assignment.get("my_task"), 512) if isinstance(assignment, dict) else None,
+        "purpose": short(assignment.get("purpose"), 512) if isinstance(assignment, dict) else None,
+        "required_output": short(assignment.get("required_output"), 256) if isinstance(assignment, dict) else None,
+        "acceptance_check_ids": [short(item, 128) for item in assignment.get("acceptance_check_ids", [])[:12] if isinstance(item, str)]
+        if isinstance(assignment, dict) and isinstance(assignment.get("acceptance_check_ids"), list) else None,
+        "workspace": short(environment.get("workspace"), 256) if isinstance(environment, dict) else None,
+        "phase": short(progress.get("phase"), 64) if isinstance(progress, dict) else None,
+        "last_evidence": last_evidence,
+        "blocker": blocker,
+        "next_action": next_action,
+        "recovery_guidance": recovery_guidance,
+        "latest_reflection": latest_reflection,
+        "lessons": lessons,
+        "tool_outcome": tool_outcome,
+        "check_result": check_result,
+        "goal_status": goal_summary,
+    }
 
 
 @dataclass
@@ -264,6 +439,7 @@ class WebApp:
                             if snapshot is None:
                                 self._send_json(404, {"error": "session not found"})
                                 return
+                            snapshot["runtime_status"] = _runtime_inspector_status(state, session_id)
                             self._send_json(200, snapshot)
                     elif match := re.fullmatch(r"/api/goals/([^/]+)", path):
                         with _StateContext(self._state()) as state:
@@ -420,6 +596,7 @@ class WebApp:
                         "children": state.list_child_runs(run_id),
                         "messages": state.message_records(run["session_id"]),
                         "event_count": len(state.list_run_events(run_id, limit=5000)),
+                        "runtime_status": _runtime_inspector_status(state, run["session_id"], run_id),
                     })
 
             def _event_page(self, run_id: str, query: str) -> None:
