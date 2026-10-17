@@ -293,6 +293,7 @@ test("replaying persisted active-run tool events does not duplicate snapshot con
       tool_calls: [{
         tool_call_id: "call-1", run_id: "run-active", name: "read_file",
         arguments: {path: "src/main.py"}, status: "succeeded", result: "file contents",
+        retryable: true, has_verifier: true,
       }],
       event_cursors: {"run-active": "38"},
     });
@@ -313,8 +314,9 @@ test("replaying persisted active-run tool events does not duplicate snapshot con
   const cards = elements.get("chat").children.filter((item) => item.dataset.toolCallId === "call-1");
   assert.equal(cards.length, 1);
   assert.equal(cards[0].dataset.status, "succeeded");
-  assert.match(cards[0].children[0].textContent, /read_file/);
+  assert.match(cards[0].children[0].textContent, /^🔧 read_file/);
   assert.match(cards[0].children[3].textContent, /file contents/);
+  assert.match(cards[0].children[4].children[1].textContent, /retryable: yes · verifier: yes/);
 });
 
 test("session restore replays the snapshot events before opening SSE after its cursor", async () => {

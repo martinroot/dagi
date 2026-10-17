@@ -60,6 +60,8 @@ function applySessionSnapshot(sessionId, snapshot) {
       durationMs: call.status !== "running" && Number.isFinite(startedAt) && Number.isFinite(finishedAt)
         ? Math.max(0, finishedAt - startedAt)
         : null,
+      retryable: call.retryable,
+      hasVerifier: call.has_verifier,
     });
   }
   return state;
@@ -164,14 +166,16 @@ function renderToolCard(sessionId, runId, toolCallId) {
     const details = document.createElement("details");
     const detailsTitle = document.createElement("summary");
     detailsTitle.textContent = "Arguments and output";
+    const metadata = document.createElement("div");
+    metadata.className = "tool-metadata muted";
     const input = document.createElement("pre");
     input.className = "tool-input";
     const result = document.createElement("pre");
     result.className = "tool-result";
-    details.append(detailsTitle, input, result);
+    details.append(detailsTitle, metadata, input, result);
     card.append(title, status, duration, summary, details);
     $("chat").append(card);
-    record.card = {card, title, status, duration, summary, input, result};
+    record.card = {card, title, status, duration, summary, metadata, input, result};
   }
   const call = record.call || {};
   const name = call.tool_name || call.name || "unknown tool";
@@ -183,8 +187,11 @@ function renderToolCard(sessionId, runId, toolCallId) {
     : resultEvent?.text ?? record.error ?? "";
   const statusLabel = toolStatusLabel(record.status);
   record.card.card.dataset.status = record.status || "unknown";
-  record.card.title.textContent = target ? `${name} · ${target}` : name;
+  record.card.title.textContent = `🔧 ${target ? `${name} · ${target}` : name}`;
   record.card.status.textContent = statusLabel;
+  const retryable = record.retryable === true ? "yes" : record.retryable === false ? "no" : "unavailable";
+  const verifier = record.hasVerifier === true ? "yes" : record.hasVerifier === false ? "no" : "unavailable";
+  record.card.metadata.textContent = `run ${runId} · call ${toolCallId} · recovery: retryable: ${retryable} · verifier: ${verifier}`;
   record.card.duration.textContent = typeof record.durationMs === "number"
     ? `${(record.durationMs / 1000).toFixed(1)} s`
     : record.status === "running" && typeof record.startedAt === "number"
