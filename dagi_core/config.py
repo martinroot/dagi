@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -37,6 +37,7 @@ class Config:
     web_cookie_path: str = "/"
     web_public_origin: str = ""
     web_cookie_secure: bool = True
+    web_token: str = field(default="", repr=False)
 
     @property
     def database(self) -> Path:
@@ -113,4 +114,5 @@ def load_config() -> Config:
         web_cookie_path=os.environ.get("DAGI_WEB_COOKIE_PATH", "/").strip() or "/",
         web_public_origin=os.environ.get("DAGI_WEB_PUBLIC_ORIGIN", "").strip().rstrip("/"),
         web_cookie_secure=_enabled(os.environ.get("DAGI_WEB_COOKIE_SECURE", "true")),
+        web_token=os.environ.get("DAGI_WEB_TOKEN", "").strip(),
     )

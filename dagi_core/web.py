@@ -26,6 +26,7 @@ from .delegation import DelegationManager
 from .provider import OpenAICompatibleProvider
 from .state import StateStore
 from .tools import ToolRegistry
+from .worker import load_workers
 
 ProviderFactory = Callable[[str, str, str], Any]
 
@@ -59,6 +60,7 @@ class WebApp:
         self._session_secret = secrets.token_bytes(32)
         self._revoked_sessions: dict[str, int] = {}
         self._failed_logins: dict[str, tuple[int, float]] = {}
+        self.workers = load_workers(os.environ.get("DAGI_WORKERS", "{}"))
 
     def _cookie_token(self, headers: Any) -> str | None:
         cookie = SimpleCookie()
@@ -69,6 +71,11 @@ class WebApp:
             return None
 
     def _is_authenticated(self, headers: Any) -> bool:
+        bearer = headers.get("Authorization", "")
+        if self.config.web_token and hmac.compare_digest(
+            bearer, "Bearer " + self.config.web_token
+        ):
+            return True
         token = self._cookie_token(headers)
         if not token or not verify_session_token(
             token, self.config.web_username, self._session_secret
@@ -163,6 +170,15 @@ class WebApp:
                             self._send_json(401, {"error": "authentication required"})
                     elif path.startswith("/api/") and not app._is_authenticated(self.headers):
                         self._send_json(401, {"error": "authentication required"})
+                    elif path == "/api/health":
+                        self._send_json(200, {"healthy": True, "active_runs": len(app._runs)})
+                    elif path == "/api/workers":
+                        self._send_json(200, {"workers": [
+                            {"id": name, "url": worker.url}
+                            for name, worker in app.workers.items()
+                        ]})
+                    elif match := re.fullmatch(r"/api/workers/([A-Za-z0-9_-]+)/proxy(/api/.*)", path):
+                        self._proxy(match.group(1), match.group(2))
                     elif path == "/api/sessions":
                         with _StateContext(self._state()) as state:
                             sessions = state.list_sessions(100)
@@ -242,6 +258,8 @@ class WebApp:
                         self._send_json(200, {"authenticated": False}, {"Set-Cookie": cookie})
                     elif parsed.path.startswith("/api/") and not app._is_authenticated(self.headers):
                         self._send_json(401, {"error": "authentication required"})
+                    elif match := re.fullmatch(r"/api/workers/([A-Za-z0-9_-]+)/proxy(/api/.*)", parsed.path):
+                        self._proxy(match.group(1), match.group(2), body)
                     elif parsed.path == "/api/sessions":
                         title = body.get("title")
                         if title is not None and not isinstance(title, str):
@@ -259,6 +277,23 @@ class WebApp:
                     self._send_json(400, {"error": str(exc)})
                 except Exception:
                     self._send_json(500, {"error": "sandbox request failed"})
+
+            def _proxy(self, worker_id: str, path: str, body: dict[str, Any] | None = None) -> None:
+                worker = app.workers.get(worker_id)
+                allowed = re.fullmatch(
+                    r"/api/(?:health|sessions|sessions/\d+|sessions/\d+/runs|runs/[^/]+(?:/events|/cancel)?)",
+                    path,
+                )
+                if worker is None or not allowed:
+                    self._send_json(404, {"error": "worker or endpoint not found"})
+                    return
+                try:
+                    result = worker.request(path, "POST" if body is not None else "GET", body)
+                except Exception:
+                    # The peer response may contain sensitive material; do not relay it.
+                    self._send_json(502, {"error": "worker request failed"})
+                    return
+                self._send_json(200, result)
 
             def _static(self, path: str) -> None:
                 name = "index.html" if path == "/" else "app.js"
