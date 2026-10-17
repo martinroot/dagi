@@ -536,15 +536,16 @@ class WebApp:
         checks = validate_checks(body.get("checks"))
         if any(check["type"] == "command" for check in checks) and not self.config.enable_check_commands:
             raise ValueError("command checks are disabled by operator configuration")
-        workspace = self.config.workspace.expanduser().resolve()
-        workspace.mkdir(parents=True, exist_ok=True)
-        for check in checks:
-            if check["type"] != "command":
-                _resolve(workspace, check["path"])
 
         with self._lock, _StateContext(StateStore(self.config.database)) as state:
-            if state.get_session(session_id) is None:
+            session = state.get_session(session_id)
+            if session is None:
                 raise ValueError("session not found")
+            workspace = resolve_session_workspace(self.config.workspace, session["workspace"])
+            workspace.mkdir(parents=True, exist_ok=True)
+            for check in checks:
+                if check["type"] != "command":
+                    _resolve(workspace, check["path"])
             if self._session_busy(session_id):
                 raise RuntimeError("a run or goal is already active for this session")
             goal_id = state.create_goal(session_id, objective, checks, cap)
@@ -601,8 +602,12 @@ class WebApp:
                 goal = state.get_goal(goal_id)
                 if goal is None:
                     return
+                session = state.get_session(goal["session_id"])
+                if session is None:
+                    raise ValueError("goal session not found")
+                workspace = resolve_session_workspace(self.config.workspace, session["workspace"])
                 feedback = verify(
-                    self.config.workspace,
+                    workspace,
                     goal["checks"],
                     allow_commands=self.config.enable_check_commands,
                     cancellation=control.cancellation,

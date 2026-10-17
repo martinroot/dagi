@@ -58,6 +58,19 @@ def _wait_goal(config, goal_id, expected):
     raise AssertionError(f"goal {goal_id} did not reach {expected}")
 
 
+def _wait_goal_terminal(config, goal_id):
+    terminal = {"completed", "capped", "limit", "error", "interrupted"}
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        state = StateStore(config.database)
+        goal = state.get_goal(goal_id)
+        state.close()
+        if goal and goal["status"] in terminal:
+            return goal
+        time.sleep(0.02)
+    raise AssertionError(f"goal {goal_id} did not reach a terminal state")
+
+
 class WriteResultProvider:
     model = "test-model"
 
@@ -106,6 +119,59 @@ def test_model_claim_cannot_complete_goal_when_check_fails(tmp_path):
         capped = _wait_goal(config, goal["goal_id"], "capped")
         assert capped["feedback"][0]["passed"] is False
         assert len(capped["runs"]) == 1
+    finally:
+        app.close()
+
+
+def test_child_goal_check_uses_the_goal_owners_workspace(tmp_path):
+    config = _config(tmp_path)
+    provider = WriteResultProvider(config.workspace, write_result=False)
+    app = WebApp(config, lambda *_args: provider)
+    session_id = _create_session(config)
+    root_result = config.workspace / "result.txt"
+    root_result.parent.mkdir(parents=True, exist_ok=True)
+    root_result.write_text("ready", encoding="utf-8")
+    state = StateStore(config.database)
+    state.set_session_workspace(session_id, ".dagi-children/goal-child")
+    state.close()
+    try:
+        goal = app.start_goal(session_id, {
+            "objective": "verify child result",
+            "checks": [{"type": "file_exists", "path": "result.txt"}],
+            "max_iterations": 1,
+        })
+        terminal = _wait_goal_terminal(config, goal["goal_id"])
+
+        assert terminal["status"] == "capped"
+        assert terminal["feedback"][0]["passed"] is False
+        assert terminal["feedback"][0]["detail"] == "file is absent"
+        assert len(terminal["runs"]) == 1
+    finally:
+        app.close()
+
+
+def test_goal_rejects_an_owning_workspace_symlink_escape(tmp_path):
+    config = _config(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    child_root = config.workspace / ".dagi-children"
+    child_root.mkdir(parents=True)
+    (child_root / "escape").symlink_to(outside, target_is_directory=True)
+    app = WebApp(config, lambda *_args: WriteResultProvider(config.workspace, write_result=False))
+    session_id = _create_session(config)
+    state = StateStore(config.database)
+    state.set_session_workspace(session_id, ".dagi-children/escape")
+    state.close()
+    try:
+        with pytest.raises(ValueError, match="workspace"):
+            app.start_goal(session_id, {
+                "objective": "must not inspect outside workspace",
+                "checks": [{"type": "file_exists", "path": "result.txt"}],
+                "max_iterations": 1,
+            })
+        state = StateStore(config.database)
+        assert state.list_goals(session_id) == []
+        state.close()
     finally:
         app.close()
 
