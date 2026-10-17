@@ -6,6 +6,70 @@ let selectedRunId = null;
 let streamingAssistantBody = null;
 let sessionGeneration = 0;
 let inspectionGeneration = 0;
+const sessionUiStates = new Map();
+
+function getSessionUiState(sessionId) {
+  const key = String(sessionId);
+  if (!sessionUiStates.has(key)) {
+    sessionUiStates.set(key, {
+      sessionId,
+      messages: new Map(),
+      runs: new Map(),
+      eventCursors: new Map(),
+      toolCalls: new Map(),
+    });
+  }
+  return sessionUiStates.get(key);
+}
+
+function applySessionSnapshot(sessionId, snapshot) {
+  const state = getSessionUiState(sessionId);
+  state.messages.clear();
+  for (const [index, message] of (snapshot.messages || []).entries()) {
+    const id = message.id === undefined || message.id === null ? `snapshot:${index}` : String(message.id);
+    state.messages.set(id, message);
+  }
+  state.runs = new Map((snapshot.runs || []).map((run) => [run.run_id, run]));
+  return state;
+}
+
+function recordRunEvent(event, scope) {
+  const sessionId = event.session_id ?? scope?.sessionId ?? selectedSession;
+  const runId = event.run_id ?? scope?.runId ?? activeRunId;
+  if (sessionId === null || sessionId === undefined || !runId) return true;
+  const state = getSessionUiState(sessionId);
+  if (scope?.eventId !== undefined && scope.eventId !== "") {
+    try {
+      const eventCursor = BigInt(scope.eventId);
+      const previousCursor = state.eventCursors.get(runId);
+      if (previousCursor !== undefined && eventCursor <= previousCursor) return false;
+      state.eventCursors.set(runId, eventCursor);
+    } catch {
+      // Backend run_events IDs are integers; still render malformed-ID events for diagnosis.
+    }
+  }
+  const run = state.runs.get(runId) || {run_id: runId};
+  if (event.kind === "started") run.status = "running";
+  if (event.kind === "done") run.status = event.status;
+  state.runs.set(runId, run);
+  if (event.tool_call_id) {
+    const callKey = JSON.stringify([sessionId, runId, event.tool_call_id]);
+    const previous = state.toolCalls.get(callKey);
+    if (event.kind === "tool_call") {
+      if (previous) return false;
+      state.toolCalls.set(callKey, {call: event, result: null, status: "running"});
+    } else if (event.kind === "tool_result") {
+      if (previous?.result) return false;
+      state.toolCalls.set(callKey, {
+        ...(previous || {}),
+        tool_call_id: event.tool_call_id,
+        result: event,
+        status: event.is_error ? "failed" : "succeeded",
+      });
+    }
+  }
+  return true;
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -46,6 +110,7 @@ function isCurrentSession(sessionId, generation) {
 function showLogin(message = "") {
   sessionGeneration += 1;
   inspectionGeneration += 1;
+  sessionUiStates.clear();
   $("sandbox").hidden = true;
   $("login-panel").hidden = false;
   $("login-error").textContent = message;
@@ -101,9 +166,12 @@ $("logout").onclick = async () => {
   }
 };
 
-function addChatLine(role, text, extra = "") {
+function addChatLine(role, text, extra = "", messageId = null) {
   const item = document.createElement("div");
   item.className = `message ${role}`;
+  if (messageId !== null && messageId !== undefined) {
+    item.dataset.messageId = String(messageId);
+  }
   const label = document.createElement("strong");
   label.textContent = extra || role;
   const body = document.createElement("div");
@@ -128,6 +196,7 @@ function addEvent(event, scope = null) {
   if (scope && (!isCurrentSession(scope.sessionId, scope.generation) || activeRunId !== scope.runId)) return;
   if (event.session_id !== undefined && selectedSession !== null && event.session_id !== selectedSession) return;
   if (event.run_id !== undefined && activeRunId !== null && event.run_id !== activeRunId) return;
+  if (!recordRunEvent(event, scope)) return;
   if (event.kind === "started") {
     resetAssistantStream();
     $("run-status").textContent = `Run ${event.run_id} is running`;
@@ -201,6 +270,7 @@ async function selectSession(sessionId) {
   selectedSession = sessionId;
   const data = await api(`/api/sessions/${sessionId}`);
   if (!isCurrentSession(sessionId, generation)) return;
+  applySessionSnapshot(sessionId, data);
   $("session-title").textContent = `${data.session.title || "Untitled session"} · #${sessionId}`;
   $("chat").replaceChildren();
   for (const message of data.messages) {
@@ -211,7 +281,7 @@ async function selectSession(sessionId) {
       role = "tool";
     }
     if (message.is_partial) text = `[Incomplete response]\n${text}`;
-    addChatLine(role, text);
+    addChatLine(role, text, "", message.id);
   }
   renderRuns(data.runs);
   const running = data.runs.find((run) => run.status === "running");
@@ -230,7 +300,7 @@ function connectRun(runId, afterId = 0, sessionId = selectedSession, generation 
   source.onmessage = (message) => {
     if (source !== eventSource || !isCurrentSession(sessionId, generation) || activeRunId !== runId) return;
     try {
-      addEvent(JSON.parse(message.data), {sessionId, generation, runId});
+      addEvent(JSON.parse(message.data), {sessionId, generation, runId, eventId: message.lastEventId});
     } catch (error) {
       if (isCurrentSession(sessionId, generation) && activeRunId === runId) {
         $("run-status").textContent = `Invalid event: ${error}`;

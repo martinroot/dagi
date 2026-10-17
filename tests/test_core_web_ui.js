@@ -5,7 +5,7 @@ import vm from "node:vm";
 
 function fakeElement() {
   return {
-    children: [], textContent: "", disabled: false, value: "", hidden: false,
+    children: [], textContent: "", disabled: false, value: "", hidden: false, dataset: {},
     scrollTop: 0, scrollHeight: 0, className: "",
     classList: {toggle() {}},
     append(...children) { this.children.push(...children); },
@@ -144,4 +144,74 @@ test("switching to a session without runs clears the previous run inspector", as
   assert.equal(elements.get("tools").textContent, "[]");
   assert.equal(elements.get("usage").textContent, "{}");
   assert.equal(elements.get("budget-usage").textContent, "{}");
+});
+
+test("duplicate persisted SSE event ids do not render a tool call twice", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "active"},
+      runs: [{run_id: "run-active", status: "running"}],
+      messages: [],
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  const event = {
+    kind: "tool_call", session_id: 1, run_id: "run-active", tool_call_id: "call-1",
+    tool_name: "read_file", tool_args: {path: "src/main.py"},
+  };
+  const frame = {data: JSON.stringify(event), lastEventId: "37"};
+  source.onmessage(frame);
+  source.onmessage(frame);
+  const rendered = elements.get("chat").children.filter((item) => item.children[0].textContent.includes("call-1"));
+  assert.equal(rendered.length, 1);
+});
+
+test("saved messages keep their persisted message identity in the UI model", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "history"}, runs: [],
+      messages: [{id: 42, role: "assistant", content: "saved"}],
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  assert.equal(elements.get("chat").children[0].dataset.messageId, "42");
+});
+
+test("run state ignores an older event cursor delivered after a newer one", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "active"},
+      runs: [{run_id: "run-active", status: "running"}],
+      messages: [],
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({
+    lastEventId: "37",
+    data: JSON.stringify({kind: "tool_call", session_id: 1, run_id: "run-active", tool_call_id: "call-new", tool_name: "write_file", tool_args: {path: "new.txt"}}),
+  });
+  source.onmessage({
+    lastEventId: "36",
+    data: JSON.stringify({kind: "tool_call", session_id: 1, run_id: "run-active", tool_call_id: "call-old", tool_name: "write_file", tool_args: {path: "old.txt"}}),
+  });
+  const rendered = elements.get("chat").children.filter((item) => item.children[0].textContent.includes("call-"));
+  assert.equal(rendered.length, 1);
+  assert.match(rendered[0].children[0].textContent, /call-new/);
 });
