@@ -5,8 +5,8 @@ This is the single repository-level status map for the sandbox roadmap supplied 
 - Umbrella: [#16 — sandbox UI integration](https://github.com/martinroot/dagi/issues/16) (open until all remaining acceptance criteria are complete).
 - Integration umbrella: [#20 — incremental 0.3.0 integration](https://github.com/martinroot/dagi/issues/20).
 - Current branch: `main`.
-- Verified HEAD: `33657abc10d7bacce4d6e7b3462886e5b30a970b`; remote `main` matches.
-- Verification at this checkpoint: `pytest -q` — **126 passed**; `uv build` produced wheel and sdist; both `static/app.js` and `static/index.html` are in the wheel.
+- Verified code checkpoint: `e49e4011d83ef33747bcfc2fc6ba3823c3172cb8`; remote `main` matched before this roadmap-only update.
+- Verification at this checkpoint: `pytest -q` — **129 passed**; Node UI — **14 passed**; `uv build` produced wheel and sdist; both `static/app.js` and `static/index.html` are in the wheel.
 - Deployment boundary: no service restart or live `DAGI_HOME` migration has been performed. Backend changes are not claimed as active in the running service; #15 backup/restore rehearsal remains required before any live schema migration.
 
 ## Ten implementation iterations
@@ -28,9 +28,9 @@ This is the single repository-level status map for the sandbox roadmap supplied 
 
 | ID | Status | Issue | Verified implementation/evidence |
 |---|---|---|---|
-| SB-01 — stable UI state keyed by session/run/tool call; saved message IDs; no duplicate replay | Done | [#24 closed](https://github.com/martinroot/dagi/issues/24) | `b44931e`, `eff6f5d`; snapshot/replay tests; included in 126-test suite |
-| SB-02 — one updating generic tool card with status, duration, result/error and unknown-outcome handling | Done | [#25 closed](https://github.com/martinroot/dagi/issues/25) | `371a42f`, `2484c12`; Node UI regressions and explicit tool outcome event |
-| SB-03 — backward-compatible structured presentation metadata and specialized built-in renderers | In progress | [#26 open](https://github.com/martinroot/dagi/issues/26) | `33657ab` persists optional bounded presentation metadata and adds an additive SQLite column migration; built-in renderers remain |
+| SB-01 — stable UI state keyed by session/run/tool call; saved message IDs; no duplicate replay | Done | [#24 closed](https://github.com/martinroot/dagi/issues/24) | `b44931e`, `eff6f5d`; snapshot/replay tests; included in latest 129-test suite |
+| SB-02 — one updating generic tool card with status, duration, result/error and unknown-outcome handling | Done | [#25 closed](https://github.com/martinroot/dagi/issues/25) | `371a42f`, `2484c12`; Node UI regressions and explicit tool outcome event, included in latest 129-test suite |
+| SB-03 — backward-compatible structured presentation metadata and specialized built-in renderers | In progress | [#26 open](https://github.com/martinroot/dagi/issues/26) | `33657ab` persists bounded metadata; `e49e401` adds `read_file` metadata and numbered file renderer; remaining built-ins are open |
 | SB-04 — truthful live chat, safe Markdown, drafts, input and history-preserving scroll | Pending | [#27 open](https://github.com/martinroot/dagi/issues/27) | Not started |
 | SB-05 — consistent snapshot cursor, bounded event paging, gap-free SSE recovery and long-run replay | Done | [#28 closed](https://github.com/martinroot/dagi/issues/28) | `55d7f09`, `49ae883`; tests cover snapshot/subscription gap, 501 events over multiple pages, terminal cursor ordering |
 | SB-06 — parent/child tree and asynchronous delegation | Pending | [#29 open](https://github.com/martinroot/dagi/issues/29) | Existing child lineage/workspace/inbox foundation: `4a1cebd`, `ff6fba0`; async-spawn WIP remains safely stashed and is not deployed |
@@ -55,8 +55,8 @@ This is the single repository-level status map for the sandbox roadmap supplied 
 
 ## Current SB-03 sequence
 
-1. Persist optional presentation metadata atomically with tool outcomes/events (foundation pushed in `33657ab`).
-2. Add structured `read_file` result and renderer (path, byte size, line numbers, truncation, artifact reference).
+1. Persist optional presentation metadata atomically with tool outcomes/events (done in `33657ab`).
+2. Add structured `read_file` result and renderer (done in `e49e401`: path, byte size, line numbers, truncation, artifact reference).
 3. Add `write_file`/`list_dir` renderers; capture prior file content only with a strict size cap before offering a diff.
 4. Add memory/skills renderers.
 5. Add delegation/command renderers with explicit policy and structured diagnostics.
