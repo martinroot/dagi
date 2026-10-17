@@ -308,6 +308,34 @@ def test_public_registration_adds_custom_tool_without_changing_builtins(tmp_path
     state.close()
 
 
+def test_provider_tool_specs_explain_runtime_recovery_without_changing_schema(tmp_path):
+    state, tools = make_tools(tmp_path)
+    tools.register(Tool(
+        "custom_action", "Perform a custom action.",
+        {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]},
+        lambda _args: "done",
+        retryable=False,
+    ))
+    functions = {
+        spec.name: spec.openai_spec()["function"]
+        for spec in tools.specs()
+    }
+
+    read_file = functions["read_file"]
+    write_file = functions["write_file"]
+    custom = functions["custom_action"]
+    assert "runtime recovery is runtime-controlled" in read_file["description"].lower()
+    assert "declared retryable" in read_file["description"].lower()
+    assert "effect verifier is configured" in write_file["description"].lower()
+    assert "not declared retryable" in custom["description"].lower()
+    assert "effect verifier" in custom["description"].lower()
+    assert read_file["parameters"] == {
+        "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"],
+    }
+    assert write_file["parameters"]["required"] == ["path", "content"]
+    state.close()
+
+
 def test_duplicate_public_tool_names_are_rejected(tmp_path):
     state, tools = make_tools(tmp_path)
     duplicate = Tool("read_file", "shadow", {"type": "object"}, lambda _args: "shadow")

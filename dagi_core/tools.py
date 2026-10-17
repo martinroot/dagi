@@ -138,11 +138,21 @@ class Tool:
     context_aware: bool = False
 
     def openai_spec(self) -> dict[str, Any]:
+        retry_state = "declared retryable" if self.retryable else "not declared retryable"
+        verifier_state = (
+            "An effect verifier is configured; the runtime uses its result and persisted outcome."
+            if self.verify_effect is not None
+            else "No effect verifier is configured; the runtime preserves uncertainty rather than inferring success."
+        )
+        recovery = (
+            f" Runtime recovery is runtime-controlled; this tool is {retry_state}. "
+            f"{verifier_state} Never infer permission to repeat an uncertain effect."
+        )
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description,
+                "description": self.description.rstrip() + recovery,
                 "parameters": self.parameters,
             },
         }
