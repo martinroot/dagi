@@ -219,8 +219,10 @@ def test_cli_resume_uses_saved_session_workspace(tmp_path, monkeypatch, capsys):
 
     home = tmp_path / "home"
     seed = StateStore(home / "state.sqlite3")
-    saved_session = seed.create_session("saved")
-    seed.set_session_workspace(saved_session, ".dagi-children/cli-child")
+    parent_session = seed.create_session("parent")
+    saved_session = seed.create_session(
+        "saved child", parent_id=parent_session, workspace=".dagi-children/cli-child"
+    )
     seed.close()
 
     monkeypatch.setenv("DAGI_API_KEY", "placeholder-for-test")
@@ -260,12 +262,21 @@ def test_cli_resume_uses_saved_session_workspace(tmp_path, monkeypatch, capsys):
     cli.run()
 
     child_workspace = tmp_path / "workspace" / ".dagi-children" / "cli-child"
-    system_content = provider.requests[0][0]["content"]
-    start = system_content.index("DAGI_RUNTIME_CONTEXT_JSON_BEGIN\n") + len("DAGI_RUNTIME_CONTEXT_JSON_BEGIN\n")
-    end = system_content.index("\nDAGI_RUNTIME_CONTEXT_JSON_END", start)
-    runtime_context = json.loads(system_content[start:end])
-    assert runtime_context["environment"]["entry_point"] == "cli"
-    assert runtime_context["environment"]["workspace"] == ".dagi-children/cli-child"
+
+    def runtime_context(request):
+        system_content = request[0]["content"]
+        start = system_content.index("DAGI_RUNTIME_CONTEXT_JSON_BEGIN\n") + len("DAGI_RUNTIME_CONTEXT_JSON_BEGIN\n")
+        end = system_content.index("\nDAGI_RUNTIME_CONTEXT_JSON_END", start)
+        return json.loads(system_content[start:end])
+
+    first_context = runtime_context(provider.requests[0])
+    next_context = runtime_context(provider.requests[1])
+    assert first_context["identity"]["session_id"] == saved_session
+    assert first_context["identity"]["parent_session_id"] == parent_session
+    assert first_context["identity"]["role"] == "child"
+    assert first_context["environment"]["entry_point"] == "cli"
+    assert first_context["environment"]["workspace"] == ".dagi-children/cli-child"
+    assert first_context["limits"]["remaining_provider_calls"] == next_context["limits"]["remaining_provider_calls"] + 1
     assert (child_workspace / "from-cli.txt").read_text(encoding="utf-8") == "session scoped"
     assert not (tmp_path / "workspace" / "from-cli.txt").exists()
     assert "Saved in this session." in capsys.readouterr().out
