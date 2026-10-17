@@ -279,3 +279,42 @@ test("session restore replays the snapshot events before opening SSE after its c
   assert.match(elements.get("chat").children.map((item) => item.children[1].textContent).join("\n"), /restored output/);
   assert.match(sources.at(-1).url, /after=37$/);
 });
+
+test("session restore drains every event page before opening SSE", async () => {
+  let pageCalls = 0;
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "long run"},
+      runs: [{run_id: "run-long", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-long": 501},
+    });
+    if (url === "/api/runs/run-long/events?format=json&after=0&through=501&limit=500") {
+      pageCalls += 1;
+      return jsonResponse({
+        run_id: "run-long", through: 501, has_more: true, next_after: 500,
+        events: Array.from({length: 500}, (_, index) => ({
+          id: index + 1, run_id: "run-long", session_id: 1,
+          event: {kind: "text", session_id: 1, run_id: "run-long", text: index === 0 ? "begin " : "middle "},
+        })),
+      });
+    }
+    if (url === "/api/runs/run-long/events?format=json&after=500&through=501&limit=500") {
+      pageCalls += 1;
+      return jsonResponse({
+        run_id: "run-long", through: 501, has_more: false, next_after: 501,
+        events: [{id: 501, run_id: "run-long", session_id: 1,
+          event: {kind: "text", session_id: 1, run_id: "run-long", text: "end"}}],
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  assert.equal(pageCalls, 2);
+  assert.match(elements.get("chat").children[0].children[1].textContent, /^begin /);
+  assert.match(elements.get("chat").children[0].children[1].textContent, /end$/);
+  assert.match(sources.at(-1).url, /after=501$/);
+});

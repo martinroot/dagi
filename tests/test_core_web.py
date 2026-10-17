@@ -424,6 +424,40 @@ def test_session_detail_snapshot_includes_message_ids_tool_state_and_event_curso
         _stop(server, thread)
 
 
+def test_snapshot_to_sse_gap_replays_only_events_after_snapshot_cursor(tmp_path):
+    app = WebApp(_config(tmp_path), provider_factory=lambda *_args: SlowProvider())
+    server, thread, base = _start(app)
+    try:
+        _, _, created = _request(f"{base}/api/sessions", "POST", {"title": "snapshot gap"})
+        session_id = json.loads(created)["session_id"]
+        state = StateStore(app.config.database)
+        run_id = state.create_run(session_id)
+        first_id = state.append_run_event(session_id, run_id, {
+            "kind": "text", "session_id": session_id, "run_id": run_id, "text": "snapshot event",
+        })
+        snapshot = state.session_snapshot(session_id)
+        assert snapshot is not None
+        cursor = snapshot["event_cursors"][run_id]
+        assert cursor == first_id
+        second_id = state.append_run_event(session_id, run_id, {
+            "kind": "text", "session_id": session_id, "run_id": run_id, "text": "gap event",
+        })
+        state.finish_run(run_id, "completed")
+        state.close()
+
+        _, _, page_body = _request(
+            f"{base}/api/runs/{run_id}/events?format=json&after=0&through={cursor}&limit=10"
+        )
+        page = json.loads(page_body)
+        assert [row["id"] for row in page["events"]] == [first_id]
+        _, _, stream = _request(f"{base}/api/runs/{run_id}/events?after={cursor}")
+        frames = [json.loads(line[6:]) for line in stream.decode().splitlines() if line.startswith("data: ")]
+        assert [event["text"] for event in frames] == ["gap event"]
+        assert second_id > cursor
+    finally:
+        _stop(server, thread)
+
+
 def test_running_snapshot_cursor_does_not_skip_uncommitted_terminal_event(tmp_path):
     state = StateStore(tmp_path / "state.sqlite3")
     session_id = state.create_session("terminal race")
