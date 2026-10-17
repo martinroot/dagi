@@ -30,6 +30,27 @@ function applySessionSnapshot(sessionId, snapshot) {
     state.messages.set(id, message);
   }
   state.runs = new Map((snapshot.runs || []).map((run) => [run.run_id, run]));
+  state.toolCalls.clear();
+  for (const call of snapshot.tool_calls || []) {
+    const key = JSON.stringify([sessionId, call.run_id, call.tool_call_id]);
+    const result = call.result === null || call.result === undefined ? null : {
+      kind: "tool_result",
+      tool_call_id: call.tool_call_id,
+      tool_name: call.name,
+      text: call.result,
+      is_error: call.status !== "succeeded",
+    };
+    state.toolCalls.set(key, {
+      call: {
+        kind: "tool_call",
+        tool_call_id: call.tool_call_id,
+        tool_name: call.name,
+        tool_args: call.arguments,
+      },
+      result,
+      status: call.status,
+    });
+  }
   return state;
 }
 

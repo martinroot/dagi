@@ -233,16 +233,11 @@ class WebApp:
                     elif match := re.fullmatch(r"/api/sessions/(\d+)", path):
                         session_id = int(match.group(1))
                         with _StateContext(self._state()) as state:
-                            session = state.get_session(session_id)
-                            if session is None:
+                            snapshot = state.session_snapshot(session_id)
+                            if snapshot is None:
                                 self._send_json(404, {"error": "session not found"})
                                 return
-                            self._send_json(200, {
-                                "session": session,
-                                "runs": state.list_runs(session_id, 100),
-                                "messages": state.message_records(session_id),
-                                "goals": state.list_goals(session_id),
-                            })
+                            self._send_json(200, snapshot)
                     elif match := re.fullmatch(r"/api/goals/([^/]+)", path):
                         with _StateContext(self._state()) as state:
                             goal = state.get_goal(match.group(1))

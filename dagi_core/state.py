@@ -703,6 +703,36 @@ class StateStore:
         ).fetchone()
         return dict(row) if row is not None else None
 
+    def session_snapshot(self, session_id: int) -> dict[str, Any] | None:
+        """Read session history, run state, tools, goals, and event cursors atomically."""
+        self._db.execute("BEGIN")
+        try:
+            session = self.get_session(session_id)
+            if session is None:
+                self._db.commit()
+                return None
+            runs = self.list_runs(session_id, 100)
+            event_cursors: dict[str, int] = {}
+            for run in runs:
+                row = self._db.execute(
+                    "SELECT COALESCE(MAX(id), 0) AS cursor FROM run_events WHERE run_id=?",
+                    (run["run_id"],),
+                ).fetchone()
+                event_cursors[run["run_id"]] = int(row["cursor"])
+            snapshot = {
+                "session": session,
+                "runs": runs,
+                "messages": self.message_records(session_id),
+                "tool_calls": self.list_tool_calls(session_id),
+                "goals": self.list_goals(session_id),
+                "event_cursors": event_cursors,
+            }
+            self._db.commit()
+            return snapshot
+        except Exception:
+            self._db.rollback()
+            raise
+
     def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
         rows = self._db.execute(
             "SELECT id, title, created_at, parent_id, workspace FROM sessions ORDER BY id DESC LIMIT ?",

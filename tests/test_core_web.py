@@ -10,6 +10,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 from dagi_core.auth import hash_password
 from dagi_core.config import Config
 from dagi_core.provider import StreamEvent
+from dagi_core.state import StateStore
 from dagi_core.usage import UsagePolicy
 from dagi_core.web import WebApp
 
@@ -382,5 +383,42 @@ def test_web_stop_cancels_run_and_persists_terminal_event(tmp_path):
         _, _, stream = _request(f"{base}/api/runs/{run_id}/events?after=0")
         frames = [json.loads(line[6:]) for line in stream.decode().splitlines() if line.startswith("data: ")]
         assert any(event["kind"] == "done" and event["status"] == "cancelled" for event in frames)
+    finally:
+        _stop(server, thread)
+
+
+def test_session_detail_snapshot_includes_message_ids_tool_state_and_event_cursor(tmp_path):
+    app = WebApp(_config(tmp_path), provider_factory=lambda *_args: SlowProvider())
+    server, thread, base = _start(app)
+    try:
+        _, _, created = _request(f"{base}/api/sessions", "POST", {"title": "snapshot test"})
+        session_id = json.loads(created)["session_id"]
+        state = StateStore(app.config.database)
+        run_id = state.create_run(session_id)
+        message_id = state.append_message(session_id, {"role": "user", "content": "read a file"})
+        state.save_tool_round(
+            session_id,
+            run_id,
+            {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "snapshot-call", "type": "function",
+                "function": {"name": "read_file", "arguments": '{"path":"src/main.py"}'},
+            }]},
+            [{"id": "snapshot-call", "name": "read_file", "arguments": {"path": "src/main.py"}}],
+        )
+        state.mark_tool_call_running("snapshot-call")
+        event_id = state.append_run_event(session_id, run_id, {
+            "kind": "tool_call", "session_id": session_id, "run_id": run_id,
+            "tool_call_id": "snapshot-call", "tool_name": "read_file",
+            "tool_args": {"path": "src/main.py"},
+        })
+        state.close()
+
+        _, _, body = _request(f"{base}/api/sessions/{session_id}")
+        snapshot = json.loads(body)
+        assert snapshot["event_cursors"][run_id] == event_id
+        assert any(message["id"] == message_id for message in snapshot["messages"])
+        call = next(call for call in snapshot["tool_calls"] if call["tool_call_id"] == "snapshot-call")
+        assert call["run_id"] == run_id
+        assert call["status"] == "running"
     finally:
         _stop(server, thread)

@@ -215,3 +215,42 @@ test("run state ignores an older event cursor delivered after a newer one", asyn
   assert.equal(rendered.length, 1);
   assert.match(rendered[0].children[0].textContent, /call-new/);
 });
+
+test("replaying persisted active-run tool events does not duplicate snapshot content", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "active"},
+      runs: [{run_id: "run-active", status: "running"}],
+      messages: [
+        {id: 10, role: "assistant", content: null, tool_calls: [{
+          id: "call-1", type: "function",
+          function: {name: "read_file", arguments: '{"path":"src/main.py"}'},
+        }]},
+        {id: 11, role: "tool", tool_call_id: "call-1", name: "read_file", content: "file contents"},
+      ],
+      tool_calls: [{
+        tool_call_id: "call-1", run_id: "run-active", name: "read_file",
+        arguments: {path: "src/main.py"}, status: "succeeded", result: "file contents",
+      }],
+      event_cursors: {"run-active": "38"},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({
+    lastEventId: "37",
+    data: JSON.stringify({kind: "tool_call", session_id: 1, run_id: "run-active", tool_call_id: "call-1", tool_name: "read_file", tool_args: {path: "src/main.py"}}),
+  });
+  source.onmessage({
+    lastEventId: "38",
+    data: JSON.stringify({kind: "tool_result", session_id: 1, run_id: "run-active", tool_call_id: "call-1", tool_name: "read_file", text: "file contents", is_error: false}),
+  });
+  const transcript = elements.get("chat").children.map((item) => item.children[1].textContent).join("\n");
+  assert.equal(transcript.split("read_file").length - 1, 1);
+  assert.equal(transcript.split("file contents").length - 1, 1);
+});
