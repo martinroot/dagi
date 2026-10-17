@@ -8,14 +8,16 @@ import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    parent_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+    workspace TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
@@ -137,6 +139,14 @@ CREATE TABLE IF NOT EXISTS goal_runs (
     run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS goal_runs_goal_id ON goal_runs(goal_id);
+CREATE TABLE IF NOT EXISTS inbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    child_run_id TEXT UNIQUE NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS inbox_session_id ON inbox(session_id, id);
 """
 
 
@@ -161,6 +171,12 @@ class StateStore:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
         self._db.executescript(_SCHEMA)
+        session_columns = {row[1] for row in self._db.execute("PRAGMA table_info(sessions)")}
+        if "parent_id" not in session_columns:
+            self._db.execute("ALTER TABLE sessions ADD COLUMN parent_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL")
+        if "workspace" not in session_columns:
+            self._db.execute("ALTER TABLE sessions ADD COLUMN workspace TEXT NOT NULL DEFAULT ''")
+        self._db.execute("CREATE INDEX IF NOT EXISTS sessions_parent_id ON sessions(parent_id)")
         run_columns = {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}
         if "agent_id" not in run_columns:
             self._db.execute("ALTER TABLE runs ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'dagi'")
@@ -188,9 +204,26 @@ class StateStore:
     def close(self) -> None:
         self._db.close()
 
-    def create_session(self, title: str | None = None) -> int:
+    def create_session(
+        self,
+        title: str | None = None,
+        *,
+        parent_id: int | None = None,
+        workspace: str = "",
+    ) -> int:
+        if title is not None and not isinstance(title, str):
+            raise ValueError("session title must be text")
+        if parent_id is not None:
+            if isinstance(parent_id, bool) or not isinstance(parent_id, int) or self.get_session(parent_id) is None:
+                raise ValueError("parent session does not exist")
+        if not isinstance(workspace, str) or len(workspace) > 4096 or "\x00" in workspace or "\\" in workspace:
+            raise ValueError("session workspace must be a relative path of at most 4096 characters")
+        workspace_path = PurePosixPath(workspace)
+        if workspace_path.is_absolute() or ".." in workspace_path.parts:
+            raise ValueError("session workspace must stay inside the configured root")
         cursor = self._db.execute(
-            "INSERT INTO sessions(title, created_at) VALUES(?, ?)", (title, _now())
+            "INSERT INTO sessions(title, created_at, parent_id, workspace) VALUES(?, ?, ?, ?)",
+            (title, _now(), parent_id, workspace),
         )
         self._db.commit()
         return int(cursor.lastrowid)
@@ -661,16 +694,83 @@ class StateStore:
 
     def get_session(self, session_id: int) -> dict[str, Any] | None:
         row = self._db.execute(
-            "SELECT id, title, created_at FROM sessions WHERE id=?", (session_id,)
+            "SELECT id, title, created_at, parent_id, workspace FROM sessions WHERE id=?", (session_id,)
         ).fetchone()
         return dict(row) if row is not None else None
 
     def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
         rows = self._db.execute(
-            "SELECT id, title, created_at FROM sessions ORDER BY id DESC LIMIT ?",
+            "SELECT id, title, created_at, parent_id, workspace FROM sessions ORDER BY id DESC LIMIT ?",
             (max(1, min(int(limit), 100)),),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def fork_session(self, session_id: int) -> int:
+        source = self.get_session(session_id)
+        if source is None:
+            raise ValueError("session not found")
+        if self.list_tool_calls(session_id, ("pending", "running", "uncertain")):
+            raise ValueError("resolve outstanding tools before cloning")
+        if any(run["status"] == "running" for run in self.list_runs(session_id)):
+            raise ValueError("stop the session before cloning")
+        title = (source["title"] or "Session") + " (clone)"
+        clone_id = self.create_session(title, workspace=source["workspace"])
+        with self._db:
+            for message in self.messages(session_id, include_metadata=True):
+                self._insert_message(clone_id, message)
+        return clone_id
+
+    def children(self, session_id: int) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            "SELECT id FROM sessions WHERE parent_id=? ORDER BY id", (session_id,)
+        ).fetchall()
+        children = []
+        for row in rows:
+            child = self.get_session(row["id"])
+            if child is not None:
+                children.append({"session": child, "runs": self.list_runs(child["id"], 10)})
+        return children
+
+    def notify_parent(self, child_session_id: int, run_id: str) -> None:
+        child = self.get_session(child_session_id)
+        run = self.get_run(run_id)
+        if child is None or child["parent_id"] is None:
+            return
+        if run is None or run["session_id"] != child_session_id:
+            raise ValueError("child run does not belong to the child session")
+        answer = next((
+            message["content"] for message in reversed(self.messages(child_session_id, include_metadata=True))
+            if message["role"] == "assistant" and message.get("content") and not message.get("is_partial")
+        ), "")
+        payload = {
+            "child_session_id": child_session_id,
+            "run_id": run_id,
+            "status": run["status"],
+            "result": answer[:4_000],
+            "workspace": child["workspace"],
+        }
+        self._db.execute(
+            "INSERT OR IGNORE INTO inbox(session_id, child_run_id, payload, created_at) VALUES(?, ?, ?, ?)",
+            (child["parent_id"], run_id, json.dumps(payload, ensure_ascii=False), _now()),
+        )
+        self._db.commit()
+
+    def inbox(self, session_id: int) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            "SELECT payload FROM inbox WHERE session_id=? ORDER BY id", (session_id,)
+        ).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
+    def set_session_workspace(self, session_id: int, workspace: str) -> None:
+        if not isinstance(workspace, str) or "\\" in workspace or "\x00" in workspace:
+            raise ValueError("session workspace must be a relative path")
+        relative = PurePosixPath(workspace)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("session workspace must stay inside the configured root")
+        cursor = self._db.execute("UPDATE sessions SET workspace=? WHERE id=?", (workspace, session_id))
+        if cursor.rowcount != 1:
+            raise ValueError("session not found")
+        self._db.commit()
 
     def _insert_message(self, session_id: int, message: dict[str, Any]) -> int:
         role = message.get("role")
