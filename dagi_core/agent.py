@@ -11,7 +11,7 @@ from uuid import uuid4
 from .context import ContextBuilder, ContextLimitError
 from .provider import IncompleteStreamError, OpenAICompatibleProvider
 from .runtime_context import build_runtime_context, extract_assignment_contract, render_runtime_context
-from .state import StateStore
+from .state import StateStore, tool_action_fingerprint, tool_failure_fingerprint
 from .tools import ToolError, ToolExecutionContext, ToolRegistry, ToolResult
 from .usage import UsagePolicy
 
@@ -56,14 +56,18 @@ class Agent:
         agent_id: str | None = None,
         agent_name: str | None = None,
         entry_point: Literal["cli", "web", "unknown"] = "unknown",
+        repeat_failure_threshold: int = 2,
     ):
         if entry_point not in {"cli", "web", "unknown"}:
             raise ValueError("entry_point must be cli, web, or unknown")
+        if isinstance(repeat_failure_threshold, bool) or not isinstance(repeat_failure_threshold, int) or not 1 <= repeat_failure_threshold <= 10:
+            raise ValueError("repeat-failure threshold must be 1..10")
         self.provider = provider
         self.model = getattr(provider, "model", "unknown")
         self.agent_id = agent_id or str(uuid4())
         self.agent_name = agent_name or self.model
         self.entry_point = entry_point
+        self.repeat_failure_threshold = repeat_failure_threshold
         self._tools_source = tools
         self.state = state
         self._default_session_id = session_id
@@ -132,6 +136,8 @@ class Agent:
         user_message_id: int | None = None
         assignment_contract_loaded = False
         assignment_contract: dict[str, Any] | None = None
+        repeated_failure_evidence: dict[str, list[str]] = {}
+        blocked_tool_actions: set[str] = set()
 
         def runtime_context_factory() -> str:
             nonlocal assignment_contract_loaded, assignment_contract
@@ -159,6 +165,7 @@ class Agent:
                 usage_summary=self.state.usage_summary_for_budget(run_id),
                 usage_policy=self.usage_policy,
                 assignment_contract=assignment_contract,
+                operational_reflections=self.state.list_tool_reflections(session_id, limit=3),
             )
             return render_runtime_context(snapshot)
 
@@ -176,6 +183,15 @@ class Agent:
             name = str(call["name"])
             arguments = call["arguments"]
             check_cancelled()
+            fingerprint_arguments = (
+                arguments if isinstance(arguments, dict)
+                else {"__invalid_arguments_type__": type(arguments).__name__}
+            )
+            action_fingerprint = tool_action_fingerprint(name, fingerprint_arguments)
+            blocked_call = (
+                action_fingerprint in blocked_tool_actions
+                or self.state.get_tool_failure_blocker(run_id, action_fingerprint) is not None
+            )
             tools.set_execution_context(
                 ToolExecutionContext(
                     session_id, run_id, depth, self.model, cancel_event, register_provider,
@@ -194,20 +210,32 @@ class Agent:
                 raise RunCancelled("run cancelled before tool action")
             outcome = "succeeded"
             error = None
-            try:
-                returned = tools.call(name, arguments)
-                result = returned if isinstance(returned, ToolResult) else ToolResult(str(returned))
-                if result.is_error:
-                    outcome = "failed"
-                    error = result.content
-            except ToolError as exc:
-                result = ToolResult(f"[tool error] {exc}", is_error=True)
+            error_category = None
+            if blocked_call:
+                result = ToolResult(
+                    "[tool error] repeated identical tool failure blocked by runtime; change the action or report a blocker",
+                    is_error=True,
+                )
                 outcome = "failed"
-                error = str(exc)
-            except Exception as exc:
-                result = ToolResult(f"[tool outcome unknown] {type(exc).__name__}: {exc}", is_error=True)
-                outcome = "uncertain"
-                error = str(exc)
+                error = result.content
+                error_category = "repeated_failure_blocked"
+            else:
+                try:
+                    returned = tools.call(name, arguments)
+                    result = returned if isinstance(returned, ToolResult) else ToolResult(str(returned))
+                    if result.is_error:
+                        outcome = "failed"
+                        error = result.content
+                        error_category = "tool_reported_error"
+                except ToolError as exc:
+                    result = ToolResult(f"[tool error] {exc}", is_error=True)
+                    outcome = "failed"
+                    error = str(exc)
+                    error_category = "tool_error"
+                except Exception as exc:
+                    result = ToolResult(f"[tool outcome unknown] {type(exc).__name__}: {exc}", is_error=True)
+                    outcome = "uncertain"
+                    error = str(exc)
             result_event = AgentEvent(
                 kind="tool_result",
                 session_id=session_id,
@@ -222,8 +250,32 @@ class Agent:
             self.state.complete_tool_call(
                 session_id, run_id, call_id, outcome, result.content, error, asdict(result_event)
             )
+            if outcome == "failed" and not blocked_call:
+                category = error_category or "tool_reported_error"
+                failure_fingerprint = tool_failure_fingerprint(action_fingerprint, category)
+                evidence_ids = repeated_failure_evidence.setdefault(failure_fingerprint, [])
+                if call_id not in evidence_ids:
+                    evidence_ids.append(call_id)
+                if len(evidence_ids) >= self.repeat_failure_threshold:
+                    self.state.record_tool_reflection(
+                        session_id=session_id,
+                        run_id=run_id,
+                        failure_fingerprint=failure_fingerprint,
+                        action_fingerprint=action_fingerprint,
+                        tool_name=name,
+                        error_category=category,
+                        observed={
+                            "outcome": "failed",
+                            "repeat_count": len(evidence_ids),
+                            "blocker": True,
+                        },
+                        evidence_ids=evidence_ids[:12],
+                        repeat_count=len(evidence_ids),
+                        blocker=True,
+                    )
+                    blocked_tool_actions.add(action_fingerprint)
             yield result_event
-            return outcome
+            return "blocked" if blocked_call else outcome
 
         try:
             yield event("started", status="running")
@@ -264,9 +316,13 @@ class Agent:
             pending = self.state.list_tool_calls(session_id, ("pending",))
             for call in pending:
                 outcome = yield from dispatch_tool_call(call)
-                if outcome == "uncertain":
-                    error_text = f"tool call {call['tool_call_id']} has an unknown outcome; stopping this run"
-                    status = "error"
+                if outcome in {"uncertain", "blocked"}:
+                    error_text = (
+                        f"tool call {call['tool_call_id']} has an unknown outcome; stopping this run"
+                        if outcome == "uncertain"
+                        else "repeated identical tool failure blocked; stopping this run"
+                    )
+                    status = "error" if outcome == "uncertain" else "limit"
                     yield event("error", text=error_text)
                     yield event("done", status=status)
                     return
@@ -354,6 +410,37 @@ class Agent:
                             session_id,
                             {"role": "assistant", "content": assistant_content},
                         )
+                    completed_calls = [
+                        call for call in self.state.list_tool_calls(session_id)
+                        if call["run_id"] == run_id
+                    ]
+                    successful_calls = [call for call in completed_calls if call["status"] == "succeeded"]
+                    if assistant_content and successful_calls:
+                        conclusion_action_fingerprint = tool_action_fingerprint("run", {
+                            "tool_names": [call["name"] for call in successful_calls],
+                            "tool_outcomes": [call["status"] for call in completed_calls],
+                        })
+                        conclusion_fingerprint = tool_failure_fingerprint(
+                            conclusion_action_fingerprint, "run_concluded"
+                        )
+                        self.state.record_tool_reflection(
+                            session_id=session_id,
+                            run_id=run_id,
+                            trigger="run_concluded",
+                            failure_fingerprint=conclusion_fingerprint,
+                            action_fingerprint=conclusion_action_fingerprint,
+                            tool_name="run",
+                            error_category="none",
+                            observed={
+                                "provider_turn_completed": True,
+                                "goal_status": "unknown",
+                                "successful_tool_count": len(successful_calls),
+                                "known_failure_count": sum(call["status"] == "failed" for call in completed_calls),
+                            },
+                            evidence_ids=[run_id, *[call["tool_call_id"] for call in successful_calls[:11]]],
+                            repeat_count=1,
+                            blocker=False,
+                        )
                     current_text_parts.clear()
                     status = "completed"
                     break
@@ -392,12 +479,16 @@ class Agent:
                 current_text_parts.clear()
                 for call in tool_calls:
                     outcome = yield from dispatch_tool_call(call)
-                    if outcome == "uncertain":
-                        error_text = f"tool call {call['id']} has an unknown outcome; stopping this run"
-                        status = "error"
+                    if outcome in {"uncertain", "blocked"}:
+                        error_text = (
+                            f"tool call {call['id']} has an unknown outcome; stopping this run"
+                            if outcome == "uncertain"
+                            else "repeated identical tool failure blocked; stopping this run"
+                        )
+                        status = "error" if outcome == "uncertain" else "limit"
                         yield event("error", text=error_text)
                         break
-                if status == "error":
+                if status in {"error", "limit"}:
                     break
             else:
                 status = "limit"

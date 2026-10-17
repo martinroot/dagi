@@ -61,6 +61,7 @@ def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
             max_depth=config.max_delegation_depth,
             max_children=config.max_child_agents_per_run,
             shell_enabled=config.enable_shell,
+            repeat_failure_threshold=config.goal_repeat_failure_threshold,
             approve_shell=approve_shell_command if config.enable_shell else None,
         )
         delegation.register(tools)
@@ -79,6 +80,7 @@ def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
         usage_policy=config.usage_policy,
         context_builder=context_builder,
         entry_point="cli",
+        repeat_failure_threshold=config.goal_repeat_failure_threshold,
     )
 
 

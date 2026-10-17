@@ -85,6 +85,7 @@ def build_runtime_context(
     usage_summary: dict[str, Any],
     usage_policy: UsagePolicy,
     assignment_contract: dict[str, Any] | None = None,
+    operational_reflections: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build an allowlisted snapshot; never copy environment/config or transcript text."""
     if entry_point not in {"cli", "web", "unknown"}:
@@ -114,6 +115,32 @@ def build_runtime_context(
         check_ids = None
     else:
         check_ids = [_bounded_text(item, 128) for item in check_ids[:12] if isinstance(item, str)]
+    reflection_summary = []
+    for item in (operational_reflections or [])[:3]:
+        if not isinstance(item, dict):
+            continue
+        evidence_ids = item.get("evidence_ids")
+        observed = item.get("observed") if isinstance(item.get("observed"), dict) else {}
+        allowed_observation = {
+            key: observed[key]
+            for key in (
+                "outcome", "repeat_count", "provider_turn_completed", "goal_status",
+                "successful_tool_count", "known_failure_count",
+            )
+            if key in observed and isinstance(observed[key], (str, int, bool))
+        }
+        reflection_summary.append({
+            "trigger": _bounded_text(item.get("trigger", "unknown"), 64),
+            "run_id": _bounded_text(item.get("run_id", "unknown"), 128),
+            "tool_name": _bounded_text(item.get("tool_name", "unknown"), 64),
+            "error_category": _bounded_text(item.get("error_category", "unknown"), 96),
+            "observed": allowed_observation,
+            "evidence_ids": [
+                _bounded_text(value, 128) for value in evidence_ids[:4] if isinstance(value, str)
+            ] if isinstance(evidence_ids, list) else [],
+            "repeat_count": int(item.get("repeat_count", 1)),
+            "blocker": bool(item.get("blocker", False)),
+        })
 
     return {
         "schema_version": 1,
@@ -156,6 +183,7 @@ def build_runtime_context(
             "remaining_cost_usd": remaining_cost,
             "cost_status": cost_status,
         },
+        "operational_reflections": reflection_summary,
     }
 
 
@@ -164,6 +192,20 @@ def render_runtime_context(context: dict[str, Any]) -> str:
     serialized = json.dumps(context, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     if len(serialized.encode("utf-8")) > MAX_RUNTIME_CONTEXT_BYTES:
         raise ValueError(f"runtime context exceeds {MAX_RUNTIME_CONTEXT_BYTES} bytes")
+    reflection_triggers = {
+        item.get("trigger") for item in context.get("operational_reflections", [])
+        if isinstance(item, dict)
+    }
+    reflection_guidance = []
+    if "repeated_tool_failure" in reflection_triggers:
+        reflection_guidance.append(
+            "A repeated known tool failure was observed. Choose a materially different action or report a blocker; "
+            "do not infer that an uncertain side effect is safe to repeat."
+        )
+    if "run_concluded" in reflection_triggers:
+        reflection_guidance.append(
+            "A tool-using provider turn previously completed; this observation does not establish goal completion."
+        )
     return (
         "\n\n"
         + _ARCHITECTURE
@@ -175,4 +217,5 @@ def render_runtime_context(context: dict[str, Any]) -> str:
         + serialized
         + "\n"
         + RUNTIME_CONTEXT_END
+        + ("\n" + " ".join(reflection_guidance) if reflection_guidance else "")
     )

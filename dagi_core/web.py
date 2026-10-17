@@ -889,6 +889,7 @@ class WebApp:
                 max_depth=self.config.max_delegation_depth,
                 max_children=self.config.max_child_agents_per_run,
                 shell_enabled=False,
+                repeat_failure_threshold=self.config.goal_repeat_failure_threshold,
             )
             delegation.register(tools)
             context = ContextBuilder(
@@ -908,6 +909,7 @@ class WebApp:
                 agent_id=self.agent_id,
                 agent_name=self.config.model,
                 entry_point="web",
+                repeat_failure_threshold=self.config.goal_repeat_failure_threshold,
             )
             for _event in agent.run_turn(
                 message,

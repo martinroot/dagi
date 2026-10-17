@@ -33,6 +33,7 @@ class DelegationManager:
         max_depth: int = 2,
         max_children: int = 3,
         shell_enabled: bool = False,
+        repeat_failure_threshold: int = 2,
         approve_shell: Callable[[str], bool] | None = None,
     ):
         if max_depth < 0 or max_children < 0:
@@ -49,6 +50,7 @@ class DelegationManager:
         self.max_depth = max_depth
         self.max_children = max_children
         self.shell_enabled = shell_enabled
+        self.repeat_failure_threshold = repeat_failure_threshold
         self.approve_shell = approve_shell
 
     def register(self, tools: ToolRegistry) -> None:
@@ -190,6 +192,7 @@ class DelegationManager:
                 agent_id=child_agent_id,
                 agent_name=model,
                 entry_point=context.entry_point,
+                repeat_failure_threshold=self.repeat_failure_threshold,
             )
             prompt = (
                 f"Delegated task:\n{task.strip()}\n\n"

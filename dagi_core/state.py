@@ -86,6 +86,24 @@ CREATE TABLE IF NOT EXISTS run_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS run_events_run_id ON run_events(run_id, id);
+CREATE TABLE IF NOT EXISTS tool_reflections (
+    reflection_id TEXT PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    trigger TEXT NOT NULL CHECK (trigger IN ('repeated_tool_failure', 'run_concluded')),
+    failure_fingerprint TEXT NOT NULL,
+    action_fingerprint TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    error_category TEXT NOT NULL,
+    observed_json TEXT NOT NULL,
+    evidence_ids_json TEXT NOT NULL,
+    repeat_count INTEGER NOT NULL CHECK (repeat_count >= 1),
+    blocker INTEGER NOT NULL CHECK (blocker IN (0, 1)),
+    created_at TEXT NOT NULL,
+    UNIQUE(run_id, failure_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS tool_reflections_session_created
+    ON tool_reflections(session_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -225,6 +243,36 @@ def goal_lesson_fingerprint(check_type: str, check_key: str, action_fingerprint:
         "action_fingerprint": action_fingerprint,
     }
     serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+_VOLATILE_TOOL_ARGUMENT_KEYS = {"timestamp", "created_at", "updated_at", "request_id", "event_id", "nonce"}
+
+
+def _normalize_tool_arguments(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _normalize_tool_arguments(item)
+            for key, item in sorted(value.items())
+            if str(key).lower() not in _VOLATILE_TOOL_ARGUMENT_KEYS
+        }
+    if isinstance(value, list):
+        return [_normalize_tool_arguments(item) for item in value]
+    return value
+
+
+def tool_action_fingerprint(tool_name: str, arguments: dict[str, Any]) -> str:
+    payload = {"tool_name": tool_name, "arguments": _normalize_tool_arguments(arguments)}
+    serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def tool_failure_fingerprint(action_fingerprint: str, error_category: str) -> str:
+    serialized = json.dumps(
+        {"action_fingerprint": action_fingerprint, "error_category": error_category},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
@@ -419,6 +467,124 @@ class StateStore:
             }
             for row in rows
         ]
+
+    def record_tool_reflection(
+        self,
+        *,
+        session_id: int,
+        run_id: str,
+        failure_fingerprint: str,
+        action_fingerprint: str,
+        tool_name: str,
+        error_category: str,
+        observed: dict[str, Any],
+        evidence_ids: list[str],
+        repeat_count: int,
+        blocker: bool,
+        trigger: str = "repeated_tool_failure",
+    ) -> dict[str, Any]:
+        run = self.get_run(run_id)
+        if run is None or run["session_id"] != session_id:
+            raise ValueError("tool reflection must belong to its run session")
+        if trigger not in {"repeated_tool_failure", "run_concluded"}:
+            raise ValueError("unsupported tool reflection trigger")
+        if (trigger == "repeated_tool_failure") != bool(blocker):
+            raise ValueError("tool reflection blocker must match its trigger")
+        if not isinstance(tool_name, str) or not tool_name or len(tool_name) > 128:
+            raise ValueError("tool reflection name must be bounded text")
+        if not isinstance(error_category, str) or not error_category or len(error_category) > 128:
+            raise ValueError("tool reflection error category must be bounded text")
+        for fingerprint in (failure_fingerprint, action_fingerprint):
+            if not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
+                raise ValueError("tool reflection fingerprints must be lowercase SHA-256 hex")
+        if isinstance(repeat_count, bool) or not isinstance(repeat_count, int) or repeat_count < 1:
+            raise ValueError("tool reflection repeat count must be positive")
+        if not isinstance(blocker, bool):
+            raise ValueError("tool reflection blocker flag must be boolean")
+        if not isinstance(observed, dict):
+            raise ValueError("tool reflection observation must be an object")
+        observed_json = json.dumps(observed, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        if len(observed_json) > 1024:
+            raise ValueError("tool reflection observation exceeds its size limit")
+        if not isinstance(evidence_ids, list) or not 1 <= len(evidence_ids) <= 12:
+            raise ValueError("tool reflection requires 1..12 evidence IDs")
+        unique_ids = []
+        for evidence_id in evidence_ids:
+            if not isinstance(evidence_id, str) or not evidence_id.strip() or len(evidence_id) > 256:
+                raise ValueError("tool reflection evidence IDs must be bounded non-empty text")
+            if evidence_id not in unique_ids:
+                unique_ids.append(evidence_id)
+        valid_ids = {
+            row[0] for row in self._db.execute(
+                "SELECT tool_call_id FROM tool_executions WHERE run_id=? AND session_id=?",
+                (run_id, session_id),
+            ).fetchall()
+        }
+        if trigger == "run_concluded":
+            valid_ids.add(run_id)
+        if not set(unique_ids).issubset(valid_ids):
+            raise ValueError("tool reflection evidence must reference its run or calls from that run")
+        reflection_id = str(uuid.uuid4())
+        now = _now()
+        prior = self._db.execute(
+            "SELECT * FROM tool_reflections WHERE run_id=? AND failure_fingerprint=?",
+            (run_id, failure_fingerprint),
+        ).fetchone()
+        if prior:
+            merged = json.loads(prior["evidence_ids_json"])
+            for evidence_id in unique_ids:
+                if evidence_id not in merged:
+                    merged.append(evidence_id)
+            self._db.execute(
+                """UPDATE tool_reflections SET observed_json=?, evidence_ids_json=?,
+                          repeat_count=max(repeat_count, ?), blocker=max(blocker, ?)
+                   WHERE run_id=? AND failure_fingerprint=?""",
+                (observed_json, json.dumps(merged[:12], ensure_ascii=False), repeat_count,
+                 int(blocker), run_id, failure_fingerprint),
+            )
+        else:
+            self._db.execute(
+                """INSERT INTO tool_reflections(
+                       reflection_id, session_id, run_id, trigger, failure_fingerprint,
+                       action_fingerprint, tool_name, error_category, observed_json,
+                       evidence_ids_json, repeat_count, blocker, created_at
+                   ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (reflection_id, session_id, run_id, trigger, failure_fingerprint, action_fingerprint,
+                 tool_name, error_category, observed_json, json.dumps(unique_ids, ensure_ascii=False),
+                 repeat_count, int(blocker), now),
+            )
+        self._db.commit()
+        row = self._db.execute(
+            "SELECT * FROM tool_reflections WHERE run_id=? AND failure_fingerprint=?",
+            (run_id, failure_fingerprint),
+        ).fetchone()
+        return self._decode_tool_reflection(row)
+
+    def list_tool_reflections(self, session_id: int, *, limit: int = 3) -> list[dict[str, Any]]:
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise ValueError("tool reflection limit must be an integer")
+        page_limit = max(1, min(limit, 3))
+        rows = self._db.execute(
+            """SELECT * FROM tool_reflections WHERE session_id=?
+               ORDER BY created_at DESC LIMIT ?""",
+            (session_id, page_limit),
+        ).fetchall()
+        return [self._decode_tool_reflection(row) for row in rows]
+
+    def get_tool_failure_blocker(self, run_id: str, action_fingerprint: str) -> dict[str, Any] | None:
+        row = self._db.execute(
+            """SELECT * FROM tool_reflections WHERE run_id=? AND action_fingerprint=?
+               AND trigger='repeated_tool_failure' AND blocker=1 ORDER BY created_at DESC LIMIT 1""",
+            (run_id, action_fingerprint),
+        ).fetchone()
+        return self._decode_tool_reflection(row) if row is not None else None
+
+    def _decode_tool_reflection(self, row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["observed"] = json.loads(item.pop("observed_json"))
+        item["evidence_ids"] = json.loads(item.pop("evidence_ids_json"))
+        item["blocker"] = bool(item["blocker"])
+        return item
 
     def finish_run(self, run_id: str, status: str, error: str | None = None) -> None:
         if status not in {"completed", "error", "limit", "cancelled"}:

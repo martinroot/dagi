@@ -60,6 +60,13 @@ def test_agent_persists_tool_call_before_side_effect_then_continues(tmp_path: Pa
     assert stored_call["retryable"] is True
     assert stored_call["has_verifier"] is True
     assert state.get_run(events[-1].run_id)["status"] == "completed"
+    conclusion = state.list_tool_reflections(session, limit=3)[0]
+    assert conclusion["trigger"] == "run_concluded"
+    assert conclusion["observed"]["provider_turn_completed"] is True
+    assert conclusion["observed"]["goal_status"] == "unknown"
+    assert events[-1].run_id in conclusion["evidence_ids"]
+    assert "call-1" in conclusion["evidence_ids"]
+    assert conclusion["blocker"] is False
     assert any(event.kind == "tool_result" for event in events)
     assert any(event.kind == "text" and event.text == "Saved." for event in events)
     state.close()
@@ -87,6 +94,103 @@ def test_agent_returns_tool_error_without_skipping_follow_up(tmp_path: Path):
     assert tool_result.is_error is True
     assert tool_result.outcome == "failed"
     assert events[-1].kind == "done"
+    state.close()
+
+
+def test_repeated_known_tool_failure_is_reflected_and_blocks_an_unchanged_retry(tmp_path):
+    from dagi_core.runtime_context import RUNTIME_CONTEXT_END, RUNTIME_CONTEXT_START
+
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    calls = {"count": 0}
+
+    def fail_known(_arguments):
+        calls["count"] += 1
+        return ToolResult("[tool error] deterministic fixture failure", is_error=True)
+
+    tools = ToolRegistry(tmp_path / "workspace", state, session)
+    tools.register(Tool(
+        "fail_known", "Fail deterministically.",
+        {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]},
+        fail_known,
+    ))
+    provider = FakeProvider([
+        [StreamEvent(kind="tool_call", tool_call={"id": "fail-1", "name": "fail_known", "arguments": {"value": "payload-marker"}}), StreamEvent(kind="finish", finish_reason="tool_calls")],
+        [StreamEvent(kind="tool_call", tool_call={"id": "fail-2", "name": "fail_known", "arguments": {"value": "payload-marker"}}), StreamEvent(kind="finish", finish_reason="tool_calls")],
+        [StreamEvent(kind="tool_call", tool_call={"id": "fail-3", "name": "fail_known", "arguments": {"value": "payload-marker"}}), StreamEvent(kind="finish", finish_reason="tool_calls")],
+    ])
+
+    events = list(Agent(provider, tools, state, session, repeat_failure_threshold=2).run_turn("try the action"))
+
+    assert events[-1].status == "limit"
+    assert len(provider.requests) == 3
+    assert calls["count"] == 2
+    system = provider.requests[2][0]["content"]
+    start = system.split(RUNTIME_CONTEXT_START, 1)[1].split(RUNTIME_CONTEXT_END, 1)[0]
+    snapshot = json.loads(start)
+    reflection = snapshot["operational_reflections"][0]
+    assert reflection["trigger"] == "repeated_tool_failure"
+    assert reflection["repeat_count"] == 2
+    assert "fail-1" in reflection["evidence_ids"] and "fail-2" in reflection["evidence_ids"]
+    assert "fail-3" in reflection["evidence_ids"] or state.get_tool_call("fail-3")["status"] == "failed"
+    assert "repeated identical tool failure" in state.get_tool_call("fail-3")["error"]
+    reflection = state.list_tool_reflections(session, limit=3)[0]
+    assert reflection["blocker"] is True
+    assert "payload-marker" not in json.dumps(reflection)
+    replay = state.record_tool_reflection(
+        session_id=session,
+        run_id=events[-1].run_id,
+        failure_fingerprint=reflection["failure_fingerprint"],
+        action_fingerprint=reflection["action_fingerprint"],
+        tool_name=reflection["tool_name"],
+        error_category=reflection["error_category"],
+        observed=reflection["observed"],
+        evidence_ids=reflection["evidence_ids"],
+        repeat_count=reflection["repeat_count"],
+        blocker=True,
+    )
+    assert replay["reflection_id"] == reflection["reflection_id"]
+    assert len(state.list_tool_reflections(session, limit=3)) == 1
+    other_session = state.create_session("unrelated")
+    assert state.list_tool_reflections(other_session, limit=3) == []
+    run_id = events[-1].run_id
+    state.close()
+    reopened = StateStore(tmp_path / "state.sqlite3")
+    saved = reopened.list_tool_reflections(session, limit=3)[0]
+    assert saved["reflection_id"] == reflection["reflection_id"]
+    assert saved["repeat_count"] == 2
+    assert saved["blocker"] is True
+    assert reopened.get_run(run_id)["status"] == "limit"
+    reopened.close()
+
+
+def test_changed_arguments_do_not_share_a_tool_failure_fingerprint(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    attempts = []
+
+    def fail_known(arguments):
+        attempts.append(arguments["value"])
+        return ToolResult("[tool error] deterministic fixture failure", is_error=True)
+
+    tools = ToolRegistry(tmp_path / "workspace", state, session)
+    tools.register(Tool(
+        "fail_known", "Fail deterministically.",
+        {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]},
+        fail_known,
+    ))
+    provider = FakeProvider([
+        [StreamEvent(kind="tool_call", tool_call={"id": "different-1", "name": "fail_known", "arguments": {"value": "one"}}), StreamEvent(kind="finish", finish_reason="tool_calls")],
+        [StreamEvent(kind="tool_call", tool_call={"id": "different-2", "name": "fail_known", "arguments": {"value": "two"}}), StreamEvent(kind="finish", finish_reason="tool_calls")],
+        [StreamEvent(kind="text", text="I changed the input."), StreamEvent(kind="finish", finish_reason="stop")],
+    ])
+
+    events = list(Agent(provider, tools, state, session).run_turn("try a different value"))
+
+    assert events[-1].status == "completed"
+    assert attempts == ["one", "two"]
+    assert len(provider.requests) == 3
+    assert state.list_tool_reflections(session, limit=3) == []
     state.close()
 
 
@@ -156,6 +260,7 @@ def test_tool_result_event_exposes_explicit_uncertain_outcome(tmp_path):
     assert result.outcome == "uncertain"
     saved = next(row["event"] for row in state.list_run_events(result.run_id) if row["event"]["kind"] == "tool_result")
     assert saved["outcome"] == "uncertain"
+    assert state.list_tool_reflections(session, limit=3) == []
     state.close()
 
 
