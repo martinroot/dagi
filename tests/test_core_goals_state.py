@@ -42,6 +42,39 @@ def test_goal_lifecycle_persists_checks_feedback_and_budget_group(tmp_path):
     reopened.close()
 
 
+def test_goal_reflection_is_idempotent_and_records_the_following_check(tmp_path):
+    path = tmp_path / "state.sqlite3"
+    state = StateStore(path)
+    session_id = state.create_session("reflection")
+    goal_id = state.create_goal(
+        session_id, "create valid JSON", [{"type": "json_valid", "path": "result.json"}], 2
+    )
+    observation = {"passed": False, "detail": "file is absent"}
+    kwargs = {
+        "goal_id": goal_id,
+        "iteration": 0,
+        "check_index": 0,
+        "expected": {"type": "json_valid", "path": "result.json"},
+        "observed": observation,
+        "evidence_ids": ["goal-check:goal-1:0:0"],
+    }
+
+    first = state.record_goal_reflection(**kwargs)
+    replay = state.record_goal_reflection(**kwargs)
+    assert replay["id"] == first["id"]
+    assert state.update_goal_reflection_followup(goal_id, 0, True) is True
+    state.close()
+
+    reopened = StateStore(path)
+    reflections = reopened.list_goal_reflections(goal_id)
+    assert len(reflections) == 1
+    assert reflections[0]["observed"] == observation
+    assert reflections[0]["cause_hypothesis"] is None
+    assert reflections[0]["next_change"] is None
+    assert reflections[0]["following_check_passed"] is True
+    reopened.close()
+
+
 def test_startup_recovery_marks_running_goals_interrupted(tmp_path):
     path = tmp_path / "state.sqlite3"
     state = StateStore(path)

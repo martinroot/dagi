@@ -140,6 +140,23 @@ CREATE TABLE IF NOT EXISTS goal_runs (
     run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS goal_runs_goal_id ON goal_runs(goal_id);
+CREATE TABLE IF NOT EXISTS goal_reflections (
+    reflection_id TEXT PRIMARY KEY,
+    goal_id TEXT NOT NULL REFERENCES goals(goal_id) ON DELETE CASCADE,
+    iteration INTEGER NOT NULL CHECK (iteration BETWEEN 0 AND 10),
+    check_index INTEGER NOT NULL CHECK (check_index >= 0),
+    trigger TEXT NOT NULL CHECK (trigger IN ('acceptance_check_failed')),
+    expected_json TEXT NOT NULL,
+    observed_json TEXT NOT NULL,
+    evidence_ids_json TEXT NOT NULL,
+    cause_hypothesis TEXT,
+    next_change TEXT,
+    following_check_passed INTEGER CHECK (following_check_passed IN (0, 1)),
+    created_at TEXT NOT NULL,
+    UNIQUE(goal_id, iteration, check_index)
+);
+CREATE INDEX IF NOT EXISTS goal_reflections_goal_iteration
+    ON goal_reflections(goal_id, iteration DESC, check_index DESC);
 CREATE TABLE IF NOT EXISTS inbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -1012,7 +1029,94 @@ class StateStore:
         result["runs"] = [item[0] for item in self._db.execute(
             "SELECT run_id FROM goal_runs WHERE goal_id=? ORDER BY rowid", (goal_id,)
         ).fetchall()]
+        result["reflections"] = self.list_goal_reflections(goal_id, limit=20)
         return result
+
+    def list_goal_reflections(self, goal_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        if not isinstance(limit, int) or isinstance(limit, bool):
+            raise ValueError("reflection limit must be an integer")
+        page_limit = max(1, min(limit, 200))
+        rows = self._db.execute(
+            """SELECT * FROM goal_reflections WHERE goal_id=?
+               ORDER BY iteration DESC, check_index DESC LIMIT ?""",
+            (goal_id, page_limit),
+        ).fetchall()
+        return [self._decode_goal_reflection(row) for row in reversed(rows)]
+
+    def record_goal_reflection(
+        self,
+        *,
+        goal_id: str,
+        iteration: int,
+        check_index: int,
+        expected: dict[str, Any],
+        observed: dict[str, Any],
+        evidence_ids: list[str],
+    ) -> dict[str, Any]:
+        goal = self.get_goal(goal_id)
+        if goal is None:
+            raise ValueError("goal not found")
+        if isinstance(iteration, bool) or not isinstance(iteration, int) or not 0 <= iteration <= goal["max_iterations"]:
+            raise ValueError("reflection iteration is out of range")
+        if isinstance(check_index, bool) or not isinstance(check_index, int) or not 0 <= check_index < len(goal["checks"]):
+            raise ValueError("reflection check index is out of range")
+        if not isinstance(expected, dict) or not isinstance(observed, dict) or observed.get("passed") is not False:
+            raise ValueError("reflection requires a bounded failed-check observation")
+        if not isinstance(evidence_ids, list) or len(evidence_ids) > 12:
+            raise ValueError("reflection evidence IDs must be a list of at most 12 items")
+        unique_ids = []
+        for evidence_id in evidence_ids:
+            if not isinstance(evidence_id, str) or not evidence_id.strip() or len(evidence_id) > 256:
+                raise ValueError("reflection evidence IDs must be non-empty text of at most 256 characters")
+            if evidence_id not in unique_ids:
+                unique_ids.append(evidence_id)
+        expected_json = json.dumps(expected, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        observed_json = json.dumps(observed, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        if len(expected_json) > 4096 or len(observed_json) > 2048:
+            raise ValueError("reflection observation exceeds its size limit")
+        reflection_id = str(uuid.uuid4())
+        self._db.execute(
+            """INSERT INTO goal_reflections(
+                   reflection_id, goal_id, iteration, check_index, trigger, expected_json,
+                   observed_json, evidence_ids_json, created_at
+               ) VALUES(?, ?, ?, ?, 'acceptance_check_failed', ?, ?, ?, ?)
+               ON CONFLICT(goal_id, iteration, check_index) DO NOTHING""",
+            (reflection_id, goal_id, iteration, check_index, expected_json, observed_json,
+             json.dumps(unique_ids, ensure_ascii=False), _now()),
+        )
+        self._db.commit()
+        saved = self._db.execute(
+            "SELECT * FROM goal_reflections WHERE goal_id=? AND iteration=? AND check_index=?",
+            (goal_id, iteration, check_index),
+        ).fetchone()
+        return self._decode_goal_reflection(saved)
+
+    def _decode_goal_reflection(self, row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["id"] = item.pop("reflection_id")
+        item["expected"] = json.loads(item.pop("expected_json"))
+        item["observed"] = json.loads(item.pop("observed_json"))
+        item["evidence_ids"] = json.loads(item.pop("evidence_ids_json"))
+        if item["following_check_passed"] is not None:
+            item["following_check_passed"] = bool(item["following_check_passed"])
+        return item
+
+    def update_goal_reflection_followup(self, goal_id: str, check_index: int, passed: bool) -> bool:
+        if not isinstance(passed, bool):
+            raise ValueError("reflection follow-up result must be boolean")
+        cursor = self._db.execute(
+            """UPDATE goal_reflections SET following_check_passed=?
+               WHERE reflection_id=(
+                   SELECT reflection_id FROM goal_reflections
+                   WHERE goal_id=? AND check_index=? AND following_check_passed IS NULL
+                   ORDER BY iteration DESC LIMIT 1
+               )""",
+            (int(passed), goal_id, check_index),
+        )
+        if cursor.rowcount:
+            self._db.commit()
+            return True
+        return False
 
     def list_goals(self, session_id: int) -> list[dict[str, Any]]:
         rows = self._db.execute(

@@ -1,5 +1,6 @@
 import json
 import time
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from http.cookiejar import CookieJar
@@ -84,6 +85,93 @@ class WriteResultProvider:
             (self.workspace / "result.txt").write_text("ready", encoding="utf-8")
         yield StreamEvent(kind="text", text="The goal is complete.")
         yield StreamEvent(kind="finish", finish_reason="stop")
+
+
+class ReflectionCorrectionProvider:
+    model = "test-model"
+
+    def __init__(self, workspace: Path):
+        self.workspace = workspace
+        self.requests = []
+        self.calls = 0
+
+    def stream(self, messages, _tools):
+        self.requests.append(deepcopy(messages))
+        self.calls += 1
+        if self.calls == 1:
+            prompt = "\\n".join(
+                str(message.get("content", "")) for message in messages if message.get("role") == "user"
+            ).lower()
+            if "runtime reflection record" not in prompt or "file is absent" not in prompt:
+                yield StreamEvent(kind="text", text="No actionable runtime evidence was supplied.")
+                yield StreamEvent(kind="finish", finish_reason="stop")
+                return
+            yield StreamEvent(kind="tool_call", tool_call={
+                "id": "reflection-invalid-write",
+                "name": "write_file",
+                "arguments": {"path": "result.json", "content": json.dumps({"ok": True}).replace("true", "")},
+            })
+            yield StreamEvent(kind="finish", finish_reason="tool_calls")
+            return
+        if self.calls == 3:
+            prompt = "".join(str(message.get("content", "")) for message in messages if message.get("role") == "user")
+            if "runtime reflection record" not in prompt.lower() or "jsondecodeerror" not in prompt.lower():
+                yield StreamEvent(kind="text", text="No changed corrective action was suggested.")
+                yield StreamEvent(kind="finish", finish_reason="stop")
+                return
+            yield StreamEvent(kind="tool_call", tool_call={
+                "id": "reflection-valid-write",
+                "name": "write_file",
+                "arguments": {"path": "result.json", "content": json.dumps({"ok": True})},
+            })
+            yield StreamEvent(kind="finish", finish_reason="tool_calls")
+            return
+        yield StreamEvent(kind="text", text="The failed check is now corrected.")
+        yield StreamEvent(kind="finish", finish_reason="stop")
+
+
+def test_failed_goal_check_is_recorded_and_drives_corrective_tool_action(tmp_path):
+    config = _config(tmp_path)
+    provider = ReflectionCorrectionProvider(config.workspace)
+    app = WebApp(config, lambda *_args: provider)
+    session_id = _create_session(config)
+    try:
+        goal = app.start_goal(session_id, {
+            "objective": "create valid JSON",
+            "checks": [{"type": "json_valid", "path": "result.json"}],
+            "max_iterations": 2,
+        })
+        completed = _wait_goal_terminal(config, goal["goal_id"])
+
+        assert completed["status"] == "completed", (completed, provider.requests)
+        assert completed["iteration"] == 2
+        assert len(provider.requests) == 4
+        later_prompt = "".join(
+            str(message.get("content", "")) for message in provider.requests[2] if message.get("role") == "user"
+        )
+        assert "runtime reflection record" in later_prompt.lower()
+        assert "JSONDecodeError" in later_prompt
+        reflections = completed["reflections"]
+        assert len(reflections) == 2
+        assert reflections[0]["trigger"] == "acceptance_check_failed"
+        assert reflections[0]["expected"] == {"type": "json_valid", "path": "result.json"}
+        assert reflections[0]["observed"]["detail"] == "file is absent"
+        assert reflections[0]["cause_hypothesis"] is None
+        assert reflections[0]["next_change"] is None
+        assert reflections[0]["following_check_passed"] is False
+        assert completed["runs"][0] in reflections[1]["evidence_ids"]
+        assert "reflection-invalid-write" in reflections[1]["evidence_ids"]
+        assert reflections[1]["observed"]["passed"] is False
+        assert reflections[1]["following_check_passed"] is True
+        state = StateStore(config.database)
+        invalid_call = state.get_tool_call("reflection-invalid-write")
+        valid_call = state.get_tool_call("reflection-valid-write")
+        assert invalid_call is not None and invalid_call["status"] == "succeeded"
+        assert valid_call is not None and valid_call["status"] == "succeeded"
+        state.close()
+        assert json.loads((config.workspace / "result.json").read_text(encoding="utf-8")) == {"ok": True}
+    finally:
+        app.close()
 
 
 def test_goal_completes_only_after_all_checks_pass(tmp_path):

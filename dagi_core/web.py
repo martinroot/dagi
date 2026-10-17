@@ -13,6 +13,7 @@ from decimal import Decimal
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
+from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
@@ -615,9 +616,50 @@ class WebApp:
                 if control.cancellation.is_set():
                     state.update_goal(goal_id, "interrupted", feedback=feedback)
                     return
+                for check_index, item in enumerate(feedback):
+                    state.update_goal_reflection_followup(goal_id, check_index, bool(item["passed"]))
                 if all(item["passed"] for item in feedback):
                     state.update_goal(goal_id, "completed", feedback=feedback)
                     return
+                latest_run_id = goal["runs"][-1] if goal["runs"] else None
+                latest_calls = (
+                    [call for call in state.list_tool_calls(goal["session_id"]) if call["run_id"] == latest_run_id]
+                    if latest_run_id else []
+                )
+                for check_index, item in enumerate(feedback):
+                    if item["passed"]:
+                        continue
+                    check = item["check"]
+                    if check["type"] == "command":
+                        expected = {
+                            "type": "command",
+                            "executable": Path(check["argv"][0]).name[:128],
+                            "argument_count": len(check["argv"]),
+                        }
+                        detail = item.get("detail")
+                        observed_detail = {
+                            "exit_code": detail.get("exit_code"),
+                            "timed_out": bool(detail.get("timed_out")),
+                            "stdout_truncated": bool(detail.get("stdout_truncated")),
+                            "stderr_truncated": bool(detail.get("stderr_truncated")),
+                        } if isinstance(detail, dict) else "command check failed"
+                    else:
+                        expected = {"type": check["type"], "path": str(check["path"])[:256]}
+                        if check["type"] == "file_contains":
+                            expected["required_text_length"] = len(check["text"])
+                        observed_detail = str(item.get("detail", ""))[:256]
+                    evidence_ids = [f"goal-check:{goal_id}:{goal['iteration']}:{check_index}"]
+                    if latest_run_id:
+                        evidence_ids.append(latest_run_id)
+                        evidence_ids.extend(call["tool_call_id"] for call in latest_calls[:10])
+                    state.record_goal_reflection(
+                        goal_id=goal_id,
+                        iteration=goal["iteration"],
+                        check_index=check_index,
+                        expected=expected,
+                        observed={"passed": False, "detail": observed_detail},
+                        evidence_ids=evidence_ids[:12],
+                    )
                 if goal["iteration"] >= goal["max_iterations"]:
                     state.update_goal(goal_id, "capped", feedback=feedback)
                     return
@@ -646,6 +688,13 @@ class WebApp:
                     "Acceptance checks and latest failures:\n"
                     + json.dumps(feedback, ensure_ascii=False)
                 )
+                reflections = state.list_goal_reflections(goal_id, limit=3)
+                if reflections:
+                    message += (
+                        "\nRuntime reflection record (observed facts; hypotheses are not verified):\n"
+                        + json.dumps(reflections, ensure_ascii=False)
+                        + "\nUse the evidence to change the next action; report a blocker rather than repeating an unchanged failed action."
+                    )
                 self._execute_run(run_id, goal["session_id"], message, control)
                 completed_run = state.get_run(run_id)
                 if completed_run is None:
