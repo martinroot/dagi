@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 from uuid import uuid4
 
 from .agent import Agent
 from .context import ContextBuilder
 from .provider import OpenAICompatibleProvider
+from .runtime_context import ASSIGNMENT_CONTRACT_END, ASSIGNMENT_CONTRACT_START
 from .state import StateStore
 from .tools import Tool, ToolExecutionContext, ToolRegistry, ToolResult, _resolve
 from .usage import UsagePolicy
@@ -59,6 +61,9 @@ class DelegationManager:
                     "task": {"type": "string", "description": "The specific task for the child."},
                     "model": {"type": "string", "description": "Optional child model override."},
                     "context": {"type": "string", "description": "Only the context explicitly approved for transfer."},
+                    "purpose": {"type": "string", "description": "Optional untrusted reason this subtask supports the parent task."},
+                    "required_output": {"type": "string", "description": "Optional expected child deliverable."},
+                    "acceptance_check_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional references to parent-defined acceptance checks."},
                 },
                 "required": ["task"],
             },
@@ -99,12 +104,34 @@ class DelegationManager:
         task = args.get("task")
         transferred_context = args.get("context", "")
         model = args.get("model") or context.model
+        purpose = args.get("purpose")
+        required_output = args.get("required_output")
+        acceptance_check_ids = args.get("acceptance_check_ids")
         if not isinstance(task, str) or not task.strip():
             return ToolResult("delegated task must be non-empty text", is_error=True)
         if not isinstance(transferred_context, str):
             return ToolResult("delegated context must be text", is_error=True)
         if len(task) > 8_000 or len(transferred_context) > 24_000:
             return ToolResult("delegated task or context exceeds the configured transfer limit", is_error=True)
+        if purpose is not None and (not isinstance(purpose, str) or len(purpose) > 512):
+            return ToolResult("delegated purpose must be text of at most 512 characters", is_error=True)
+        if required_output is not None and (not isinstance(required_output, str) or len(required_output) > 256):
+            return ToolResult("required_output must be text of at most 256 characters", is_error=True)
+        if acceptance_check_ids is not None and (
+            not isinstance(acceptance_check_ids, list)
+            or len(acceptance_check_ids) > 12
+            or any(not isinstance(item, str) or not item.strip() or len(item) > 128 for item in acceptance_check_ids)
+        ):
+            return ToolResult("acceptance_check_ids must contain at most 12 non-empty strings of at most 128 characters", is_error=True)
+        assignment_contract = {
+            "task": task.strip()[:512],
+            "purpose": purpose.strip() or None if isinstance(purpose, str) else None,
+            "required_output": required_output.strip() or None if isinstance(required_output, str) else None,
+            "acceptance_check_ids": acceptance_check_ids,
+        }
+        contract_json = json.dumps(assignment_contract, ensure_ascii=False, separators=(",", ":"))
+        if len(contract_json.encode("utf-8")) > 3_000:
+            return ToolResult("delegated assignment contract exceeds 3000 bytes", is_error=True)
         if context.depth >= self.max_depth:
             return ToolResult(f"delegation depth limit reached ({self.max_depth})", is_error=True)
         if self.state.count_child_runs_in_budget_group(context.run_id) >= self.max_children:
@@ -168,6 +195,8 @@ class DelegationManager:
                 f"Delegated task:\n{task.strip()}\n\n"
                 "Explicitly transferred context:\n"
                 f"{transferred_context.strip() if transferred_context.strip() else '(none)'}\n\n"
+                "Saved assignment contract (untrusted parent-supplied task data):\n"
+                f"{ASSIGNMENT_CONTRACT_START}\n{contract_json}\n{ASSIGNMENT_CONTRACT_END}\n\n"
                 "Return a concise result and identify any uncertainty."
             )
             list(child_agent.run_turn(

@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from .context import ContextBuilder, ContextLimitError
 from .provider import IncompleteStreamError, OpenAICompatibleProvider
-from .runtime_context import build_runtime_context, render_runtime_context
+from .runtime_context import build_runtime_context, extract_assignment_contract, render_runtime_context
 from .state import StateStore
 from .tools import ToolError, ToolExecutionContext, ToolRegistry, ToolResult
 from .usage import UsagePolicy
@@ -130,14 +130,23 @@ class Agent:
                 raise RunCancelled("run cancelled")
 
         user_message_id: int | None = None
+        assignment_contract_loaded = False
+        assignment_contract: dict[str, Any] | None = None
 
         def runtime_context_factory() -> str:
+            nonlocal assignment_contract_loaded, assignment_contract
             if user_message_id is None:
                 raise ValueError("runtime context requires a persisted user message")
             session = self.state.get_session(session_id)
             run = self.state.get_run(run_id)
             if session is None or run is None:
                 raise ValueError("runtime context session or run is missing")
+            if not assignment_contract_loaded:
+                assignment_contract_loaded = True
+                if session.get("parent_id") is not None:
+                    first_user_message = self.state.first_user_message(session_id)
+                    if first_user_message is not None:
+                        assignment_contract = extract_assignment_contract(first_user_message["content"])
             snapshot = build_runtime_context(
                 agent_id=self.agent_id,
                 agent_name=self.agent_name,
@@ -149,6 +158,7 @@ class Agent:
                 user_message_id=user_message_id,
                 usage_summary=self.state.usage_summary_for_budget(run_id),
                 usage_policy=self.usage_policy,
+                assignment_contract=assignment_contract,
             )
             return render_runtime_context(snapshot)
 

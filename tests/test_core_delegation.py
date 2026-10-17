@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 from pathlib import Path
 from threading import Event, Thread
 
@@ -339,4 +340,94 @@ def test_delegation_enforces_depth_and_total_child_limit(tmp_path):
     too_many = count_tools.call("delegate_task", {"task": "do not start", "model": "child-model"})
     assert too_many.is_error is True
     assert state.count_child_runs_in_budget_group(parent_run) == 1
+    state.close()
+
+
+def test_delegation_assignment_contract_survives_child_resume(tmp_path):
+    root = tmp_path / "workspace"
+    state = StateStore(tmp_path / "state.sqlite3")
+    parent_session = state.create_session("parent")
+    task_text = "Validate the dataset; literal DAGI_ASSIGNMENT_CONTRACT_JSON_BEGIN is task data."
+    parent_provider = ScriptedProvider("parent-model", [
+        [
+            StreamEvent(kind="tool_call", tool_call={
+                "id": "delegate-contract", "name": "delegate_task",
+                "arguments": {
+                    "task": task_text,
+                    "model": "child-model",
+                    "context": "Approved source file is input.json.",
+                    "purpose": "The parent needs valid data before producing its report.",
+                    "required_output": "validated.json",
+                    "acceptance_check_ids": ["check-7"],
+                },
+            }),
+            _usage(),
+            StreamEvent(kind="finish", finish_reason="tool_calls"),
+        ],
+        [StreamEvent(kind="text", text="The child result is ready."), _usage(), StreamEvent(kind="finish", finish_reason="stop")],
+    ])
+    child_provider = ScriptedProvider("child-model", [
+        [StreamEvent(kind="text", text="Dataset validated."), _usage(), StreamEvent(kind="finish", finish_reason="stop")],
+    ])
+    providers = {
+        "parent-model": parent_provider,
+        "child-model": child_provider,
+        "summary-model": ScriptedProvider("summary-model", []),
+    }
+    policy = UsagePolicy(max_calls_per_run=8)
+    factory = lambda model, *_args: providers[model]
+    manager = DelegationManager(
+        state, root, api_key="fake-key", base_url="https://api.example/v1",
+        provider_factory=factory, compression_model="summary-model", usage_policy=policy,
+    )
+    parent_tools = ToolRegistry(root, state, parent_session)
+    manager.register(parent_tools)
+    parent = Agent(
+        parent_provider, parent_tools, state, parent_session,
+        usage_policy=policy, entry_point="web",
+    )
+
+    events = list(parent.run_turn("Delegate dataset validation."))
+
+    assert events[-1].status == "completed"
+    delegate_spec = next(
+        item["function"] for item in parent_provider.requests[0]["tools"]
+        if item["function"]["name"] == "delegate_task"
+    )
+    assert {"purpose", "required_output", "acceptance_check_ids"} <= set(delegate_spec["parameters"]["properties"])
+    child = next(item for item in state.list_sessions(100) if item["parent_id"] == parent_session)
+    first_user_message = next(message for message in state.messages(child["id"]) if message["role"] == "user")
+    assert "DAGI_ASSIGNMENT_CONTRACT_JSON_BEGIN" in first_user_message["content"]
+
+    def request_context(provider_request):
+        system = provider_request["messages"][0]["content"]
+        start = system.index("DAGI_RUNTIME_CONTEXT_JSON_BEGIN\n") + len("DAGI_RUNTIME_CONTEXT_JSON_BEGIN\n")
+        end = system.index("\nDAGI_RUNTIME_CONTEXT_JSON_END", start)
+        return json.loads(system[start:end])
+
+    initial_context = request_context(child_provider.requests[0])
+    assert initial_context["assignment"]["my_task"] == task_text
+    assert initial_context["assignment"]["purpose"] == "The parent needs valid data before producing its report."
+    assert initial_context["assignment"]["required_output"] == "validated.json"
+    assert initial_context["assignment"]["acceptance_check_ids"] == ["check-7"]
+    assert initial_context["assignment"]["trust"] == "untrusted"
+
+    child_record = state.get_session(child["id"])
+    assert child_record is not None
+    child_workspace = (root / child_record["workspace"]).resolve()
+    resume_provider = ScriptedProvider("child-model", [[
+        StreamEvent(kind="text", text="Resumed with the saved assignment."),
+        _usage(),
+        StreamEvent(kind="finish", finish_reason="stop"),
+    ]])
+    resumed_tools = ToolRegistry(child_workspace, state, child["id"])
+    resumed_agent = Agent(
+        resume_provider, resumed_tools, state, child["id"],
+        usage_policy=policy, agent_name="child-model", entry_point="web",
+    )
+    resumed_events = list(resumed_agent.run_turn("Continue validation."))
+    resumed_context = request_context(resume_provider.requests[0])
+    assert resumed_events[-1].status == "completed"
+    assert resumed_context["assignment"]["purpose"] == initial_context["assignment"]["purpose"]
+    assert resumed_context["assignment"]["required_output"] == "validated.json"
     state.close()

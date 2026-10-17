@@ -467,6 +467,13 @@ class StateStore:
             records.append(record)
         return records
 
+    def first_user_message(self, session_id: int) -> dict[str, Any] | None:
+        row = self._db.execute(
+            "SELECT id, content FROM messages WHERE session_id=? AND role='user' ORDER BY id LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
     def usage_summary(self, run_id: str) -> dict[str, Any]:
         rows = self._db.execute(
             "SELECT usage_source, input_tokens, output_tokens, cost_usd FROM provider_calls WHERE run_id=? ORDER BY id",

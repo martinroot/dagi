@@ -13,6 +13,8 @@ MAX_RUNTIME_TEXT_CHARS = 512
 MAX_RUNTIME_TOOLS = 32
 RUNTIME_CONTEXT_START = "DAGI_RUNTIME_CONTEXT_JSON_BEGIN"
 RUNTIME_CONTEXT_END = "DAGI_RUNTIME_CONTEXT_JSON_END"
+ASSIGNMENT_CONTRACT_START = "DAGI_ASSIGNMENT_CONTRACT_JSON_BEGIN"
+ASSIGNMENT_CONTRACT_END = "DAGI_ASSIGNMENT_CONTRACT_JSON_END"
 
 _ARCHITECTURE = (
     "Dagi runs a model/tool loop: the provider proposes calls, ToolRegistry executes only enabled tools, "
@@ -28,6 +30,48 @@ def _bounded_text(value: Any, limit: int = MAX_RUNTIME_TEXT_CHARS) -> str:
     return text[:limit] + "...[truncated]"
 
 
+def extract_assignment_contract(content: str) -> dict[str, Any] | None:
+    """Read only the application-delimited contract stored in a child session's first prompt."""
+    if not isinstance(content, str):
+        return None
+    search_end = len(content)
+    while True:
+        marker = content.rfind(ASSIGNMENT_CONTRACT_START, 0, search_end)
+        if marker < 0:
+            return None
+        payload_start = content.find("\n", marker)
+        if payload_start >= 0:
+            payload_end = content.find(ASSIGNMENT_CONTRACT_END, payload_start + 1)
+            if payload_end >= 0:
+                try:
+                    payload = json.loads(content[payload_start + 1:payload_end])
+                except (json.JSONDecodeError, TypeError):
+                    payload = None
+                if isinstance(payload, dict):
+                    task = payload.get("task")
+                    if isinstance(task, str) and task.strip():
+                        purpose = payload.get("purpose")
+                        required_output = payload.get("required_output")
+                        check_ids = payload.get("acceptance_check_ids")
+                        if purpose is not None and not isinstance(purpose, str):
+                            purpose = None
+                        if required_output is not None and not isinstance(required_output, str):
+                            required_output = None
+                        if isinstance(check_ids, list):
+                            check_ids = [item for item in check_ids[:12] if isinstance(item, str)][:12]
+                        else:
+                            check_ids = None
+                        return {
+                            "task": task,
+                            "purpose": purpose,
+                            "required_output": required_output,
+                            "acceptance_check_ids": check_ids,
+                        }
+        # User-controlled task text can contain the marker; keep searching for
+        # the earlier actual delimiter rather than trusting the last occurrence.
+        search_end = marker
+
+
 def build_runtime_context(
     *,
     agent_id: str,
@@ -40,6 +84,7 @@ def build_runtime_context(
     user_message_id: int,
     usage_summary: dict[str, Any],
     usage_policy: UsagePolicy,
+    assignment_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an allowlisted snapshot; never copy environment/config or transcript text."""
     if entry_point not in {"cli", "web", "unknown"}:
@@ -59,6 +104,16 @@ def build_runtime_context(
     else:
         remaining_cost = str(max(Decimal("0"), usage_policy.budget_usd - Decimal(cost)))
         cost_status = "known"
+
+    contract = assignment_contract or {}
+    task = contract.get("task") if isinstance(contract.get("task"), str) else None
+    purpose = contract.get("purpose") if isinstance(contract.get("purpose"), str) else None
+    required_output = contract.get("required_output") if isinstance(contract.get("required_output"), str) else None
+    check_ids = contract.get("acceptance_check_ids")
+    if not isinstance(check_ids, list):
+        check_ids = None
+    else:
+        check_ids = [_bounded_text(item, 128) for item in check_ids[:12] if isinstance(item, str)]
 
     return {
         "schema_version": 1,
@@ -81,12 +136,13 @@ def build_runtime_context(
         },
         "assignment": {
             "current_message_id": user_message_id,
-            "source": "saved_user_message",
+            "source": "delegated_parent_contract" if assignment_contract else "saved_user_message",
             "trust": "untrusted",
+            "my_task": _bounded_text(task) if task is not None else None,
             "overall_goal": None,
-            "purpose": None,
-            "required_output": None,
-            "acceptance_check_ids": None,
+            "purpose": _bounded_text(purpose) if purpose is not None else None,
+            "required_output": _bounded_text(required_output) if required_output is not None else None,
+            "acceptance_check_ids": check_ids,
         },
         "progress": {
             "phase": "provider_request",
