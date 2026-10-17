@@ -114,13 +114,31 @@ Handlers may return `ToolResult(content, is_error=True)` for a structured failur
 
 ## Verification
 
+Full acceptance gate (run before closing an issue or release):
+
 ```bash
 uv sync --extra dev
 uv run python -m pytest -q
+node --test tests/test_core_web_ui.js
 uv build
 ```
 
-Tests do not require an API key and do not make model requests.
+For faster issue-sized red/green feedback, run only the relevant pytest selectors and, when applicable, a focused Node UI pattern. The helper runs both checks concurrently and returns non-zero if either fails:
+
+```bash
+bash scripts/test-focused.sh \
+  --node-pattern 'file update renderer shows bounded diffs' \
+  tests/test_core_tools.py::test_write_file_returns_bounded_unified_diff_for_small_text_update \
+  tests/test_core_tools.py::test_write_file_skips_diff_when_prior_file_exceeds_source_limit
+```
+
+Python-only example:
+
+```bash
+bash scripts/test-focused.sh tests/test_core_tools.py::test_read_file_returns_structured_path_size_line_count_and_truncation
+```
+
+Use the focused gate during small iterations; do not remove or weaken tests. Run the full acceptance gate once at the issue-closure checkpoint. Tests do not require an API key and do not make model requests.
 
 ## Layout
 
