@@ -35,6 +35,7 @@ class AgentEvent:
     tool_args: dict | None = None
     status: str | None = None
     is_error: bool | None = None
+    outcome: Literal["succeeded", "failed", "uncertain"] | None = None
 
 
 class RunCancelled(Exception):
@@ -169,6 +170,7 @@ class Agent:
                 tool_name=name,
                 text=result.content,
                 is_error=result.is_error,
+                outcome=outcome,
             )
             self.state.complete_tool_call(
                 session_id, run_id, call_id, outcome, result.content, error, asdict(result_event)

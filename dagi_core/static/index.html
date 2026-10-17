@@ -36,6 +36,13 @@
     .message, .event { padding: 9px 11px; margin: 7px 0; border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; background: #1c2430; }
     .message.user { background: #223a51; }
     .message.tool { background: #29283a; }
+    .tool-card { display: grid; gap: 6px; border-left: 3px solid #8ab4f8; }
+    .tool-card[data-status="succeeded"] { border-left-color: #65c18c; }
+    .tool-card[data-status="failed"] { border-left-color: #ff8d85; }
+    .tool-card[data-status="uncertain"] { border-left-color: #ffcc66; }
+    .tool-card .tool-status { font-weight: 650; }
+    .tool-card details { margin: 2px 0; }
+    .tool-card pre { max-height: 22vh; }
     .event.error { color: #ffb4ab; }
     form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #30394a; }
     textarea { resize: vertical; min-height: 44px; max-height: 180px; flex: 1; border-radius: 6px; border: 1px solid #435571; background: #171d27; color: inherit; padding: 9px; }

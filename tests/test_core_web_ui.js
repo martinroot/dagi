@@ -168,8 +168,68 @@ test("duplicate persisted SSE event ids do not render a tool call twice", async 
   const frame = {data: JSON.stringify(event), lastEventId: "37"};
   source.onmessage(frame);
   source.onmessage(frame);
-  const rendered = elements.get("chat").children.filter((item) => item.children[0].textContent.includes("call-1"));
+  const rendered = elements.get("chat").children.filter((item) => item.dataset.toolCallId === "call-1");
   assert.equal(rendered.length, 1);
+});
+
+test("a tool result updates the original generic tool card", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "tool card"},
+      runs: [{run_id: "run-tools", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-tools": 0},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({lastEventId: "1", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-tools", tool_call_id: "call-1",
+    tool_name: "read_file", tool_args: {path: "src/main.py"},
+  })});
+  const card = elements.get("chat").children[0];
+  source.onmessage({lastEventId: "2", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-tools", tool_call_id: "call-1",
+    tool_name: "read_file", text: "file contents", is_error: false, outcome: "succeeded",
+  })});
+  assert.equal(elements.get("chat").children.length, 1);
+  assert.equal(elements.get("chat").children[0], card);
+  assert.equal(card.dataset.toolCallId, "call-1");
+  assert.equal(card.dataset.status, "succeeded");
+  assert.match(card.children.map((child) => child.textContent).join("\n"), /file contents/);
+});
+
+test("tool cards distinguish unknown outcome from a known tool failure", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "uncertain tool"},
+      runs: [{run_id: "run-uncertain", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-uncertain": 0},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({lastEventId: "1", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-uncertain", tool_call_id: "call-u",
+    tool_name: "write_file", tool_args: {path: "result.txt"},
+  })});
+  source.onmessage({lastEventId: "2", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-uncertain", tool_call_id: "call-u",
+    tool_name: "write_file", text: "process stopped during write", is_error: true, outcome: "uncertain",
+  })});
+  const card = elements.get("chat").children[0];
+  assert.equal(card.dataset.status, "uncertain");
+  assert.equal(card.children[1].textContent, "Unknown outcome");
+  assert.match(card.children[3].textContent, /outcome is unknown/);
 });
 
 test("saved messages keep their persisted message identity in the UI model", async () => {
@@ -211,9 +271,9 @@ test("run state ignores an older event cursor delivered after a newer one", asyn
     lastEventId: "36",
     data: JSON.stringify({kind: "tool_call", session_id: 1, run_id: "run-active", tool_call_id: "call-old", tool_name: "write_file", tool_args: {path: "old.txt"}}),
   });
-  const rendered = elements.get("chat").children.filter((item) => item.children[0].textContent.includes("call-"));
+  const rendered = elements.get("chat").children.filter((item) => item.dataset.toolCallId?.startsWith("call-"));
   assert.equal(rendered.length, 1);
-  assert.match(rendered[0].children[0].textContent, /call-new/);
+  assert.equal(rendered[0].dataset.toolCallId, "call-new");
 });
 
 test("replaying persisted active-run tool events does not duplicate snapshot content", async () => {
@@ -250,9 +310,11 @@ test("replaying persisted active-run tool events does not duplicate snapshot con
     lastEventId: "38",
     data: JSON.stringify({kind: "tool_result", session_id: 1, run_id: "run-active", tool_call_id: "call-1", tool_name: "read_file", text: "file contents", is_error: false}),
   });
-  const transcript = elements.get("chat").children.map((item) => item.children[1].textContent).join("\n");
-  assert.equal(transcript.split("read_file").length - 1, 1);
-  assert.equal(transcript.split("file contents").length - 1, 1);
+  const cards = elements.get("chat").children.filter((item) => item.dataset.toolCallId === "call-1");
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].dataset.status, "succeeded");
+  assert.match(cards[0].children[0].textContent, /read_file/);
+  assert.match(cards[0].children[3].textContent, /file contents/);
 });
 
 test("session restore replays the snapshot events before opening SSE after its cursor", async () => {

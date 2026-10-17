@@ -33,14 +33,21 @@ function applySessionSnapshot(sessionId, snapshot) {
   state.toolCalls.clear();
   for (const call of snapshot.tool_calls || []) {
     const key = JSON.stringify([sessionId, call.run_id, call.tool_call_id]);
-    const result = call.result === null || call.result === undefined ? null : {
+    const resultText = call.result ?? call.error;
+    const result = resultText === null || resultText === undefined ? null : {
       kind: "tool_result",
       tool_call_id: call.tool_call_id,
       tool_name: call.name,
-      text: call.result,
+      text: resultText,
       is_error: call.status !== "succeeded",
+      outcome: call.status,
     };
+    const startedAt = Date.parse(call.created_at);
+    const finishedAt = Date.parse(call.updated_at);
     state.toolCalls.set(key, {
+      sessionId,
+      runId: call.run_id,
+      toolCallId: call.tool_call_id,
       call: {
         kind: "tool_call",
         tool_call_id: call.tool_call_id,
@@ -49,6 +56,10 @@ function applySessionSnapshot(sessionId, snapshot) {
       },
       result,
       status: call.status,
+      startedAt: Number.isFinite(startedAt) ? startedAt : null,
+      durationMs: call.status !== "running" && Number.isFinite(startedAt) && Number.isFinite(finishedAt)
+        ? Math.max(0, finishedAt - startedAt)
+        : null,
     });
   }
   return state;
@@ -77,19 +88,120 @@ function recordRunEvent(event, scope) {
     const callKey = JSON.stringify([sessionId, runId, event.tool_call_id]);
     const previous = state.toolCalls.get(callKey);
     if (event.kind === "tool_call") {
-      if (previous) return false;
-      state.toolCalls.set(callKey, {call: event, result: null, status: "running"});
+      if (previous) {
+        if (previous.status !== "pending") return false;
+        previous.status = "running";
+        previous.startedAt = Date.now();
+        state.toolCalls.set(callKey, previous);
+        return true;
+      }
+      state.toolCalls.set(callKey, {
+        sessionId, runId, toolCallId: event.tool_call_id,
+        call: event, result: null, status: "running", startedAt: Date.now(), durationMs: null,
+      });
     } else if (event.kind === "tool_result") {
       if (previous?.result) return false;
+      const startedAt = previous?.startedAt;
       state.toolCalls.set(callKey, {
         ...(previous || {}),
         tool_call_id: event.tool_call_id,
         result: event,
-        status: event.is_error ? "failed" : "succeeded",
+        status: event.outcome || (event.is_error ? "failed" : "succeeded"),
+        durationMs: typeof startedAt === "number" ? Math.max(0, Date.now() - startedAt) : null,
       });
     }
   }
   return true;
+}
+
+function toolCallState(sessionId, runId, toolCallId) {
+  const state = getSessionUiState(sessionId);
+  return state.toolCalls.get(JSON.stringify([sessionId, runId, toolCallId]));
+}
+
+function findToolCallState(sessionId, toolCallId) {
+  for (const record of getSessionUiState(sessionId).toolCalls.values()) {
+    if (record.toolCallId === toolCallId) return record;
+  }
+  return null;
+}
+
+function toolTarget(argumentsValue) {
+  if (!argumentsValue || typeof argumentsValue !== "object") return "";
+  for (const key of ["path", "query", "task", "command", "name"]) {
+    const value = argumentsValue[key];
+    if (typeof value === "string" && value.trim()) return value.trim().replace(/\s+/g, " ").slice(0, 160);
+  }
+  return "";
+}
+
+function toolStatusLabel(status) {
+  return ({
+    pending: "Pending",
+    running: "Running",
+    succeeded: "Completed",
+    failed: "Failed",
+    uncertain: "Unknown outcome",
+  })[status] || "Status unavailable";
+}
+
+function renderToolCard(sessionId, runId, toolCallId) {
+  const record = toolCallState(sessionId, runId, toolCallId);
+  if (!record) return null;
+  if (!record.card) {
+    const card = document.createElement("article");
+    card.className = "message tool tool-card";
+    card.dataset.sessionId = String(sessionId);
+    card.dataset.runId = String(runId);
+    card.dataset.toolCallId = String(toolCallId);
+    const title = document.createElement("strong");
+    const status = document.createElement("span");
+    status.className = "tool-status";
+    const duration = document.createElement("span");
+    duration.className = "tool-duration muted";
+    const summary = document.createElement("div");
+    summary.className = "tool-summary";
+    const details = document.createElement("details");
+    const detailsTitle = document.createElement("summary");
+    detailsTitle.textContent = "Arguments and output";
+    const input = document.createElement("pre");
+    input.className = "tool-input";
+    const result = document.createElement("pre");
+    result.className = "tool-result";
+    details.append(detailsTitle, input, result);
+    card.append(title, status, duration, summary, details);
+    $("chat").append(card);
+    record.card = {card, title, status, duration, summary, input, result};
+  }
+  const call = record.call || {};
+  const name = call.tool_name || call.name || "unknown tool";
+  const args = call.tool_args || call.arguments || {};
+  const target = toolTarget(args);
+  const resultEvent = record.result;
+  const resultText = typeof resultEvent === "string"
+    ? resultEvent
+    : resultEvent?.text ?? record.error ?? "";
+  const statusLabel = toolStatusLabel(record.status);
+  record.card.card.dataset.status = record.status || "unknown";
+  record.card.title.textContent = target ? `${name} · ${target}` : name;
+  record.card.status.textContent = statusLabel;
+  record.card.duration.textContent = typeof record.durationMs === "number"
+    ? `${(record.durationMs / 1000).toFixed(1)} s`
+    : record.status === "running" && typeof record.startedAt === "number"
+      ? `${(Math.max(0, Date.now() - record.startedAt) / 1000).toFixed(1)} s elapsed`
+      : "Duration unavailable";
+  record.card.summary.textContent = record.status === "running"
+    ? "Executing…"
+    : record.status === "pending"
+      ? "Waiting to start."
+      : record.status === "uncertain"
+        ? "The action outcome is unknown; inspect before retrying."
+        : (resultText || (record.status === "failed" ? "Tool failed." : "Completed." )).slice(0, 180);
+  let inputText = "{}";
+  try { inputText = JSON.stringify(args, null, 2); } catch { inputText = "Arguments unavailable"; }
+  record.card.input.textContent = inputText.length > 8_000 ? `${inputText.slice(0, 8_000)}\n[arguments truncated]` : inputText;
+  record.card.result.textContent = resultText || (record.status === "running" || record.status === "pending" ? "No result yet." : "No result data.");
+  return record.card.card;
 }
 
 async function api(path, options = {}) {
@@ -225,10 +337,10 @@ function addEvent(event, scope = null) {
     appendAssistantText(event.text);
   } else if (event.kind === "tool_call") {
     resetAssistantStream();
-    addChatLine("tool", `${event.tool_name}(${JSON.stringify(event.tool_args)})`, `Tool call · ${event.tool_call_id}`);
+    renderToolCard(event.session_id ?? scope?.sessionId ?? selectedSession, event.run_id ?? scope?.runId ?? activeRunId, event.tool_call_id);
   } else if (event.kind === "tool_result") {
     resetAssistantStream();
-    addChatLine("tool", event.text, `${event.is_error ? "Tool error" : "Tool result"} · ${event.tool_call_id}`);
+    renderToolCard(event.session_id ?? scope?.sessionId ?? selectedSession, event.run_id ?? scope?.runId ?? activeRunId, event.tool_call_id);
   } else if (event.kind === "error") {
     resetAssistantStream();
     const item = document.createElement("div");
@@ -295,14 +407,29 @@ async function selectSession(sessionId) {
   $("session-title").textContent = `${data.session.title || "Untitled session"} · #${sessionId}`;
   $("chat").replaceChildren();
   for (const message of data.messages) {
-    let text = message.content || "";
-    let role = message.role;
     if (message.tool_calls) {
-      text = message.tool_calls.map((call) => `${call.function.name}(${call.function.arguments})`).join("\n");
-      role = "tool";
+      if (message.content) addChatLine("assistant", message.content, "", message.id);
+      for (const call of message.tool_calls) {
+        const record = findToolCallState(sessionId, call.id);
+        if (record) renderToolCard(sessionId, record.runId, call.id);
+        else addChatLine("tool", `${call.function.name}(${call.function.arguments})`, `Tool call · ${call.id}`, message.id);
+      }
+      continue;
     }
+    if (message.role === "tool" && message.tool_call_id) {
+      const record = findToolCallState(sessionId, message.tool_call_id);
+      if (record) {
+        renderToolCard(sessionId, record.runId, message.tool_call_id);
+        continue;
+      }
+    }
+    let text = message.content || "";
     if (message.is_partial) text = `[Incomplete response]\n${text}`;
-    addChatLine(role, text, "", message.id);
+    addChatLine(message.role, text, "", message.id);
+  }
+  for (const call of data.tool_calls || []) {
+    const record = findToolCallState(sessionId, call.tool_call_id);
+    if (record && !record.card) renderToolCard(sessionId, call.run_id, call.tool_call_id);
   }
   renderRuns(data.runs);
   const running = data.runs.find((run) => run.status === "running");

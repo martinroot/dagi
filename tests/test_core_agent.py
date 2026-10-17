@@ -4,7 +4,7 @@ from pathlib import Path
 from dagi_core.agent import Agent, AgentEvent
 from dagi_core.provider import StreamEvent
 from dagi_core.state import StateStore
-from dagi_core.tools import ToolRegistry
+from dagi_core.tools import Tool, ToolRegistry
 
 
 class FakeProvider:
@@ -82,8 +82,31 @@ def test_agent_returns_tool_error_without_skipping_follow_up(tmp_path: Path):
 
     assert provider.requests.__len__() == 2
     assert any("unknown tool" in (event.text or "") for event in events)
-    assert next(event for event in events if event.kind == "tool_result").is_error is True
+    tool_result = next(event for event in events if event.kind == "tool_result")
+    assert tool_result.is_error is True
+    assert tool_result.outcome == "failed"
     assert events[-1].kind == "done"
+    state.close()
+
+
+def test_tool_result_event_exposes_explicit_uncertain_outcome(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    tools = ToolRegistry(tmp_path / "workspace", state, session)
+
+    def crash(_arguments):
+        raise RuntimeError("unexpected handler failure")
+
+    tools.register(Tool("crash", "Raise an unexpected failure.", {"type": "object", "properties": {}}, crash))
+    provider = FakeProvider([[
+        StreamEvent(kind="tool_call", tool_call={"id": "call-uncertain", "name": "crash", "arguments": {}}),
+        StreamEvent(kind="finish", finish_reason="tool_calls"),
+    ]])
+    events = list(Agent(provider, tools, state, session).run_turn("run the test tool"))
+    result = next(event for event in events if event.kind == "tool_result")
+    assert result.outcome == "uncertain"
+    saved = next(row["event"] for row in state.list_run_events(result.run_id) if row["event"]["kind"] == "tool_result")
+    assert saved["outcome"] == "uncertain"
     state.close()
 
 
