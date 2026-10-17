@@ -114,3 +114,34 @@ test("late session detail response cannot overwrite the newest selection", async
   assert.match(chatText, /latest transcript/);
   assert.doesNotMatch(chatText, /stale transcript/);
 });
+
+test("switching to a session without runs clears the previous run inspector", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "old"}, runs: [{run_id: "run-old", status: "completed"}], messages: [],
+    });
+    if (url === "/api/sessions/2") return jsonResponse({
+      session: {id: 2, title: "empty"}, runs: [], messages: [],
+    });
+    if (url === "/api/runs/run-old") return jsonResponse({
+      run: {run_id: "run-old", status: "completed"},
+      requests: [{model: "old-model"}], tool_calls: [{name: "old-tool"}],
+      usage: {provider_calls: 7}, budget_usage: {provider_calls: 8},
+      parent: null, children: [],
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.match(elements.get("run-status").textContent, /run-old/);
+  await context.selectSession(2);
+  assert.equal(elements.get("run-status").textContent, "Select a saved run or start one.");
+  assert.equal(elements.get("requests").textContent, "[]");
+  assert.equal(elements.get("tools").textContent, "[]");
+  assert.equal(elements.get("usage").textContent, "{}");
+  assert.equal(elements.get("budget-usage").textContent, "{}");
+});

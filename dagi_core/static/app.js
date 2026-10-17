@@ -20,12 +20,22 @@ async function api(path, options = {}) {
   return value;
 }
 
+function resetRunInspector() {
+  $("run-status").textContent = "Select a saved run or start one.";
+  $("requests").textContent = "[]";
+  $("tools").textContent = "[]";
+  $("usage").textContent = "{}";
+  $("budget-usage").textContent = "{}";
+  $("children").textContent = "No parent or child runs.";
+}
+
 function detachRunStream() {
   if (eventSource) eventSource.close();
   eventSource = null;
   activeRunId = null;
   selectedRunId = null;
   resetAssistantStream();
+  resetRunInspector();
   $("stop-run").disabled = true;
 }
 
