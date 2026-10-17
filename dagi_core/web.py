@@ -641,16 +641,54 @@ class WebApp:
                 if control.cancellation.is_set():
                     state.update_goal(goal_id, "interrupted", feedback=feedback)
                     return
-                for check_index, item in enumerate(feedback):
-                    state.update_goal_reflection_followup(goal_id, check_index, bool(item["passed"]))
-                if all(item["passed"] for item in feedback):
-                    state.update_goal(goal_id, "completed", feedback=feedback)
-                    return
                 latest_run_id = goal["runs"][-1] if goal["runs"] else None
                 latest_calls = (
                     [call for call in state.list_tool_calls(goal["session_id"]) if call["run_id"] == latest_run_id]
                     if latest_run_id else []
                 )
+                followup_evidence_ids = ([latest_run_id] if latest_run_id else [])
+                followup_evidence_ids.extend(call["tool_call_id"] for call in latest_calls[:10])
+                observed_tool_names = list(dict.fromkeys(call["name"] for call in latest_calls))
+                next_change = (
+                    "Observed tool calls: " + ", ".join(observed_tool_names)
+                    if observed_tool_names else "No tool calls were recorded in the following run."
+                )
+                for check_index, item in enumerate(feedback):
+                    updated_reflection = state.update_goal_reflection_followup(
+                        goal_id,
+                        check_index,
+                        bool(item["passed"]),
+                        next_change=next_change,
+                        evidence_ids=followup_evidence_ids[:12],
+                    )
+                    if updated_reflection and item["passed"]:
+                        reflection = state.get_latest_goal_reflection(goal_id, check_index)
+                        if reflection and reflection["following_check_passed"] is True:
+                            expected = reflection["expected"]
+                            check_type = expected["type"]
+                            check_key = expected.get("path", expected.get("executable", ""))
+                            pattern_fingerprint = _reflection_fingerprint({
+                                "check_type": check_type,
+                                "check_key": check_key,
+                                "tool_names": observed_tool_names,
+                            })
+                            lesson = (
+                                f"Observed {check_type} check for {check_key or 'configured target'} pass "
+                                f"after following action(s): {', '.join(observed_tool_names) or 'no tool calls'}."
+                            )
+                            state.record_goal_lesson(
+                                session_id=goal["session_id"],
+                                goal_id=goal_id,
+                                reflection_id=reflection["id"],
+                                check_type=check_type,
+                                check_key=check_key,
+                                pattern_fingerprint=pattern_fingerprint,
+                                lesson=lesson[:512],
+                                evidence_ids=reflection["evidence_ids"],
+                            )
+                if all(item["passed"] for item in feedback):
+                    state.update_goal(goal_id, "completed", feedback=feedback)
+                    return
                 action_fingerprint = _reflection_fingerprint([
                     {"name": call["name"], "arguments": call["arguments"]}
                     for call in latest_calls
@@ -694,6 +732,7 @@ class WebApp:
                             "check_index": check_index, "expected": expected, "observed": observed,
                         }),
                         action_fingerprint=action_fingerprint,
+                        repeat_threshold=self.config.goal_repeat_failure_threshold,
                     )
                     stop_for_repeated_failure = stop_for_repeated_failure or bool(reflection["blocker"])
                 if stop_for_repeated_failure:
@@ -729,11 +768,47 @@ class WebApp:
                 )
                 reflections = state.list_goal_reflections(goal_id, limit=3)
                 if reflections:
+                    reflection_summary = [
+                        {
+                            "id": item["id"],
+                            "trigger": item["trigger"],
+                            "expected": item["expected"],
+                            "observed": item["observed"],
+                            "evidence_ids": item["evidence_ids"][:4],
+                            "cause_hypothesis": item["cause_hypothesis"],
+                            "next_change": item["next_change"],
+                            "following_check_passed": item["following_check_passed"],
+                            "repeat_count": item["repeat_count"],
+                            "blocker": item["blocker"],
+                        }
+                        for item in reflections
+                    ]
                     message += (
-                        "\nRuntime reflection record (observed facts; hypotheses are not verified):\n"
-                        + json.dumps(reflections, ensure_ascii=False)
-                        + "\nUse the evidence to change the next action; report a blocker rather than repeating an unchanged failed action."
+                        " Runtime reflection record (observed facts; hypotheses are not verified): "
+                        + json.dumps(reflection_summary, ensure_ascii=False)
+                        + " Use the evidence to change the next action; report a blocker rather than repeating an unchanged failed action."
                     )
+                scoped_lessons = []
+                for check in goal["checks"]:
+                    if len(scoped_lessons) >= 3:
+                        break
+                    check_type = check["type"]
+                    check_key = Path(check["argv"][0]).name[:256] if check_type == "command" else str(check["path"])[:256]
+                    scoped_lessons.extend(state.list_goal_lessons(
+                        goal["session_id"], check_type=check_type, check_key=check_key,
+                        limit=3 - len(scoped_lessons),
+                    ))
+                if scoped_lessons:
+                    lesson_summary = [
+                        {
+                            "lesson": item["lesson"],
+                            "status": item["status"],
+                            "support_count": item["support_count"],
+                            "evidence_ids": item["evidence_ids"][-3:],
+                        }
+                        for item in scoped_lessons[:3]
+                    ]
+                    message += " Scoped lessons from this session: " + json.dumps(lesson_summary, ensure_ascii=False)
                 self._execute_run(run_id, goal["session_id"], message, control)
                 completed_run = state.get_run(run_id)
                 if completed_run is None:

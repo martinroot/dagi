@@ -53,6 +53,7 @@ Environment variables:
 - `DAGI_COMPRESSION_MODEL` — history-compression model; defaults to `DAGI_MODEL` and can be priced separately.
 - `DAGI_MAX_DELEGATION_DEPTH` — maximum nested child-agent depth; defaults to `2`.
 - `DAGI_MAX_CHILD_AGENTS_PER_RUN` — maximum child agents across the shared budget group; defaults to `3`.
+- `DAGI_GOAL_REPEAT_FAILURE_THRESHOLD` — cap a goal after this many repeated identical check-failure/action fingerprints; defaults to `2`, range `1..10`.
 - `DAGI_HOME` — database and skill storage; defaults to `~/.dagi`.
 - `DAGI_WORKSPACE` — root for file tools; defaults to the current directory.
 - `DAGI_ENABLE_SHELL=1` — enables shell execution with per-command approval in the CLI.

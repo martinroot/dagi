@@ -39,6 +39,7 @@ class Config:
     web_cookie_secure: bool = True
     web_token: str = field(default="", repr=False)
     enable_check_commands: bool = False
+    goal_repeat_failure_threshold: int = 2
 
     @property
     def database(self) -> Path:
@@ -83,10 +84,13 @@ def load_config() -> Config:
         compression_model = os.environ.get("DAGI_COMPRESSION_MODEL", model).strip() or model
         max_delegation_depth = int(os.environ.get("DAGI_MAX_DELEGATION_DEPTH", "2"))
         max_child_agents = int(os.environ.get("DAGI_MAX_CHILD_AGENTS_PER_RUN", "3"))
+        goal_repeat_failure_threshold = int(os.environ.get("DAGI_GOAL_REPEAT_FAILURE_THRESHOLD", "2"))
         if context_limit < 1 or max_tool_result_chars < 1:
             raise ValueError("context limits must be positive")
         if max_delegation_depth < 0 or max_child_agents < 0:
             raise ValueError("delegation limits must not be negative")
+        if not 1 <= goal_repeat_failure_threshold <= 10:
+            raise ValueError("goal repeat-failure threshold must be 1..10")
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
         raise ValueError(f"invalid usage/budget configuration: {exc}") from exc
     usage_policy = UsagePolicy(
@@ -117,4 +121,5 @@ def load_config() -> Config:
         web_cookie_secure=_enabled(os.environ.get("DAGI_WEB_COOKIE_SECURE", "true")),
         web_token=os.environ.get("DAGI_WEB_TOKEN", "").strip(),
         enable_check_commands=_enabled(os.environ.get("DAGI_ENABLE_CHECK_COMMANDS")),
+        goal_repeat_failure_threshold=goal_repeat_failure_threshold,
     )

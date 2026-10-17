@@ -7,6 +7,20 @@ import pytest
 from dagi_core.config import load_config
 
 
+def test_goal_repeat_failure_threshold_is_bounded_and_configurable(tmp_path, monkeypatch):
+    monkeypatch.setenv("DAGI_API_KEY", "test-only-key")
+    monkeypatch.setenv("DAGI_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("DAGI_WORKSPACE", str(tmp_path / "workspace"))
+    monkeypatch.delenv("DAGI_GOAL_REPEAT_FAILURE_THRESHOLD", raising=False)
+    assert load_config().goal_repeat_failure_threshold == 2
+
+    monkeypatch.setenv("DAGI_GOAL_REPEAT_FAILURE_THRESHOLD", "1")
+    assert load_config().goal_repeat_failure_threshold == 1
+    monkeypatch.setenv("DAGI_GOAL_REPEAT_FAILURE_THRESHOLD", "11")
+    with pytest.raises(ValueError, match="repeat-failure threshold"):
+        load_config()
+
+
 def test_config_requires_key_and_defaults_shell_off(tmp_path, monkeypatch):
     monkeypatch.delenv("DAGI_API_KEY", raising=False)
     monkeypatch.setenv("DAGI_HOME", str(tmp_path / "home"))

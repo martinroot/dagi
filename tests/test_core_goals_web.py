@@ -157,7 +157,7 @@ def test_failed_goal_check_is_recorded_and_drives_corrective_tool_action(tmp_pat
         assert reflections[0]["expected"] == {"type": "json_valid", "path": "result.json"}
         assert reflections[0]["observed"]["detail"] == "file is absent"
         assert reflections[0]["cause_hypothesis"] is None
-        assert reflections[0]["next_change"] is None
+        assert "write_file" in reflections[0]["next_change"]
         assert reflections[0]["following_check_passed"] is False
         assert reflections[0]["repeat_count"] == 0
         assert completed["runs"][0] in reflections[1]["evidence_ids"]
@@ -170,10 +170,115 @@ def test_failed_goal_check_is_recorded_and_drives_corrective_tool_action(tmp_pat
         valid_call = state.get_tool_call("reflection-valid-write")
         assert invalid_call is not None and invalid_call["status"] == "succeeded"
         assert valid_call is not None and valid_call["status"] == "succeeded"
+        assert "write_file" in reflections[1]["next_change"]
+        assert "reflection-valid-write" in reflections[1]["evidence_ids"]
+        lessons = state.list_goal_lessons(session_id, check_type="json_valid", check_key="result.json")
+        assert len(lessons) == 1
+        assert lessons[0]["status"] == "candidate"
+        assert lessons[0]["support_count"] == 1
+        assert "write_file" in lessons[0]["lesson"]
+        assert "reflection-valid-write" in lessons[0]["evidence_ids"]
         state.close()
         assert json.loads((config.workspace / "result.json").read_text(encoding="utf-8")) == {"ok": True}
+        (config.workspace / "result.json").unlink()
+        second_goal = app.start_goal(session_id, {
+            "objective": "recreate valid JSON using scoped experience",
+            "checks": [{"type": "json_valid", "path": "result.json"}],
+            "max_iterations": 1,
+        })
+        second_terminal = _wait_goal_terminal(config, second_goal["goal_id"])
+        assert second_terminal["status"] == "capped"
+        second_prompt = "".join(
+            str(message.get("content", ""))
+            for message in provider.requests[4]
+            if message.get("role") == "user"
+        )
+        assert "Scoped lessons from this session" in second_prompt
+        assert "Observed json_valid check for result.json pass" in second_prompt
+        assert "reflection-valid-write" in second_prompt
     finally:
         app.close()
+
+
+def test_failed_reflection_save_does_not_replay_completed_tool_after_resume(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    initial_provider = ReflectionCorrectionProvider(config.workspace)
+    app = WebApp(config, lambda *_args: initial_provider)
+    session_id = _create_session(config)
+    original_record = StateStore.record_goal_reflection
+    calls = {"count": 0}
+
+    def fail_once_after_initial_reflection(self, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("simulated reflection persistence failure")
+        return original_record(self, **kwargs)
+
+    monkeypatch.setattr(StateStore, "record_goal_reflection", fail_once_after_initial_reflection)
+    try:
+        goal = app.start_goal(session_id, {
+            "objective": "create valid JSON",
+            "checks": [{"type": "json_valid", "path": "result.json"}],
+            "max_iterations": 2,
+        })
+        interrupted = _wait_goal_terminal(config, goal["goal_id"])
+        assert interrupted["status"] == "error"
+        assert len(interrupted["runs"]) == 1
+        assert len(initial_provider.requests) == 2
+        state = StateStore(config.database)
+        original_call = state.get_tool_call("reflection-invalid-write")
+        original_run = state.get_run(interrupted["runs"][0])
+        assert original_call is not None and original_call["status"] == "succeeded"
+        assert original_run is not None and original_run["status"] == "completed"
+        state.close()
+    finally:
+        app.close()
+
+    class ResumeProvider:
+        model = "test-model"
+
+        def __init__(self):
+            self.requests = []
+            self.calls = 0
+
+        def stream(self, messages, _tools):
+            self.requests.append(deepcopy(messages))
+            self.calls += 1
+            if self.calls == 1:
+                prompt = "".join(
+                    str(message.get("content", "")) for message in messages if message.get("role") == "user"
+                )
+                if "jsondecodeerror" not in prompt.lower():
+                    yield StreamEvent(kind="text", text="Missing persisted failure evidence.")
+                    yield StreamEvent(kind="finish", finish_reason="stop")
+                    return
+                yield StreamEvent(kind="tool_call", tool_call={
+                    "id": "reflection-recovery-write",
+                    "name": "write_file",
+                    "arguments": {"path": "result.json", "content": json.dumps({"ok": True})},
+                })
+                yield StreamEvent(kind="finish", finish_reason="tool_calls")
+                return
+            yield StreamEvent(kind="text", text="Recovered without replaying the previous write.")
+            yield StreamEvent(kind="finish", finish_reason="stop")
+
+    recovery_provider = ResumeProvider()
+    resumed_app = WebApp(config, lambda *_args: recovery_provider)
+    try:
+        resumed_app.control_goal(goal["goal_id"], "resume")
+        completed = _wait_goal_terminal(config, goal["goal_id"])
+        assert completed["status"] == "completed"
+        assert len(completed["runs"]) == 2
+        assert len(recovery_provider.requests) == 2
+        state = StateStore(config.database)
+        original_call = state.get_tool_call("reflection-invalid-write")
+        recovery_call = state.get_tool_call("reflection-recovery-write")
+        assert original_call is not None and original_call["status"] == "succeeded"
+        assert recovery_call is not None and recovery_call["status"] == "succeeded"
+        assert state.get_run(completed["runs"][0])["status"] == "completed"
+        state.close()
+    finally:
+        resumed_app.close()
 
 
 class RepeatingInvalidJsonProvider:
@@ -217,6 +322,32 @@ def test_equivalent_failed_check_and_unchanged_action_stop_before_goal_budget(tm
         last_reflection = capped["reflections"][-1]
         assert last_reflection["repeat_count"] == 2
         assert "unchanged" in last_reflection["blocker"]
+    finally:
+        app.close()
+
+
+def test_configured_repeat_failure_threshold_controls_early_blocking(tmp_path):
+    config = replace(
+        _config(tmp_path),
+        usage_policy=UsagePolicy(max_calls_per_run=100),
+        goal_repeat_failure_threshold=1,
+    )
+    provider = RepeatingInvalidJsonProvider()
+    app = WebApp(config, lambda *_args: provider)
+    session_id = _create_session(config)
+    try:
+        goal = app.start_goal(session_id, {
+            "objective": "create valid JSON",
+            "checks": [{"type": "json_valid", "path": "result.json"}],
+            "max_iterations": 10,
+        })
+        capped = _wait_goal_terminal(config, goal["goal_id"])
+
+        assert capped["status"] == "capped"
+        assert capped["iteration"] == 2
+        assert len(provider.requests) == 4
+        assert capped["reflections"][-1]["repeat_count"] == 1
+        assert "threshold 1" in capped["reflections"][-1]["blocker"]
     finally:
         app.close()
 

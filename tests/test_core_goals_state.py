@@ -132,6 +132,77 @@ def test_goal_reflection_schema_upgrade_preserves_existing_record(tmp_path):
     upgraded.close()
 
 
+def test_lessons_are_idempotent_scoped_and_promoted_by_independent_goal_support(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session_a = state.create_session("project-a")
+    session_b = state.create_session("project-b")
+    check = {"type": "json_valid", "path": "result.json"}
+    fingerprint = "a" * 64
+
+    def support(session_id, evidence_key):
+        goal_id = state.create_goal(session_id, "create valid JSON", [check], 2)
+        reflection = state.record_goal_reflection(
+            goal_id=goal_id,
+            iteration=0,
+            check_index=0,
+            expected=check,
+            observed={"passed": False, "detail": "invalid JSON"},
+            evidence_ids=[f"goal-check:{evidence_key}"],
+            failure_fingerprint="f" * 64,
+            action_fingerprint="b" * 64,
+        )
+        state.update_goal_reflection_followup(
+            goal_id,
+            0,
+            True,
+            next_change="Observed tool calls: write_file",
+            evidence_ids=[f"run:{evidence_key}", f"tool:{evidence_key}"],
+        )
+        reflection = state.get_latest_goal_reflection(goal_id, 0)
+        return state.record_goal_lesson(
+            session_id=session_id,
+            goal_id=goal_id,
+            reflection_id=reflection["id"],
+            check_type="json_valid",
+            check_key="result.json",
+            pattern_fingerprint=fingerprint,
+            lesson="Observed valid JSON after a changed write action.",
+            evidence_ids=reflection["evidence_ids"],
+        ), goal_id, reflection["id"]
+
+    first, first_goal, first_reflection = support(session_a, "a1")
+    replay = state.record_goal_lesson(
+        session_id=session_a,
+        goal_id=first_goal,
+        reflection_id=first_reflection,
+        check_type="json_valid",
+        check_key="result.json",
+        pattern_fingerprint=fingerprint,
+        lesson="Observed valid JSON after a changed write action.",
+        evidence_ids=first["evidence_ids"],
+    )
+    assert first["status"] == "candidate" and first["support_count"] == 1
+    assert replay["support_count"] == 1
+
+    second, _second_goal, _second_reflection = support(session_a, "a2")
+    assert second["lesson_id"] == first["lesson_id"]
+    assert second["status"] == "verified" and second["support_count"] == 2
+    assert "tool:a2" in second["evidence_ids"]
+
+    isolated, _isolated_goal, _isolated_reflection = support(session_b, "b1")
+    assert isolated["lesson_id"] != first["lesson_id"]
+    assert state.list_goal_lessons(
+        session_a, check_type="json_valid", check_key="result.json", limit=10
+    ) == [second]
+    assert state.list_goal_lessons(
+        session_a, check_type="json_valid", check_key="other.json"
+    ) == []
+    assert state.list_goal_lessons(
+        session_b, check_type="json_valid", check_key="result.json"
+    ) == [isolated]
+    state.close()
+
+
 def test_startup_recovery_marks_running_goals_interrupted(tmp_path):
     path = tmp_path / "state.sqlite3"
     state = StateStore(path)

@@ -161,6 +161,31 @@ CREATE TABLE IF NOT EXISTS goal_reflections (
 );
 CREATE INDEX IF NOT EXISTS goal_reflections_goal_iteration
     ON goal_reflections(goal_id, iteration DESC, check_index DESC);
+CREATE TABLE IF NOT EXISTS lessons (
+    lesson_id TEXT PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    check_type TEXT NOT NULL,
+    check_key TEXT NOT NULL,
+    pattern_fingerprint TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    lesson TEXT NOT NULL,
+    evidence_ids_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('candidate', 'verified', 'superseded', 'rejected')),
+    support_count INTEGER NOT NULL DEFAULT 0 CHECK (support_count >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(session_id, pattern_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS lessons_session_check_status
+    ON lessons(session_id, check_type, check_key, status, updated_at DESC);
+CREATE TABLE IF NOT EXISTS lesson_supports (
+    lesson_id TEXT NOT NULL REFERENCES lessons(lesson_id) ON DELETE CASCADE,
+    goal_id TEXT NOT NULL REFERENCES goals(goal_id) ON DELETE CASCADE,
+    reflection_id TEXT NOT NULL REFERENCES goal_reflections(reflection_id) ON DELETE CASCADE,
+    evidence_ids_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(lesson_id, goal_id)
+);
 CREATE TABLE IF NOT EXISTS inbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -1068,6 +1093,7 @@ class StateStore:
         evidence_ids: list[str],
         failure_fingerprint: str,
         action_fingerprint: str,
+        repeat_threshold: int = 2,
     ) -> dict[str, Any]:
         goal = self.get_goal(goal_id)
         if goal is None:
@@ -1086,6 +1112,8 @@ class StateStore:
                 raise ValueError("reflection evidence IDs must be non-empty text of at most 256 characters")
             if evidence_id not in unique_ids:
                 unique_ids.append(evidence_id)
+        if isinstance(repeat_threshold, bool) or not isinstance(repeat_threshold, int) or not 1 <= repeat_threshold <= 10:
+            raise ValueError("repeat-failure threshold must be 1..10")
         for fingerprint in (failure_fingerprint, action_fingerprint):
             if not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", fingerprint) is None:
                 raise ValueError("reflection fingerprints must be lowercase SHA-256 hex")
@@ -1106,8 +1134,9 @@ class StateStore:
         ):
             repeat_count = int(previous["repeat_count"]) + 1
         blocker = (
-            "same normalized failure and tool action repeated twice unchanged; stopping to avoid budget drain"
-            if repeat_count >= 2 else None
+            f"same normalized failure and tool action repeated {repeat_count} time(s) unchanged "
+            f"(threshold {repeat_threshold}); stopping to avoid budget drain"
+            if repeat_count >= repeat_threshold else None
         )
         reflection_id = str(uuid.uuid4())
         self._db.execute(
@@ -1138,22 +1167,166 @@ class StateStore:
             item["following_check_passed"] = bool(item["following_check_passed"])
         return item
 
-    def update_goal_reflection_followup(self, goal_id: str, check_index: int, passed: bool) -> bool:
+    def get_latest_goal_reflection(self, goal_id: str, check_index: int) -> dict[str, Any] | None:
+        row = self._db.execute(
+            """SELECT * FROM goal_reflections WHERE goal_id=? AND check_index=?
+               ORDER BY iteration DESC LIMIT 1""",
+            (goal_id, check_index),
+        ).fetchone()
+        return self._decode_goal_reflection(row) if row is not None else None
+
+    def update_goal_reflection_followup(
+        self,
+        goal_id: str,
+        check_index: int,
+        passed: bool,
+        *,
+        next_change: str | None = None,
+        evidence_ids: list[str] | None = None,
+    ) -> bool:
         if not isinstance(passed, bool):
             raise ValueError("reflection follow-up result must be boolean")
-        cursor = self._db.execute(
-            """UPDATE goal_reflections SET following_check_passed=?
-               WHERE reflection_id=(
-                   SELECT reflection_id FROM goal_reflections
-                   WHERE goal_id=? AND check_index=? AND following_check_passed IS NULL
-                   ORDER BY iteration DESC LIMIT 1
-               )""",
-            (int(passed), goal_id, check_index),
+        if next_change is not None and (not isinstance(next_change, str) or len(next_change) > 512):
+            raise ValueError("reflection next-change note must be text of at most 512 characters")
+        if evidence_ids is not None and (
+            not isinstance(evidence_ids, list) or len(evidence_ids) > 12
+            or any(not isinstance(item, str) or not item.strip() or len(item) > 256 for item in evidence_ids)
+        ):
+            raise ValueError("reflection follow-up evidence must contain at most 12 bounded IDs")
+        row = self._db.execute(
+            """SELECT reflection_id, evidence_ids_json FROM goal_reflections
+               WHERE goal_id=? AND check_index=? AND following_check_passed IS NULL
+               ORDER BY iteration DESC LIMIT 1""",
+            (goal_id, check_index),
+        ).fetchone()
+        if row is None:
+            return False
+        current_ids = json.loads(row["evidence_ids_json"])
+        for evidence_id in evidence_ids or []:
+            if evidence_id not in current_ids:
+                current_ids.append(evidence_id)
+        self._db.execute(
+            """UPDATE goal_reflections SET following_check_passed=?, next_change=?, evidence_ids_json=?
+               WHERE reflection_id=?""",
+            (int(passed), next_change, json.dumps(current_ids[:12], ensure_ascii=False), row["reflection_id"]),
         )
-        if cursor.rowcount:
+        self._db.commit()
+        return True
+
+    def record_goal_lesson(
+        self,
+        *,
+        session_id: int,
+        goal_id: str,
+        reflection_id: str,
+        check_type: str,
+        check_key: str,
+        pattern_fingerprint: str,
+        lesson: str,
+        evidence_ids: list[str],
+    ) -> dict[str, Any]:
+        goal = self.get_goal(goal_id)
+        if goal is None or goal["session_id"] != session_id:
+            raise ValueError("lesson scope must match the goal session")
+        reflection_row = self._db.execute(
+            "SELECT * FROM goal_reflections WHERE reflection_id=? AND goal_id=?",
+            (reflection_id, goal_id),
+        ).fetchone()
+        if reflection_row is None or reflection_row["following_check_passed"] != 1:
+            raise ValueError("lesson evidence must reference a corrected failed check")
+        reflection = self._decode_goal_reflection(reflection_row)
+        expected = reflection["expected"]
+        if expected.get("type") != check_type:
+            raise ValueError("lesson check type must match the reflection evidence")
+        expected_key = expected.get("path", expected.get("executable", ""))
+        if expected_key != check_key:
+            raise ValueError("lesson check key must match the reflection evidence")
+        if not isinstance(check_type, str) or not check_type or len(check_type) > 80:
+            raise ValueError("lesson check type is invalid")
+        if not isinstance(check_key, str) or len(check_key) > 256:
+            raise ValueError("lesson check key must be bounded text")
+        if not isinstance(pattern_fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", pattern_fingerprint) is None:
+            raise ValueError("lesson pattern fingerprint must be lowercase SHA-256 hex")
+        if not isinstance(lesson, str) or not lesson.strip() or len(lesson) > 512:
+            raise ValueError("lesson must be non-empty text of at most 512 characters")
+        if not isinstance(evidence_ids, list) or not 1 <= len(evidence_ids) <= 12:
+            raise ValueError("lesson evidence must contain 1..12 IDs")
+        unique_ids = []
+        for evidence_id in evidence_ids:
+            if not isinstance(evidence_id, str) or not evidence_id.strip() or len(evidence_id) > 256:
+                raise ValueError("lesson evidence IDs must be bounded non-empty text")
+            if evidence_id not in unique_ids:
+                unique_ids.append(evidence_id)
+        if not set(unique_ids).issubset(set(reflection["evidence_ids"])):
+            raise ValueError("lesson evidence must come from the persisted reflection")
+        now = _now()
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            self._db.execute(
+                """INSERT INTO lessons(
+                       lesson_id, session_id, check_type, check_key, pattern_fingerprint,
+                       trigger, lesson, evidence_ids_json, status, support_count, created_at, updated_at
+                   ) VALUES(?, ?, ?, ?, ?, 'corrected_acceptance_check', ?, ?, 'candidate', 0, ?, ?)
+                   ON CONFLICT(session_id, pattern_fingerprint) DO NOTHING""",
+                (str(uuid.uuid4()), session_id, check_type, check_key, pattern_fingerprint,
+                 lesson.strip(), json.dumps(unique_ids, ensure_ascii=False), now, now),
+            )
+            lesson_row = self._db.execute(
+                "SELECT * FROM lessons WHERE session_id=? AND pattern_fingerprint=?",
+                (session_id, pattern_fingerprint),
+            ).fetchone()
+            lesson_id = lesson_row["lesson_id"]
+            self._db.execute(
+                """INSERT OR IGNORE INTO lesson_supports(
+                       lesson_id, goal_id, reflection_id, evidence_ids_json, created_at
+                   ) VALUES(?, ?, ?, ?, ?)""",
+                (lesson_id, goal_id, reflection_id, json.dumps(unique_ids, ensure_ascii=False), now),
+            )
+            supports = self._db.execute(
+                "SELECT count(*) FROM lesson_supports WHERE lesson_id=?", (lesson_id,)
+            ).fetchone()[0]
+            merged_ids = json.loads(lesson_row["evidence_ids_json"])
+            for evidence_id in unique_ids:
+                if evidence_id not in merged_ids:
+                    merged_ids.append(evidence_id)
+            status = lesson_row["status"]
+            if status == "candidate" and supports >= 2:
+                status = "verified"
+            self._db.execute(
+                """UPDATE lessons SET support_count=?, status=?, evidence_ids_json=?, updated_at=?
+                   WHERE lesson_id=?""",
+                (supports, status, json.dumps(merged_ids[:12], ensure_ascii=False), now, lesson_id),
+            )
             self._db.commit()
-            return True
-        return False
+        except Exception:
+            self._db.rollback()
+            raise
+        return self._decode_goal_lesson(
+            self._db.execute("SELECT * FROM lessons WHERE lesson_id=?", (lesson_id,)).fetchone()
+        )
+
+    def _decode_goal_lesson(self, row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["evidence_ids"] = json.loads(item.pop("evidence_ids_json"))
+        return item
+
+    def list_goal_lessons(
+        self,
+        session_id: int,
+        *,
+        check_type: str,
+        check_key: str,
+        limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise ValueError("lesson limit must be an integer")
+        page_limit = max(1, min(limit, 3))
+        rows = self._db.execute(
+            """SELECT * FROM lessons WHERE session_id=? AND check_type=? AND check_key=?
+               AND status IN ('candidate', 'verified') ORDER BY updated_at DESC LIMIT ?""",
+            (session_id, check_type, check_key, page_limit),
+        ).fetchall()
+        return [self._decode_goal_lesson(row) for row in rows]
 
     def list_goals(self, session_id: int) -> list[dict[str, Any]]:
         rows = self._db.execute(
