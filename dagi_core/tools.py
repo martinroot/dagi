@@ -14,6 +14,7 @@ from .state import StateStore
 
 MAX_OUTPUT_CHARS = 8_000
 MAX_FILE_BYTES = 250_000
+MAX_PRESENTATION_BYTES = 16_000
 SHELL_TIMEOUT_SECONDS = 30
 
 
@@ -25,6 +26,35 @@ class ToolError(Exception):
 class ToolResult:
     content: str
     is_error: bool = False
+    presentation: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.content, str) or not isinstance(self.is_error, bool):
+            raise TypeError("tool results require text content and a boolean error flag")
+        if self.presentation is None:
+            return
+        if not isinstance(self.presentation, dict):
+            raise TypeError("tool presentation metadata must be a JSON object")
+        if set(self.presentation) - {"type", "summary", "artifacts", "diagnostics"}:
+            raise ValueError("tool presentation metadata contains unsupported fields")
+        view_type = self.presentation.get("type")
+        summary = self.presentation.get("summary", "")
+        artifacts = self.presentation.get("artifacts", [])
+        diagnostics = self.presentation.get("diagnostics", {})
+        if not isinstance(view_type, str) or not view_type.strip() or len(view_type) > 80:
+            raise ValueError("tool presentation type must be non-empty text of at most 80 characters")
+        if not isinstance(summary, str) or len(summary) > 1_000:
+            raise ValueError("tool presentation summary must be text of at most 1000 characters")
+        if not isinstance(artifacts, list) or len(artifacts) > 20 or any(not isinstance(item, dict) for item in artifacts):
+            raise ValueError("tool presentation artifacts must be a list of at most 20 objects")
+        if not isinstance(diagnostics, dict):
+            raise ValueError("tool presentation diagnostics must be a JSON object")
+        try:
+            encoded = json.dumps(self.presentation, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("tool presentation metadata must contain only JSON values") from exc
+        if len(encoded) > MAX_PRESENTATION_BYTES:
+            raise ValueError(f"tool presentation metadata exceeds {MAX_PRESENTATION_BYTES} bytes")
 
 
 @dataclass(frozen=True)

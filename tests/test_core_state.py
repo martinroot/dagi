@@ -100,6 +100,31 @@ def test_existing_database_migrates_partial_message_flag(tmp_path):
     store.close()
 
 
+def test_existing_tool_execution_table_migrates_presentation_column(tmp_path):
+    path = tmp_path / "tool-metadata-legacy.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        CREATE TABLE sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, created_at TEXT NOT NULL);
+        CREATE TABLE runs (
+            run_id TEXT PRIMARY KEY, session_id INTEGER NOT NULL, status TEXT NOT NULL,
+            started_at TEXT NOT NULL, finished_at TEXT, error TEXT
+        );
+        CREATE TABLE tool_executions (
+            tool_call_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, session_id INTEGER NOT NULL,
+            name TEXT NOT NULL, arguments TEXT NOT NULL, status TEXT NOT NULL,
+            result TEXT, error TEXT, retryable INTEGER NOT NULL DEFAULT 0,
+            has_verifier INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+    """)
+    connection.commit()
+    connection.close()
+
+    store = StateStore(path)
+    columns = {row[1] for row in store._db.execute("PRAGMA table_info(tool_executions)")}
+    assert "presentation_json" in columns
+    store.close()
+
+
 def test_run_events_are_persisted_and_resumable_by_cursor(tmp_path):
     store = StateStore(tmp_path / "state.sqlite3")
     session = store.create_session()

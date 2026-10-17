@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS tool_executions (
     status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'uncertain')),
     result TEXT,
     error TEXT,
+    presentation_json TEXT,
     retryable INTEGER NOT NULL DEFAULT 0,
     has_verifier INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -197,6 +198,8 @@ class StateStore:
             self._db.execute("ALTER TABLE tool_executions ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0")
         if "has_verifier" not in tool_columns:
             self._db.execute("ALTER TABLE tool_executions ADD COLUMN has_verifier INTEGER NOT NULL DEFAULT 0")
+        if "presentation_json" not in tool_columns:
+            self._db.execute("ALTER TABLE tool_executions ADD COLUMN presentation_json TEXT")
         self._db.commit()
         if os.name == "posix":
             os.chmod(self.path, 0o600)
@@ -553,6 +556,8 @@ class StateStore:
         result["arguments"] = json.loads(result["arguments"])
         result["retryable"] = bool(result["retryable"])
         result["has_verifier"] = bool(result["has_verifier"])
+        presentation_json = result.pop("presentation_json", None)
+        result["presentation"] = json.loads(presentation_json) if presentation_json else None
         return result
 
     def list_tool_calls(
@@ -573,6 +578,8 @@ class StateStore:
             result["arguments"] = json.loads(result["arguments"])
             result["retryable"] = bool(result["retryable"])
             result["has_verifier"] = bool(result["has_verifier"])
+            presentation_json = result.pop("presentation_json", None)
+            result["presentation"] = json.loads(presentation_json) if presentation_json else None
         return results
 
     def mark_tool_call_running(self, tool_call_id: str) -> None:
@@ -638,10 +645,14 @@ class StateStore:
             current_run = self.get_run(run_id)
             if call["session_id"] != session_id or current_run is None or current_run["session_id"] != session_id:
                 raise ValueError("tool completion identifiers do not match the active session")
+            presentation = event.get("presentation")
+            presentation_json = json.dumps(presentation, ensure_ascii=False, allow_nan=False) if presentation is not None else None
+            if presentation_json is not None and len(presentation_json.encode("utf-8")) > 16_000:
+                raise ValueError("tool presentation metadata exceeds 16000 bytes")
             updated = self._db.execute(
-                """UPDATE tool_executions SET status=?, result=?, error=?, updated_at=?
+                """UPDATE tool_executions SET status=?, result=?, error=?, presentation_json=?, updated_at=?
                    WHERE tool_call_id=? AND status='running'""",
-                (status, result, error, _now(), tool_call_id),
+                (status, result, error, presentation_json, _now(), tool_call_id),
             )
             if updated.rowcount != 1:
                 raise ValueError(f"tool call is missing or not running: {tool_call_id}")

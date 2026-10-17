@@ -4,7 +4,7 @@ from pathlib import Path
 from dagi_core.agent import Agent, AgentEvent
 from dagi_core.provider import StreamEvent
 from dagi_core.state import StateStore
-from dagi_core.tools import Tool, ToolRegistry
+from dagi_core.tools import Tool, ToolRegistry, ToolResult
 
 
 class FakeProvider:
@@ -107,6 +107,36 @@ def test_tool_result_event_exposes_explicit_uncertain_outcome(tmp_path):
     assert result.outcome == "uncertain"
     saved = next(row["event"] for row in state.list_run_events(result.run_id) if row["event"]["kind"] == "tool_result")
     assert saved["outcome"] == "uncertain"
+    state.close()
+
+
+def test_structured_tool_presentation_is_persisted_without_replacing_text_result(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    tools = ToolRegistry(tmp_path / "workspace", state, session)
+    presentation = {
+        "type": "file",
+        "summary": "Read src/main.py",
+        "artifacts": [{"path": "src/main.py", "operation": "read"}],
+        "diagnostics": {"bytes": 12, "truncated": False},
+    }
+    tools.register(Tool(
+        "inspect_file", "Return a structured file result.",
+        {"type": "object", "properties": {}},
+        lambda _arguments: ToolResult("file contents", presentation=presentation),
+    ))
+    provider = FakeProvider([
+        [StreamEvent(kind="tool_call", tool_call={"id": "call-present", "name": "inspect_file", "arguments": {}}),
+         StreamEvent(kind="finish", finish_reason="tool_calls")],
+        [StreamEvent(kind="text", text="The file was read."), StreamEvent(kind="finish", finish_reason="stop")],
+    ])
+    events = list(Agent(provider, tools, state, session).run_turn("inspect the file"))
+    stored = state.get_tool_call("call-present")
+    assert stored["result"] == "file contents"
+    assert stored["presentation"] == presentation
+    tool_event = next(row["event"] for row in state.list_run_events(events[0].run_id) if row["event"]["kind"] == "tool_result")
+    assert tool_event["presentation"] == presentation
+    assert any(message["role"] == "tool" and message["content"] == "file contents" for message in state.messages(session))
     state.close()
 
 
