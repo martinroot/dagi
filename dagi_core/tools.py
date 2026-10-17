@@ -364,15 +364,29 @@ class ToolRegistry:
             },
         )
 
-    def _use_skill(self, args: dict[str, Any]) -> str:
+    def _use_skill(self, args: dict[str, Any]) -> ToolResult:
         name = str(args["name"])
         skill = self.state.get_skill(name)
         if skill is None:
             raise ToolError(f"no such skill: {name!r}")
         self.state.record_skill_use(name)
-        return f"# {skill['name']}\n{skill['description']}\n\n{skill['body']}"
+        updated = self.state.get_skill(name) or skill
+        return ToolResult(
+            f"# {skill['name']}\n{skill['description']}\n\n{skill['body']}",
+            presentation={
+                "type": "skill",
+                "summary": f"Loaded skill {skill['name']}",
+                "artifacts": [{
+                    "name": str(skill["name"])[:80],
+                    "description": str(skill["description"])[:160],
+                    "triggers": [str(trigger)[:60] for trigger in skill.get("triggers", [])[:3]],
+                    "use_count": updated.get("use_count", 0),
+                }],
+                "diagnostics": {"body_bytes": len(skill["body"].encode("utf-8"))},
+            },
+        )
 
-    def _create_skill(self, args: dict[str, Any]) -> str:
+    def _create_skill(self, args: dict[str, Any]) -> ToolResult:
         try:
             skill = self.state.create_skill(
                 str(args["name"]), str(args["description"]),
@@ -380,7 +394,20 @@ class ToolRegistry:
             )
         except Exception as exc:
             raise ToolError(f"could not save skill: {exc}") from exc
-        return f"saved skill {skill['name']!r}"
+        return ToolResult(
+            f"saved skill {skill['name']!r}",
+            presentation={
+                "type": "skill_created",
+                "summary": f"Created skill {skill['name']}",
+                "artifacts": [{
+                    "name": str(skill["name"])[:80],
+                    "description": str(skill["description"])[:160],
+                    "triggers": [str(trigger)[:60] for trigger in skill.get("triggers", [])[:3]],
+                    "use_count": skill.get("use_count", 0),
+                }],
+                "diagnostics": {"body_bytes": len(skill["body"].encode("utf-8"))},
+            },
+        )
 
     def _run_bash(self, args: dict[str, Any]) -> str:
         command = args.get("command")

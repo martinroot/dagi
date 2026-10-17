@@ -193,6 +193,21 @@ function renderDirectoryPresentation(presentation) {
   };
 }
 
+function renderSkillPresentation(presentation, resultText) {
+  const skill = Array.isArray(presentation.artifacts) ? presentation.artifacts[0] || {} : {};
+  const created = presentation.type === "skill_created";
+  const triggers = Array.isArray(skill.triggers) ? skill.triggers.join(", ") : "none listed";
+  const uses = Number.isFinite(skill.use_count) ? skill.use_count : "not recorded";
+  const bodyBytes = Number.isFinite(presentation.diagnostics?.body_bytes) ? presentation.diagnostics.body_bytes : null;
+  return {
+    icon: created ? "✨" : "📘",
+    title: `${created ? "Created" : "Loaded"} skill ${skill.name || "unknown"}`,
+    summary: skill.description || presentation.summary || "Skill details unavailable",
+    resultText: resultText || "(no procedure content returned)",
+    metadata: `Triggers: ${triggers} · used ${uses}${bodyBytes === null ? "" : ` · ${bodyBytes} body bytes`}`,
+  };
+}
+
 function renderSkillsPresentation(presentation) {
   const skills = Array.isArray(presentation.artifacts) ? presentation.artifacts : [];
   const resultText = skills.map((skill) => {
@@ -235,6 +250,8 @@ const toolPresentationRenderers = new Map([
   ["directory", renderDirectoryPresentation],
   ["memory", renderMemoryPresentation],
   ["skills", renderSkillsPresentation],
+  ["skill", renderSkillPresentation],
+  ["skill_created", renderSkillPresentation],
 ]);
 
 function registerToolPresentationRenderer(type, renderer) {

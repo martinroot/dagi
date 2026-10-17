@@ -136,6 +136,49 @@ def test_list_skills_returns_structured_skill_records(tmp_path):
     state.close()
 
 
+def test_use_skill_returns_structured_loaded_skill_metadata(tmp_path):
+    state, tools = make_tools(tmp_path)
+    state.create_skill("release-check", "Verify releases", ["release", "tag"], "1. run tests")
+
+    result = tools.call("use_skill", {"name": "release-check"})
+
+    assert result.content == "# release-check\nVerify releases\n\n1. run tests"
+    assert result.presentation is not None
+    assert result.presentation == {
+        "type": "skill",
+        "summary": "Loaded skill release-check",
+        "artifacts": [{
+            "name": "release-check", "description": "Verify releases",
+            "triggers": ["release", "tag"], "use_count": 1,
+        }],
+        "diagnostics": {"body_bytes": len("1. run tests")},
+    }
+    state.close()
+
+
+def test_create_skill_returns_structured_metadata_without_body(tmp_path):
+    state, tools = make_tools(tmp_path)
+
+    result = tools.call("create_skill", {
+        "name": "Release Review", "description": "Review a release", "triggers": ["tag"],
+        "body": "1. verify changelog\n2. run tests",
+    })
+
+    assert result.content == "saved skill 'release-review'"
+    assert result.presentation is not None
+    assert result.presentation == {
+        "type": "skill_created",
+        "summary": "Created skill release-review",
+        "artifacts": [{
+            "name": "release-review", "description": "Review a release",
+            "triggers": ["tag"], "use_count": 0,
+        }],
+        "diagnostics": {"body_bytes": len("1. verify changelog\n2. run tests")},
+    }
+    assert "body" not in result.presentation["artifacts"][0]
+    state.close()
+
+
 def test_list_skills_bounds_structured_metadata_for_large_catalog(tmp_path):
     state, tools = make_tools(tmp_path)
     for index in range(25):

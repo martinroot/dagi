@@ -415,6 +415,56 @@ test("skills presentation renders names, descriptions, triggers, and usage", asy
   assert.ok(card.children[4].children[3].textContent.includes("used 2"));
 });
 
+test("skill use and creation render structured metadata with safe procedure text", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "skills"},
+      runs: [{run_id: "run-skill-actions", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-skill-actions": 0},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({lastEventId: "1", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-skill-actions", tool_call_id: "use-1",
+    tool_name: "use_skill", tool_args: {name: "release-check"},
+  })});
+  source.onmessage({lastEventId: "2", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-skill-actions", tool_call_id: "use-1",
+    tool_name: "use_skill", text: "# release-check\\nVerify releases\\n\\n1. run tests", is_error: false, outcome: "succeeded",
+    presentation: {
+      type: "skill", summary: "Loaded skill release-check",
+      artifacts: [{name: "release-check", description: "Verify releases", triggers: ["release"], use_count: 3}],
+      diagnostics: {body_bytes: 12},
+    },
+  })});
+  source.onmessage({lastEventId: "3", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-skill-actions", tool_call_id: "create-1",
+    tool_name: "create_skill", tool_args: {name: "review", description: "Review PRs", triggers: ["review"]},
+  })});
+  source.onmessage({lastEventId: "4", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-skill-actions", tool_call_id: "create-1",
+    tool_name: "create_skill", text: "saved skill 'review'", is_error: false, outcome: "succeeded",
+    presentation: {
+      type: "skill_created", summary: "Created skill review",
+      artifacts: [{name: "review", description: "Review PRs", triggers: ["review"], use_count: 0}],
+      diagnostics: {body_bytes: 18},
+    },
+  })});
+  const cards = elements.get("chat").children;
+  assert.equal(cards[0].dataset.renderer, "skill");
+  assert.ok(cards[0].children[0].textContent.includes("release-check"));
+  assert.ok(cards[0].children[4].children[3].textContent.includes("1. run tests"));
+  assert.equal(cards[1].dataset.renderer, "skill_created");
+  assert.ok(cards[1].children[4].children[3].textContent.includes("saved skill 'review'"));
+  assert.ok(cards[1].children[3].textContent.includes("Review PRs"));
+});
+
 test("saved messages keep their persisted message identity in the UI model", async () => {
   const fetchImpl = async (url) => {
     if (url === "/api/auth/session") return jsonResponse({authenticated: true});
