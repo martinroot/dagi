@@ -71,8 +71,44 @@ def test_goal_schema_upgrade_preserves_existing_sessions_and_runs(tmp_path):
             finished_at TEXT,
             error TEXT
         );
+        CREATE TABLE messages(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            tool_calls TEXT,
+            tool_call_id TEXT,
+            name TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE provider_calls(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+            model TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            usage_source TEXT NOT NULL,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            cost_usd TEXT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT
+        );
+        CREATE TABLE skills(
+            name TEXT PRIMARY KEY,
+            description TEXT NOT NULL,
+            triggers TEXT NOT NULL DEFAULT '[]',
+            body TEXT NOT NULL,
+            use_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
         INSERT INTO sessions(id, title, created_at) VALUES(41, 'preserve-me', '2026-01-01T00:00:00+00:00');
         INSERT INTO runs(run_id, session_id, status, started_at) VALUES('legacy-run', 41, 'completed', '2026-01-01T00:01:00+00:00');
+        INSERT INTO messages(id, session_id, role, content, created_at)
+            VALUES(51, 41, 'assistant', 'old transcript survives', '2026-01-01T00:02:00+00:00');
+        INSERT INTO provider_calls(id, run_id, model, purpose, usage_source, input_tokens, output_tokens, cost_usd, started_at)
+            VALUES(61, 'legacy-run', 'old-model', 'agent', 'actual', 12, 4, '0.12', '2026-01-01T00:03:00+00:00');
+        INSERT INTO skills(name, description, triggers, body, use_count, created_at)
+            VALUES('old-skill', 'preserve this skill', '[]', 'skill body survives', 2, '2026-01-01T00:04:00+00:00');
     """)
     db.commit()
     db.close()
@@ -80,8 +116,14 @@ def test_goal_schema_upgrade_preserves_existing_sessions_and_runs(tmp_path):
     state = StateStore(path)
     session = state.get_session(41)
     run = state.get_run("legacy-run")
-    assert session["title"] == "preserve-me"
-    assert run["status"] == "completed"
-    assert run["budget_group_id"] == "legacy-run"
+    assert session is not None and session["title"] == "preserve-me"
+    assert run is not None and run["status"] == "completed"
+    assert run is not None and run["budget_group_id"] == "legacy-run"
+    assert state.messages(41)[0]["content"] == "old transcript survives"
+    usage = state.usage_summary("legacy-run")
+    assert usage["provider_calls"] == 1
+    assert str(usage["cost_usd"]) == "0.12"
+    legacy_skill = state.get_skill("old-skill")
+    assert legacy_skill is not None and legacy_skill["body"] == "skill body survives"
     assert state.list_goals(41) == []
     state.close()
