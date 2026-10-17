@@ -5,6 +5,7 @@ from __future__ import annotations
 import difflib
 import json
 import re
+from decimal import Decimal
 import subprocess
 import time
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ MAX_FILE_BYTES = 250_000
 MAX_FILE_DIFF_SOURCE_BYTES = 4_096
 MAX_FILE_DIFF_BYTES = 8_000
 MAX_PRESENTATION_BYTES = 16_000
+MAX_INSPECT_RUNTIME_TOOLS = 32
+MAX_INSPECT_RUNTIME_CHECKS = 12
 SHELL_TIMEOUT_SECONDS = 30
 
 
@@ -70,6 +73,8 @@ class ToolExecutionContext:
     cancel_event: Event | None = None
     register_provider: Callable[[Any], None] | None = None
     entry_point: str = "unknown"
+    provider_call_limit: int | None = None
+    budget_limit_usd: str | None = None
 
 
 def _resolve(workspace: Path, raw_path: str) -> Path:
@@ -248,6 +253,11 @@ class ToolRegistry:
             self._list_dir, retryable=True,
         ))
         self.register(Tool(
+            "inspect_runtime", "Inspect allowlisted facts about the current session, run, checks, tools, and limits.",
+            {"type": "object", "properties": {}},
+            self._inspect_runtime, retryable=True, context_aware=True,
+        ))
+        self.register(Tool(
             "search_memory", "Search messages saved from earlier sessions.",
             {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query"]},
             self._search_memory, retryable=True,
@@ -401,6 +411,96 @@ class ToolRegistry:
                 "diagnostics": {"entry_count": len(items), "empty": not items},
             },
         )
+
+    def _inspect_runtime(self, _args: dict[str, Any], context: ToolExecutionContext) -> ToolResult:
+        session = self.state.get_session(context.session_id)
+        run = self.state.get_run(context.run_id)
+        if session is None or run is None or run["session_id"] != context.session_id:
+            raise ToolError("runtime context no longer matches an active session and run")
+
+        enabled_tools = sorted(self._tools)[:MAX_INSPECT_RUNTIME_TOOLS]
+        usage = self.state.usage_summary_for_budget(context.run_id)
+        calls_used = int(usage.get("provider_calls", 0))
+        call_limit = context.provider_call_limit
+        remaining_calls = max(0, call_limit - calls_used) if call_limit is not None else None
+        budget = Decimal(context.budget_limit_usd) if context.budget_limit_usd is not None else None
+        cost = usage.get("cost_usd")
+        if budget is None:
+            remaining_cost = None
+            cost_status = "not_configured"
+        elif cost is None:
+            remaining_cost = None
+            cost_status = "unknown"
+        else:
+            remaining_cost = str(max(Decimal("0"), budget - Decimal(cost)))
+            cost_status = "known"
+
+        current_goal = None
+        for goal in self.state.list_goals(context.session_id):
+            if context.run_id not in goal["runs"]:
+                continue
+            checks = []
+            for check in goal["checks"][:MAX_INSPECT_RUNTIME_CHECKS]:
+                summary: dict[str, Any] = {"type": str(check.get("type", "unknown"))}
+                path = check.get("path")
+                if isinstance(path, str):
+                    summary["path"] = path[:256]
+                    if len(path) > 256:
+                        summary["path_truncated"] = True
+                if summary["type"] == "file_contains" and isinstance(check.get("text"), str):
+                    summary["required_text_length"] = len(check["text"])
+                if summary["type"] == "command":
+                    argv = check.get("argv")
+                    summary["argument_count"] = len(argv) if isinstance(argv, list) else None
+                    summary["arguments_omitted"] = True
+                checks.append(summary)
+            current_goal = {
+                "goal_id": goal["goal_id"],
+                "status": goal["status"],
+                "iteration": goal["iteration"],
+                "max_iterations": goal["max_iterations"],
+                "checks": checks,
+                "omitted_check_count": max(0, len(goal["checks"]) - len(checks)),
+            }
+            break
+
+        snapshot = {
+            "identity": {
+                "agent_id": run["agent_id"],
+                "agent_name": str(run["agent_name"])[:120],
+                "session_id": context.session_id,
+                "run_id": context.run_id,
+                "parent_session_id": session.get("parent_id"),
+                "parent_run_id": run.get("parent_run_id"),
+                "role": "child" if session.get("parent_id") is not None else "root",
+            },
+            "environment": {
+                "entry_point": context.entry_point if context.entry_point in {"cli", "web", "unknown"} else "unknown",
+                "workspace": str(session.get("workspace") or ".")[:512],
+                "resolved_workspace": str(self.workspace)[:512],
+                "shell_enabled": "run_bash" in self._tools,
+                "enabled_tools": enabled_tools,
+                "omitted_tool_count": max(0, len(self._tools) - len(enabled_tools)),
+            },
+            "execution": {
+                "status": run["status"],
+                "depth": run["depth"],
+                "parent_run_id": run.get("parent_run_id"),
+            },
+            "limits": {
+                "provider_calls_used": calls_used,
+                "provider_call_limit": call_limit,
+                "remaining_provider_calls": remaining_calls,
+                "budget_limit_usd": context.budget_limit_usd,
+                "remaining_cost_usd": remaining_cost,
+                "cost_status": cost_status,
+            },
+            "current_goal": current_goal,
+        }
+        serialized = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        if len(serialized.encode("utf-8")) > MAX_OUTPUT_CHARS:
+            raise ToolError("runtime inspection exceeds the output size limit")
+        return ToolResult(serialized)
 
     def _search_memory(self, args: dict[str, Any]) -> ToolResult:
         hits = self.state.search_memory(

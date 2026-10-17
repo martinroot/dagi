@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 import time
+from copy import deepcopy
 from threading import Event, Thread
 from http.cookiejar import CookieJar
 from urllib.error import HTTPError
@@ -94,9 +95,11 @@ class ToolThenAnswerProvider:
     def __init__(self, instances):
         self.calls = 0
         self.instances = instances
+        self.requests = []
         instances.append(self)
 
-    def stream(self, _messages, _tools):
+    def stream(self, messages, _tools):
+        self.requests.append(deepcopy(messages))
         self.calls += 1
         if self.calls == 1:
             return iter([
@@ -524,6 +527,12 @@ def test_web_run_uses_the_session_workspace(tmp_path):
         _wait_for_status(base, run_id, "completed")
 
         child_workspace = tmp_path / "workspace" / ".dagi-children" / "web-child"
+        system_content = providers[0].requests[0][0]["content"]
+        start = system_content.index("DAGI_RUNTIME_CONTEXT_JSON_BEGIN\n") + len("DAGI_RUNTIME_CONTEXT_JSON_BEGIN\n")
+        end = system_content.index("\nDAGI_RUNTIME_CONTEXT_JSON_END", start)
+        runtime_context = json.loads(system_content[start:end])
+        assert runtime_context["environment"]["entry_point"] == "web"
+        assert runtime_context["environment"]["workspace"] == ".dagi-children/web-child"
         assert (child_workspace / "web.txt").read_text(encoding="utf-8") == "created from web"
         assert not (tmp_path / "workspace" / "web.txt").exists()
     finally:

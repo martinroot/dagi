@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 
@@ -233,8 +234,10 @@ def test_cli_resume_uses_saved_session_workspace(tmp_path, monkeypatch, capsys):
 
         def __init__(self):
             self.calls = 0
+            self.requests = []
 
-        def stream(self, _messages, _tools):
+        def stream(self, messages, _tools):
+            self.requests.append(messages)
             self.calls += 1
             if self.calls == 1:
                 return iter([
@@ -257,6 +260,12 @@ def test_cli_resume_uses_saved_session_workspace(tmp_path, monkeypatch, capsys):
     cli.run()
 
     child_workspace = tmp_path / "workspace" / ".dagi-children" / "cli-child"
+    system_content = provider.requests[0][0]["content"]
+    start = system_content.index("DAGI_RUNTIME_CONTEXT_JSON_BEGIN\n") + len("DAGI_RUNTIME_CONTEXT_JSON_BEGIN\n")
+    end = system_content.index("\nDAGI_RUNTIME_CONTEXT_JSON_END", start)
+    runtime_context = json.loads(system_content[start:end])
+    assert runtime_context["environment"]["entry_point"] == "cli"
+    assert runtime_context["environment"]["workspace"] == ".dagi-children/cli-child"
     assert (child_workspace / "from-cli.txt").read_text(encoding="utf-8") == "session scoped"
     assert not (tmp_path / "workspace" / "from-cli.txt").exists()
     assert "Saved in this session." in capsys.readouterr().out

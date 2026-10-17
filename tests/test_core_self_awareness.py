@@ -4,7 +4,7 @@ from copy import deepcopy
 from dagi_core.agent import Agent
 from dagi_core.provider import StreamEvent
 from dagi_core.state import StateStore
-from dagi_core.tools import ToolRegistry
+from dagi_core.tools import ToolExecutionContext, ToolRegistry
 from dagi_core.usage import UsagePolicy
 from dagi_core.workspace import resolve_session_workspace
 
@@ -115,4 +115,50 @@ def test_root_request_identifies_cli_and_legacy_root_workspace(tmp_path):
     assert context["environment"]["workspace"] == "."
     assert context["assignment"]["purpose"] is None
     assert context["assignment"]["required_output"] is None
+    state.close()
+
+
+def test_inspect_runtime_returns_only_allowlisted_session_and_goal_facts(tmp_path, monkeypatch):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    state = StateStore(tmp_path / "state.sqlite3")
+    parent = state.create_session("parent")
+    parent_run = state.create_run(parent, agent_id="parent-agent", agent_name="parent-model")
+    child = state.create_session("child", parent_id=parent, workspace=".dagi-children/inspect-child")
+    child_record = state.get_session(child)
+    assert child_record is not None
+    child_workspace = resolve_session_workspace(root, child_record["workspace"])
+    tools = ToolRegistry(child_workspace, state, child)
+    run = state.create_run(
+        child, parent_run_id=parent_run, agent_id="inspect-agent", agent_name="inspect-model"
+    )
+    goal = state.create_goal(
+        child, "Validate the child output", [{"type": "file_exists", "path": "deliverable.txt"}], 3
+    )
+    state.link_goal_run(goal, run)
+    tools.set_execution_context(ToolExecutionContext(
+        session_id=child, run_id=run, depth=1, model="inspect-model", entry_point="web",
+        provider_call_limit=4, budget_limit_usd="1.00",
+    ))
+    monkeypatch.setenv("DAGI_API_KEY", "INSPECT_RUNTIME_MUST_NOT_COPY_ENV")
+
+    result = tools.call("inspect_runtime", {})
+
+    inspected = json.loads(result.content)
+    assert inspected["identity"]["session_id"] == child
+    assert inspected["identity"]["run_id"] == run
+    assert inspected["identity"]["parent_session_id"] == parent
+    assert inspected["environment"]["entry_point"] == "web"
+    assert inspected["environment"]["workspace"] == ".dagi-children/inspect-child"
+    assert inspected["environment"]["enabled_tools"]
+    assert inspected["limits"]["provider_call_limit"] == 4
+    assert inspected["limits"]["remaining_provider_calls"] == 4
+    assert inspected["current_goal"]["goal_id"] == goal
+    assert inspected["current_goal"]["checks"] == [
+        {"type": "file_exists", "path": "deliverable.txt"},
+    ]
+    assert "INSPECT_RUNTIME_MUST_NOT_COPY_ENV" not in result.content
+    assert "DAGI_API_KEY" not in result.content
+    assert "api_key" not in result.content.lower()
+    assert len(result.content.encode("utf-8")) <= 8_000
     state.close()

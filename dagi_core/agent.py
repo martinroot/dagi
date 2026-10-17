@@ -170,6 +170,11 @@ class Agent:
                 ToolExecutionContext(
                     session_id, run_id, depth, self.model, cancel_event, register_provider,
                     entry_point=self.entry_point,
+                    provider_call_limit=self.usage_policy.max_calls_per_run,
+                    budget_limit_usd=(
+                        str(self.usage_policy.budget_usd)
+                        if self.usage_policy.budget_usd is not None else None
+                    ),
                 )
             )
             self.state.mark_tool_call_running(call_id)
