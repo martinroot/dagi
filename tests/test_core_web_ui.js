@@ -379,6 +379,42 @@ test("memory presentation renders sourced hits and opens the owning session", as
   assert.match(elements.get("session-title").textContent, /source session · #7/);
 });
 
+test("skills presentation renders names, descriptions, triggers, and usage", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "skill catalog"},
+      runs: [{run_id: "run-skills", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-skills": 0},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({lastEventId: "1", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-skills", tool_call_id: "skills-1",
+    tool_name: "list_skills", tool_args: {},
+  })});
+  source.onmessage({lastEventId: "2", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-skills", tool_call_id: "skills-1",
+    tool_name: "list_skills", text: "- release-check: Verify releases", is_error: false, outcome: "succeeded",
+    presentation: {
+      type: "skills", summary: "Listed 1 skill",
+      artifacts: [{name: "release-check", description: "Verify releases", triggers: ["release", "tag"], use_count: 2}],
+      diagnostics: {skill_count: 1},
+    },
+  })});
+  const card = elements.get("chat").children[0];
+  assert.equal(card.dataset.renderer, "skills");
+  assert.ok(card.children[4].children[3].textContent.includes("release-check"));
+  assert.ok(card.children[4].children[3].textContent.includes("Verify releases"));
+  assert.ok(card.children[4].children[3].textContent.includes("release, tag"));
+  assert.ok(card.children[4].children[3].textContent.includes("used 2"));
+});
+
 test("saved messages keep their persisted message identity in the UI model", async () => {
   const fetchImpl = async (url) => {
     if (url === "/api/auth/session") return jsonResponse({authenticated: true});

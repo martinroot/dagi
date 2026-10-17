@@ -193,6 +193,22 @@ function renderDirectoryPresentation(presentation) {
   };
 }
 
+function renderSkillsPresentation(presentation) {
+  const skills = Array.isArray(presentation.artifacts) ? presentation.artifacts : [];
+  const resultText = skills.map((skill) => {
+    const triggers = Array.isArray(skill.triggers) ? skill.triggers.join(", ") : "none listed";
+    const useCount = Number.isFinite(skill.use_count) ? skill.use_count : "not recorded";
+    return [`🧰 ${skill.name || "Unnamed skill"}`, skill.description || "No description", `Triggers: ${triggers} · used ${useCount}`].join("\n");
+  }).join("\n\n") || "(no skills yet)";
+  return {
+    icon: "🧰",
+    title: "Saved skills",
+    summary: presentation.summary || `${skills.length} saved skills`,
+    resultText,
+    metadata: `${skills.length} structured skill entries`,
+  };
+}
+
 function renderMemoryPresentation(presentation) {
   const diagnostics = presentation.diagnostics || {};
   const hits = Array.isArray(presentation.artifacts) ? presentation.artifacts : [];
@@ -218,6 +234,7 @@ const toolPresentationRenderers = new Map([
   ["file", renderFilePresentation],
   ["directory", renderDirectoryPresentation],
   ["memory", renderMemoryPresentation],
+  ["skills", renderSkillsPresentation],
 ]);
 
 function registerToolPresentationRenderer(type, renderer) {

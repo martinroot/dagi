@@ -338,11 +338,26 @@ class ToolRegistry:
             },
         )
 
-    def _list_skills(self, _args: dict[str, Any]) -> str:
+    def _list_skills(self, _args: dict[str, Any]) -> ToolResult:
         skills = self.state.list_skills()
-        return "\n".join(
+        content = "\n".join(
             f"- {skill['name']}: {skill['description']}" for skill in skills
         ) or "(no skills yet)"
+        count = len(skills)
+        return ToolResult(
+            content,
+            presentation={
+                "type": "skills",
+                "summary": f"Listed {count} {'skill' if count == 1 else 'skills'}",
+                "artifacts": [{
+                    "name": skill["name"],
+                    "description": skill["description"],
+                    "triggers": skill.get("triggers", []),
+                    "use_count": skill.get("use_count", 0),
+                } for skill in skills],
+                "diagnostics": {"skill_count": count},
+            },
+        )
 
     def _use_skill(self, args: dict[str, Any]) -> str:
         name = str(args["name"])

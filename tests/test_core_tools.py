@@ -116,6 +116,26 @@ def test_search_memory_returns_structured_hits_with_source(tmp_path):
     state.close()
 
 
+def test_list_skills_returns_structured_skill_records(tmp_path):
+    state, tools = make_tools(tmp_path)
+    skill = state.create_skill("release-check", "Verify releases", ["release", "tag"], "1. run tests")
+    state.record_skill_use(skill["name"])
+
+    result = tools.call("list_skills", {})
+
+    assert result.content == "- release-check: Verify releases"
+    assert result.presentation == {
+        "type": "skills",
+        "summary": "Listed 1 skill",
+        "artifacts": [{
+            "name": "release-check", "description": "Verify releases",
+            "triggers": ["release", "tag"], "use_count": 1,
+        }],
+        "diagnostics": {"skill_count": 1},
+    }
+    state.close()
+
+
 def test_file_tools_reject_paths_outside_workspace(tmp_path):
     state, tools = make_tools(tmp_path)
     outside = tmp_path / "outside.txt"
