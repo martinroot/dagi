@@ -162,6 +162,7 @@ class DelegationManager:
                 context_builder=context_builder,
                 agent_id=child_agent_id,
                 agent_name=model,
+                entry_point=context.entry_point,
             )
             prompt = (
                 f"Delegated task:\n{task.strip()}\n\n"

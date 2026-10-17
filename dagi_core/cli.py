@@ -78,6 +78,7 @@ def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
         provider, tools_for, state, session_id,
         usage_policy=config.usage_policy,
         context_builder=context_builder,
+        entry_point="cli",
     )
 
 

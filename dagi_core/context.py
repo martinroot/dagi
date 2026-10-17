@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
 
 from .provider import OpenAICompatibleProvider
 from .state import StateStore
@@ -38,6 +38,8 @@ class ContextBuilder:
         run_id: str,
         system_prompt: str,
         tools: list[dict[str, Any]],
+        *,
+        runtime_context_factory: Callable[[], str] | None = None,
     ) -> list[dict[str, Any]]:
         archives = self.state.list_context_archives(session_id)
         latest = archives[-1] if archives else None
@@ -50,8 +52,12 @@ class ContextBuilder:
         pending_archive: list[list[dict[str, Any]]] = []
         compression_count = 0
 
+        def compose_current() -> list[dict[str, Any]]:
+            runtime_context = runtime_context_factory() if runtime_context_factory is not None else None
+            return self._compose(system_prompt, summary, units, runtime_context)
+
         for _ in range(len(units) + 5):
-            candidate = self._compose(system_prompt, summary, units)
+            candidate = compose_current()
             candidate = self._truncate_tool_results(candidate)
             if self._token_count(candidate, tools) <= self.max_tokens:
                 if pending_archive or summary:
@@ -90,7 +96,7 @@ class ContextBuilder:
                 continue
             break
 
-        candidate = self._compose(system_prompt, summary, units)
+        candidate = compose_current()
         candidate = self._truncate_tool_results(candidate)
         if self._token_count(candidate, tools) > self.max_tokens:
             raise ContextLimitError(
@@ -195,10 +201,13 @@ class ContextBuilder:
         system_prompt: str,
         summary: str | None,
         turns: list[list[dict[str, Any]]],
+        runtime_context: str | None = None,
     ) -> list[dict[str, Any]]:
         system_content = system_prompt
         if summary:
             system_content += "\n\nArchived conversation summary (original messages remain stored):\n" + summary
+        if runtime_context:
+            system_content += runtime_context
         messages = [{"role": "system", "content": system_content}]
         for turn in turns:
             messages.extend(self._turn_messages(turn))

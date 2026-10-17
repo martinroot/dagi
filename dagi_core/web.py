@@ -736,6 +736,7 @@ class WebApp:
                 context_builder=context,
                 agent_id=self.agent_id,
                 agent_name=self.config.model,
+                entry_point="web",
             )
             for _event in agent.run_turn(
                 message,

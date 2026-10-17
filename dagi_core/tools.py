@@ -69,6 +69,7 @@ class ToolExecutionContext:
     model: str
     cancel_event: Event | None = None
     register_provider: Callable[[Any], None] | None = None
+    entry_point: str = "unknown"
 
 
 def _resolve(workspace: Path, raw_path: str) -> Path:
