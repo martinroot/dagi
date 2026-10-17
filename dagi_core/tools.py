@@ -228,13 +228,28 @@ class ToolRegistry:
                 self._run_bash,
             ))
 
-    def _read_file(self, args: dict[str, Any]) -> str:
+    def _read_file(self, args: dict[str, Any]) -> ToolResult:
         path = _resolve(self.workspace, str(args["path"]))
         if not path.is_file():
             raise ToolError(f"not a file: {args['path']!r}")
-        if path.stat().st_size > MAX_FILE_BYTES:
+        size_bytes = path.stat().st_size
+        if size_bytes > MAX_FILE_BYTES:
             raise ToolError(f"file exceeds {MAX_FILE_BYTES} bytes")
-        return _truncate(path.read_text(encoding="utf-8"))
+        content = path.read_text(encoding="utf-8")
+        relative = path.relative_to(self.workspace).as_posix()
+        return ToolResult(
+            _truncate(content),
+            presentation={
+                "type": "file",
+                "summary": f"Read {relative}",
+                "artifacts": [{"path": relative, "operation": "read"}],
+                "diagnostics": {
+                    "size_bytes": size_bytes,
+                    "line_count": len(content.splitlines()),
+                    "truncated": len(content) > MAX_OUTPUT_CHARS,
+                },
+            },
+        )
 
     def _verify_write_effect(self, args: dict[str, Any]) -> bool | None:
         try:

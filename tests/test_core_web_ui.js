@@ -232,6 +232,76 @@ test("tool cards distinguish unknown outcome from a known tool failure", async (
   assert.match(card.children[3].textContent, /outcome is unknown/);
 });
 
+test("file presentation renders path, size, truncation, and numbered text", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "file result"},
+      runs: [{run_id: "run-file", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-file": 0},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({lastEventId: "1", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-file", tool_call_id: "read-1",
+    tool_name: "read_file", tool_args: {path: "notes/a.txt"},
+  })});
+  source.onmessage({lastEventId: "2", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-file", tool_call_id: "read-1",
+    tool_name: "read_file", text: ["alpha", "beta"].join("\n"), is_error: false, outcome: "succeeded",
+    presentation: {
+      type: "file", summary: "Read notes/a.txt",
+      artifacts: [{path: "notes/a.txt", operation: "read"}],
+      diagnostics: {size_bytes: 11, line_count: 2, truncated: true},
+    },
+  })});
+  const card = elements.get("chat").children[0];
+  assert.ok(card.children[0].textContent.includes("notes/a.txt"));
+  assert.ok(card.children[3].textContent.includes("11 bytes"));
+  assert.ok(card.children[3].textContent.includes("truncated"));
+  assert.ok(card.children[4].children[3].textContent.includes("1 | alpha"));
+  assert.ok(card.children[4].children[3].textContent.includes("2 | beta"));
+});
+
+test("a registered custom presentation renderer is used without changing chat plumbing", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "custom renderer"},
+      runs: [{run_id: "run-custom", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-custom": 0},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  context.registerToolPresentationRenderer("custom", (presentation, text) => ({
+    icon: "🧪", title: presentation.summary, summary: "Rendered by extension",
+    resultText: text.toUpperCase(), metadata: "extension metadata",
+  }));
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({lastEventId: "1", data: JSON.stringify({
+    kind: "tool_call", session_id: 1, run_id: "run-custom", tool_call_id: "call-custom",
+    tool_name: "custom_tool", tool_args: {},
+  })});
+  source.onmessage({lastEventId: "2", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-custom", tool_call_id: "call-custom",
+    tool_name: "custom_tool", text: "extension result", is_error: false, outcome: "succeeded",
+    presentation: {type: "custom", summary: "Custom renderer"},
+  })});
+  const card = elements.get("chat").children[0];
+  assert.equal(card.dataset.renderer, "custom");
+  assert.match(card.children[0].textContent, /Custom renderer/);
+  assert.equal(card.children[4].children[3].textContent, "EXTENSION RESULT");
+});
+
 test("saved messages keep their persisted message identity in the UI model", async () => {
   const fetchImpl = async (url) => {
     if (url === "/api/auth/session") return jsonResponse({authenticated: true});

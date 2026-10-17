@@ -23,6 +23,40 @@ def test_workspace_file_tools_roundtrip(tmp_path):
     state.close()
 
 
+def test_read_file_returns_structured_path_size_line_count_and_truncation(tmp_path):
+    state, tools = make_tools(tmp_path)
+    path = tools.workspace / "notes" / "a.txt"
+    path.parent.mkdir(parents=True)
+    contents = "alpha\nbeta\n"
+    path.write_text(contents, encoding="utf-8")
+
+    result = tools.call("read_file", {"path": "notes/a.txt"})
+
+    assert result.content == contents
+    assert result.presentation == {
+        "type": "file",
+        "summary": "Read notes/a.txt",
+        "artifacts": [{"path": "notes/a.txt", "operation": "read"}],
+        "diagnostics": {"size_bytes": len(contents.encode("utf-8")), "line_count": 2, "truncated": False},
+    }
+    state.close()
+
+
+def test_read_file_marks_truncated_preview_structurally(tmp_path):
+    state, tools = make_tools(tmp_path)
+    path = tools.workspace / "large.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    contents = "line\n" * 2_000
+    path.write_text(contents, encoding="utf-8")
+
+    result = tools.call("read_file", {"path": "large.txt"})
+
+    assert "[truncated" in result.content
+    assert result.presentation["diagnostics"]["truncated"] is True
+    assert result.presentation["diagnostics"]["line_count"] == 2_000
+    state.close()
+
+
 def test_file_tools_reject_paths_outside_workspace(tmp_path):
     state, tools = make_tools(tmp_path)
     outside = tmp_path / "outside.txt"
@@ -75,6 +109,15 @@ def test_duplicate_public_tool_names_are_rejected(tmp_path):
     with pytest.raises(ValueError, match="already registered"):
         tools.register(duplicate)
     state.close()
+
+
+def test_tool_presentation_metadata_is_bounded_and_json_serializable():
+    with pytest.raises(ValueError, match="exceeds 16000 bytes"):
+        ToolResult("text", presentation={"type": "custom", "diagnostics": {"payload": "x" * 16_000}})
+    with pytest.raises(ValueError, match="only JSON values"):
+        ToolResult("text", presentation={"type": "custom", "diagnostics": {"value": object()}})
+    with pytest.raises(ValueError, match="unsupported fields"):
+        ToolResult("text", presentation={"type": "custom", "html": "<script>"})
 
 
 def test_tool_results_have_explicit_error_state(tmp_path):

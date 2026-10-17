@@ -62,6 +62,7 @@ function applySessionSnapshot(sessionId, snapshot) {
         : null,
       retryable: call.retryable,
       hasVerifier: call.has_verifier,
+      presentation: call.presentation,
     });
   }
   return state;
@@ -147,6 +148,42 @@ function toolStatusLabel(status) {
   })[status] || "Status unavailable";
 }
 
+function numberedLines(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  if (lines.length > 1 && lines[lines.length - 1] === "" && /\r?\n$/.test(String(text))) lines.pop();
+  return lines.map((line, index) => `${index + 1} | ${line}`).join("\n");
+}
+
+function renderFilePresentation(presentation, resultText) {
+  const diagnostics = presentation.diagnostics || {};
+  const artifact = (presentation.artifacts || []).find((item) => item && typeof item.path === "string");
+  const path = artifact?.path || "";
+  const operation = artifact?.operation;
+  const summary = [
+    presentation.summary,
+    Number.isFinite(diagnostics.size_bytes) ? `${diagnostics.size_bytes} bytes` : "",
+    Number.isFinite(diagnostics.line_count) ? `${diagnostics.line_count} lines` : "",
+    diagnostics.truncated === true ? "preview truncated" : "",
+  ].filter(Boolean).join(" · ");
+  return {
+    icon: "📄",
+    title: path ? `${operation === "read" ? "Read" : "File"} · ${path}` : (presentation.summary || "File"),
+    summary,
+    resultText: operation === "read" ? numberedLines(resultText) : resultText,
+    artifactPath: path,
+    metadata: path ? `artifact: ${path}` : "",
+  };
+}
+
+const toolPresentationRenderers = new Map([["file", renderFilePresentation]]);
+
+function registerToolPresentationRenderer(type, renderer) {
+  if (typeof type !== "string" || !type.trim() || typeof renderer !== "function") {
+    throw new TypeError("renderer registration requires a type and function");
+  }
+  toolPresentationRenderers.set(type, renderer);
+}
+
 function renderToolCard(sessionId, runId, toolCallId) {
   const record = toolCallState(sessionId, runId, toolCallId);
   if (!record) return null;
@@ -185,13 +222,25 @@ function renderToolCard(sessionId, runId, toolCallId) {
   const resultText = typeof resultEvent === "string"
     ? resultEvent
     : resultEvent?.text ?? record.error ?? "";
+  const presentation = resultEvent?.presentation ?? record.presentation ?? null;
+  const renderer = typeof presentation?.type === "string" ? toolPresentationRenderers.get(presentation.type) : null;
+  let view = null;
+  if (renderer) {
+    try { view = renderer(presentation, resultText); } catch { view = null; }
+  }
   const statusLabel = toolStatusLabel(record.status);
   record.card.card.dataset.status = record.status || "unknown";
-  record.card.title.textContent = `🔧 ${target ? `${name} · ${target}` : name}`;
+  record.card.card.dataset.renderer = view ? presentation.type : "generic";
+  if (view?.artifactPath) record.card.card.dataset.artifactPath = view.artifactPath;
+  else delete record.card.card.dataset.artifactPath;
+  record.card.title.textContent = view
+    ? `${view.icon || "🔧"} ${view.title || name}`
+    : `🔧 ${target ? `${name} · ${target}` : name}`;
   record.card.status.textContent = statusLabel;
   const retryable = record.retryable === true ? "yes" : record.retryable === false ? "no" : "unavailable";
   const verifier = record.hasVerifier === true ? "yes" : record.hasVerifier === false ? "no" : "unavailable";
-  record.card.metadata.textContent = `run ${runId} · call ${toolCallId} · recovery: retryable: ${retryable} · verifier: ${verifier}`;
+  const recoveryMetadata = `run ${runId} · call ${toolCallId} · recovery: retryable: ${retryable} · verifier: ${verifier}`;
+  record.card.metadata.textContent = [recoveryMetadata, view?.metadata].filter(Boolean).join(" · ");
   record.card.duration.textContent = typeof record.durationMs === "number"
     ? `${(record.durationMs / 1000).toFixed(1)} s`
     : record.status === "running" && typeof record.startedAt === "number"
@@ -203,11 +252,12 @@ function renderToolCard(sessionId, runId, toolCallId) {
       ? "Waiting to start."
       : record.status === "uncertain"
         ? "The action outcome is unknown; inspect before retrying."
-        : (resultText || (record.status === "failed" ? "Tool failed." : "Completed." )).slice(0, 180);
+        : (view?.summary || resultText || (record.status === "failed" ? "Tool failed." : "Completed.")).slice(0, 500);
   let inputText = "{}";
   try { inputText = JSON.stringify(args, null, 2); } catch { inputText = "Arguments unavailable"; }
   record.card.input.textContent = inputText.length > 8_000 ? `${inputText.slice(0, 8_000)}\n[arguments truncated]` : inputText;
-  record.card.result.textContent = resultText || (record.status === "running" || record.status === "pending" ? "No result yet." : "No result data.");
+  const renderedResult = view?.resultText ?? resultText;
+  record.card.result.textContent = renderedResult || (record.status === "running" || record.status === "pending" ? "No result yet." : "No result data.");
   return record.card.card;
 }
 
