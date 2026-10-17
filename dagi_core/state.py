@@ -554,6 +554,61 @@ class StateStore:
             raise ValueError(f"tool call is missing or not running: {tool_call_id}")
         self._db.commit()
 
+    def complete_tool_call(
+        self,
+        session_id: int,
+        run_id: str,
+        tool_call_id: str,
+        status: str,
+        result: str,
+        error: str | None,
+        event: dict[str, Any],
+    ) -> int:
+        if status not in {"succeeded", "failed", "uncertain"}:
+            raise ValueError(f"invalid tool call outcome: {status!r}")
+        if not isinstance(result, str) or not isinstance(event, dict):
+            raise ValueError("tool completion requires text result and an event object")
+        if (
+            event.get("kind") != "tool_result"
+            or event.get("session_id") != session_id
+            or event.get("run_id") != run_id
+            or event.get("tool_call_id") != tool_call_id
+        ):
+            raise ValueError("tool result event identifiers do not match the completion")
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            call = self._db.execute(
+                "SELECT * FROM tool_executions WHERE tool_call_id=?", (tool_call_id,)
+            ).fetchone()
+            if call is None or call["status"] != "running":
+                raise ValueError(f"tool call is missing or not running: {tool_call_id}")
+            current_run = self.get_run(run_id)
+            if call["session_id"] != session_id or current_run is None or current_run["session_id"] != session_id:
+                raise ValueError("tool completion identifiers do not match the active session")
+            updated = self._db.execute(
+                """UPDATE tool_executions SET status=?, result=?, error=?, updated_at=?
+                   WHERE tool_call_id=? AND status='running'""",
+                (status, result, error, _now(), tool_call_id),
+            )
+            if updated.rowcount != 1:
+                raise ValueError(f"tool call is missing or not running: {tool_call_id}")
+            self._insert_message(session_id, {
+                "role": "tool", "tool_call_id": tool_call_id,
+                "name": call["name"], "content": result,
+            })
+            cursor = self._db.execute(
+                "INSERT INTO run_events(run_id, session_id, event_json, created_at) VALUES(?, ?, ?, ?)",
+                (run_id, session_id, json.dumps(event, ensure_ascii=False), _now()),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("tool result event insert did not return an id")
+            event_id = int(cursor.lastrowid)
+            self._db.commit()
+            return event_id
+        except BaseException:
+            self._db.rollback()
+            raise
+
     def reconcile_tool_call(
         self, tool_call_id: str, status: str, result: str | None = None, error: str | None = None
     ) -> None:
@@ -586,9 +641,10 @@ class StateStore:
             if saved is None:
                 status, result, error = "uncertain", None, "process stopped while action was running; outcome unknown"
             else:
+                # A legacy tool message has no atomic outcome record; its text cannot prove success.
+                status = "uncertain"
                 result = saved["content"]
-                status = "failed" if result.startswith("[tool error]") else "succeeded"
-                error = None
+                error = "tool response exists without an explicit persisted outcome; verify before continuing"
             self._db.execute(
                 "UPDATE tool_executions SET status=?, result=?, error=?, updated_at=? WHERE tool_call_id=?",
                 (status, result, error, _now(), call_id),

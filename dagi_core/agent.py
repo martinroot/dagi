@@ -161,15 +161,19 @@ class Agent:
                 result = ToolResult(f"[tool outcome unknown] {type(exc).__name__}: {exc}", is_error=True)
                 outcome = "uncertain"
                 error = str(exc)
-            self.state.append_message(
-                session_id,
-                {"role": "tool", "tool_call_id": call_id, "name": name, "content": result.content},
+            result_event = AgentEvent(
+                kind="tool_result",
+                session_id=session_id,
+                run_id=run_id,
+                tool_call_id=call_id,
+                tool_name=name,
+                text=result.content,
+                is_error=result.is_error,
             )
-            self.state.finish_tool_call(call_id, outcome, result.content, error)
-            yield event(
-                "tool_result", tool_call_id=call_id, tool_name=name,
-                text=result.content, is_error=result.is_error,
+            self.state.complete_tool_call(
+                session_id, run_id, call_id, outcome, result.content, error, asdict(result_event)
             )
+            yield result_event
             return outcome
 
         try:

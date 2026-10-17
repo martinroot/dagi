@@ -17,7 +17,7 @@ A compact terminal agent, not a reduced copy of the full Hermes platform. This i
 - Bounded parent/child agent delegation with separate sessions, explicit context transfer, and a shared budget.
 - Workspace-scoped file tools; a tool call is persisted before its side effect.
 - A terminal CLI with session listing/resume plus a separate loopback visual sandbox.
-- Interrupted tool actions are recovered by state: safe pending calls may resume, while unknown outcomes are never replayed automatically.
+- Interrupted tool actions are recovered by state: safe pending calls may resume, while unknown outcomes are never replayed automatically. Legacy tool-result text without an explicit persisted outcome remains uncertain; new tool completion commits the result message, outcome, and run event atomically.
 
 The runtime has one direct dependency, `openai`; SQLite and the CLI use the Python standard library. There is no messaging gateway, MCP, cron, voice, profile, or remote-backend integration in this version.
 

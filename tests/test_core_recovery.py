@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 from dagi_core.agent import Agent
 from dagi_core.provider import StreamEvent
 from dagi_core.state import StateStore
@@ -124,7 +126,7 @@ def test_recovery_resumes_only_pending_sibling_after_completed_tool(tmp_path):
     state.close()
 
 
-def test_running_call_with_saved_result_is_reconciled_as_completed(tmp_path):
+def test_running_call_with_legacy_saved_result_without_outcome_is_uncertain(tmp_path):
     path = tmp_path / "state.sqlite3"
     state = StateStore(path)
     session = state.create_session()
@@ -140,8 +142,75 @@ def test_running_call_with_saved_result_is_reconciled_as_completed(tmp_path):
     state = StateStore(path)
     state.recover_interrupted(session)
 
-    assert state.get_tool_call("call-result")["status"] == "succeeded"
-    assert state.get_tool_call("call-result")["result"] == "saved result"
+    recovered = state.get_tool_call("call-result")
+    assert recovered is not None
+    assert recovered["status"] == "uncertain"
+    assert recovered["result"] == "saved result"
+    assert "explicit persisted outcome" in recovered["error"]
+    state.close()
+
+
+def test_legacy_tool_message_without_explicit_outcome_stays_uncertain(tmp_path):
+    path = tmp_path / "state.sqlite3"
+    state = StateStore(path)
+    session = state.create_session()
+    run = state.create_run(session)
+    _prepare_tool_round(state, session, run, [{"id": "legacy-result", "name": "custom", "arguments": {}}])
+    state.mark_tool_call_running("legacy-result")
+    state.append_message(session, {
+        "role": "tool", "tool_call_id": "legacy-result", "name": "custom",
+        "content": "arbitrary output that may actually describe a failure",
+    })
+    state.close()
+
+    state = StateStore(path)
+    state.recover_interrupted(session)
+    recovered = state.get_tool_call("legacy-result")
+    assert recovered is not None
+    assert recovered["status"] == "uncertain"
+    assert recovered["result"] == "arbitrary output that may actually describe a failure"
+    assert "explicit persisted outcome" in recovered["error"]
+    state.close()
+
+
+def test_tool_completion_persists_message_outcome_and_event_atomically(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    run = state.create_run(session)
+    _prepare_tool_round(state, session, run, [{"id": "atomic-result", "name": "custom", "arguments": {}}])
+    state.mark_tool_call_running("atomic-result")
+    event = {
+        "kind": "tool_result", "session_id": session, "run_id": run,
+        "tool_call_id": "atomic-result", "tool_name": "custom", "text": "done", "is_error": False,
+    }
+
+    state.complete_tool_call(session, run, "atomic-result", "succeeded", "done", None, event)
+
+    completed = state.get_tool_call("atomic-result")
+    assert completed is not None and completed["status"] == "succeeded"
+    assert any(m.get("tool_call_id") == "atomic-result" and m["content"] == "done" for m in state.messages(session))
+    assert any(row["event"]["kind"] == "tool_result" for row in state.list_run_events(run))
+    state.close()
+
+
+def test_tool_completion_rolls_back_if_persisted_event_is_invalid(tmp_path):
+    state = StateStore(tmp_path / "state.sqlite3")
+    session = state.create_session()
+    run = state.create_run(session)
+    _prepare_tool_round(state, session, run, [{"id": "atomic-failure", "name": "custom", "arguments": {}}])
+    state.mark_tool_call_running("atomic-failure")
+    bad_event = {
+        "kind": "tool_result", "session_id": session, "run_id": run,
+        "tool_call_id": "atomic-failure", "unserializable": object(),
+    }
+
+    with pytest.raises(TypeError):
+        state.complete_tool_call(session, run, "atomic-failure", "succeeded", "done", None, bad_event)
+
+    failed = state.get_tool_call("atomic-failure")
+    assert failed is not None and failed["status"] == "running"
+    assert not any(m.get("tool_call_id") == "atomic-failure" for m in state.messages(session))
+    assert state.list_run_events(run) == []
     state.close()
 
 
