@@ -5,8 +5,8 @@ This is the single repository-level status map for the sandbox roadmap and cross
 - Umbrella: [#16 — sandbox UI integration](https://github.com/martinroot/dagi/issues/16) (open until all remaining acceptance criteria are complete).
 - Integration umbrella: [#20 — incremental 0.3.0 integration](https://github.com/martinroot/dagi/issues/20).
 - Current branch: `main`.
-- Verified code checkpoint: `f472a90a8fd3a18daeeb61740d10eb6a34f01fa2`; remote `main` matched before this roadmap-only update.
-- Verification at this checkpoint: `pytest -q` — **152 passed**; Node UI — **21 passed**; `bash -n` and `git diff --check` passed; `uv build` produced wheel and sdist, including `dagi_core/workspace.py` and both static assets.
+- Verified code checkpoint: `5262012dedb31c3d0d8605d9a75b1ff64ea2fc81`; remote `main` matched before this roadmap-only update.
+- Verification at this checkpoint: `pytest -q` — **154 passed**; Node UI — **21 passed**; `bash -n` and `git diff --check` passed; `uv build` produced wheel and sdist, including `dagi_core/workspace.py` and both static assets.
 - Deployment boundary: no service restart or live `DAGI_HOME` migration has been performed. Backend changes are not claimed as active in the running service; #15 backup/restore rehearsal remains required before any live schema migration.
 
 ## Ten implementation iterations
@@ -44,7 +44,7 @@ This is the single repository-level status map for the sandbox roadmap and cross
 | ID | Status | Issue | Finding/required fix |
 |---|---|---|---|
 | CORE-01 — child run writes must use the owning session workspace | Done | [#34 closed](https://github.com/martinroot/dagi/issues/34), parent #21 | `resolve_session_workspace()` used by Web runs and CLI/resume; rejects traversal and symlink escapes. Web/CLI integration and shared resolver regressions; commit `f472a90`, pytest 152 and Node UI 21 passed |
-| CORE-02 — goal checks must use the goal owner's workspace | Open | [#35](https://github.com/martinroot/dagi/issues/35), parent #21 | Reproduced on `ff6fba0`; foreign root file passed child check |
+| CORE-02 — goal checks must use the goal owner's workspace | Done | [#35 closed](https://github.com/martinroot/dagi/issues/35), [#21 closed](https://github.com/martinroot/dagi/issues/21) | `start_goal()` and each verification/resume resolve the goal session via `resolve_session_workspace()`; root-only file and symlink escape regressions. Commit `5262012`; full pytest 154, Node UI 21, build passed |
 | CORE-03 — CLI must honor the `DAGI_HOME` runtime lease before `/resume` | Open | [#22](https://github.com/martinroot/dagi/issues/22) | Reproduced; CLI recovery mutated a run while Web lease was held |
 | CORE-04 — malformed built-in tool arguments must be recoverable errors | Open | [#23](https://github.com/martinroot/dagi/issues/23) | Reproduced; `read_file({})` became uncertain and blocked next turn |
 | CORE-05 — command checks must bound output and clean up process trees | Open | [#18](https://github.com/martinroot/dagi/issues/18) | Timeout fixture now waits for a valid child PID before starting the timeout; 30/30 targeted runs passed on `10cfb3f`. Broader #18 acceptance remains open |
@@ -59,11 +59,11 @@ Full proposal: [`DAGI_SELF_AWARENESS_MVP.md`](DAGI_SELF_AWARENESS_MVP.md). This 
 
 | ID | Status | GitHub issue | Dependencies / order |
 |---|---|---|---|
-| SELF-01 — bounded runtime identity, capability, and task-position context | Pending | [#38 open](https://github.com/martinroot/dagi/issues/38) | Session resolver #34 is done; goal-owner checks #35 remain; preserve runtime lease #22 |
+| SELF-01 — bounded runtime identity, capability, and task-position context | Pending | [#38 open](https://github.com/martinroot/dagi/issues/38) | Workspace resolution #34 and goal-owner checks #35 are done; preserve runtime lease #22. Finish ordered prerequisite #23 before starting this slice |
 | SELF-02 — tool semantics and persisted outcomes visible to the acting model | Pending | [#39 open](https://github.com/martinroot/dagi/issues/39) | After/alongside SELF-01 request-context work; depends on recoverable malformed arguments (#23) |
 | SELF-03 — bounded corrective reflection and scoped evidence-backed lessons | Pending | [#40 open](https://github.com/martinroot/dagi/issues/40) | After SELF-01/02 and correct owning-workspace checks (#35) |
 
-Execution order from the proposal: close prerequisites #34, #35, and #23 first; then implement SELF-01, SELF-02, and SELF-03 as separate, test-backed slices. Keep every observed runtime fact distinct from task-supplied text and model hypotheses.
+Execution order from the proposal: #34 and #35 are closed; finish prerequisite #23 next. Then implement SELF-01, SELF-02, and SELF-03 as separate, test-backed slices. Keep every observed runtime fact distinct from task-supplied text and model hypotheses.
 
 ## Current SB-03 sequence
 
