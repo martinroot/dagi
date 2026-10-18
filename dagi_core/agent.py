@@ -57,6 +57,7 @@ class Agent:
         agent_name: str | None = None,
         entry_point: Literal["cli", "web", "unknown"] = "unknown",
         repeat_failure_threshold: int = 2,
+        runtime_context_extension: Callable[[], str] | None = None,
     ):
         if entry_point not in {"cli", "web", "unknown"}:
             raise ValueError("entry_point must be cli, web, or unknown")
@@ -68,6 +69,7 @@ class Agent:
         self.agent_name = agent_name or self.model
         self.entry_point = entry_point
         self.repeat_failure_threshold = repeat_failure_threshold
+        self.runtime_context_extension = runtime_context_extension
         self._tools_source = tools
         self.state = state
         self._default_session_id = session_id
@@ -167,7 +169,8 @@ class Agent:
                 assignment_contract=assignment_contract,
                 operational_reflections=self.state.list_tool_reflections(session_id, limit=3),
             )
-            return render_runtime_context(snapshot)
+            extension = self.runtime_context_extension() if self.runtime_context_extension else ""
+            return render_runtime_context(snapshot) + extension
 
         def save_partial() -> None:
             content = "".join(current_text_parts)

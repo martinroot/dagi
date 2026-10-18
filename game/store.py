@@ -5,7 +5,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 
-from .world import fresh_world, observation
+from .world import fresh_world, observation, upgrade
 
 
 class GameStore:
@@ -35,7 +35,16 @@ class GameStore:
 
     def get(self, session_id):
         row = self.db.execute("SELECT world_json FROM game_worlds WHERE session_id=?", (session_id,)).fetchone()
-        return json.loads(row[0]) if row else None
+        return upgrade(json.loads(row[0])) if row else None
+
+    def recover_releases(self):
+        """A crash before activation leaves the live world unchanged, never auto-replay."""
+        for (session_id,) in self.db.execute("SELECT session_id FROM game_worlds").fetchall():
+            current = self.get(session_id)
+            if current["draft"] and current["draft"]["state"] == "scheduled":
+                with self.mutation(session_id) as world:
+                    world["draft"]["state"] = "tested"
+                    world["draft"]["release_error"] = "Activation interrupted; live world unchanged. Inspect before retry."
 
     def list_sessions(self):
         return [{"id": row[0], "title": row[1]} for row in self.db.execute(
@@ -64,5 +73,6 @@ class GameStore:
         with self.mutation(session_id) as world:
             result = operation(world, args, **kwargs)
             result["revision"] = world["revision"] + 1
-            world["history"] = (world["history"] + [result])[-40:]
+            if result["kind"] != "renderer_report":
+                world["history"] = (world["history"] + [result])[-40:]
         return observation(world)

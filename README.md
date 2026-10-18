@@ -105,7 +105,11 @@ its own workspace and session-scoped memory search. The stickman is the agent's
 body. Chat runs through the existing agent loop; game tools inspect its actual
 code and scene, move its constrained physical joints, add obstacles, change its
 controller, compose behaviors, check a positional goal and record evidence-backed
-experiment notes. Reopening an existing session preserves its world.
+experiment notes. A startup self-passport explains its LLM/JSON decision loop.
+It can invent and hot-load JavaScript visual components, alongside skill cards,
+todos and human controls, test a draft,
+then release a verified world with a SATISFY / 3-2-1 animation. Ladders and fans
+participate in the server physics. Reopening an existing session preserves its world.
 
 Physics is deterministic and action-driven on the server. The browser renders
 the resulting poses and streams real tool events; it does not decide success.
@@ -137,7 +141,7 @@ Full acceptance gate (run before closing an issue or release):
 ```bash
 uv sync --extra dev
 uv run python -m pytest -q
-node --test tests/test_core_web_ui.js
+node --test tests/test_core_web_ui.js tests/test_game_ui.js tests/test_game_studio_ui.js tests/test_game_authored_ui.js
 uv build
 ```
 

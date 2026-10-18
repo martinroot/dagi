@@ -33,9 +33,10 @@ from .tools import ToolRegistry, _resolve
 from .workspace import resolve_session_workspace
 from .goals import validate_checks, verify
 from .worker import load_workers
-from game.bridge import GAME_PROMPT, identity as game_identity, register_game
+from game.bridge import GAME_PROMPT, identity as game_identity, register_game, render_game_context
 from game.store import GameStore
 from game.world import PAIRS, frame as game_frame, observation as game_observation
+from game.studio import browser_report, build_summary, human_prompt, digest as game_digest, snapshot as game_snapshot
 
 ProviderFactory = Callable[[str, str, str], Any]
 _REFLECTION_VOLATILE_KEYS = {"timestamp", "created_at", "updated_at", "request_id", "event_id", "nonce"}
@@ -362,6 +363,8 @@ class WebApp:
             with _StateContext(StateStore(self.config.database)) as state:
                 state.recover_interrupted()
                 state.recover_goals()
+            with GameStore(self.config.database) as game:
+                game.recover_releases()
         except BaseException:
             lease.close()
             self._lease = None
@@ -412,7 +415,7 @@ class WebApp:
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
-                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js"}:
+                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/component-host.js"}:
                         self._static(path)
                     elif path == "/api/auth/session":
                         if app._is_authenticated(self.headers):
@@ -446,11 +449,23 @@ class WebApp:
                             return
                         with _StateContext(self._state()) as state:
                             session = state.get_session(session_id)
+                            runs = state.list_runs(session_id, 10)
+                            active = next((r for r in runs if r["status"] == "running"), None)
+                            reference = active or (runs[0] if runs else None)
+                            calls = state.list_provider_calls(reference["run_id"]) if reference else []
+                            pending = next((c for c in reversed(calls) if c["finished_at"] is None), None) if active else None
+                            executing = next((c for c in reversed(state.list_tool_calls(session_id)) if c["status"] == "running" and c["run_id"] == active["run_id"]), None) if active else None
+                            activity = {"phase": "tool" if executing else "provider" if pending else "running" if active else "idle",
+                                        "model": pending["model"] if pending else app.config.model, "provider_calls": len(calls), "run_id": active["run_id"] if active else None,
+                                        "tool": executing["name"] if executing else None}
                         workspace = resolve_session_workspace(app.config.workspace, session["workspace"])
                         self._send_json(200, {"self": game_identity(session_id, workspace),
                             "scene": game_observation(world), "frame": game_frame(world),
                             "links": PAIRS, "motion": world["motion"], "history": world["history"],
-                            "reflections": world["reflections"]})
+                            "reflections": world["reflections"], "widgets": world["widgets"], "components": world["components"], "theme": world["theme"],
+                            "build": build_summary(world), "preview": {k: world["draft"]["candidate"][k] for k in ("widgets", "objects", "components")} if world["draft"] else None,
+                            "last_release": world["last_release"], "activity": activity, "server_time": time.time(),
+                            "render_key": game_digest(world["draft"]["candidate"] if world["draft"] else game_snapshot(world))})
                     elif path == "/api/sessions":
                         with _StateContext(self._state()) as state:
                             sessions = state.list_sessions(100)
@@ -554,6 +569,18 @@ class WebApp:
                         with GameStore(app.config.database) as game:
                             game.create(session_id)
                         self._send_json(201, {"session_id": session_id})
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/interact", parsed.path):
+                        session_id = int(match.group(1))
+                        with GameStore(app.config.database) as game:
+                            world = game.get(session_id)
+                            if world is None:
+                                raise ValueError("game session not found")
+                            prompt = human_prompt(world, body)
+                        self._start_run(session_id, {"message": prompt})
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/render-report", parsed.path):
+                        with GameStore(app.config.database) as game:
+                            game.apply(int(match.group(1)), browser_report, body)
+                        self._send_json(200, {"saved": True})
                     elif parsed.path == "/api/sessions":
                         title = body.get("title")
                         if title is not None and not isinstance(title, str):
@@ -593,7 +620,7 @@ class WebApp:
 
             def _static(self, path: str) -> None:
                 is_game = path.startswith("/game")
-                name = ("game.js" if path.endswith("game.js") else "index.html") if is_game else ("index.html" if path == "/" else "app.js")
+                name = (path.rsplit("/", 1)[-1] if path.endswith(".js") else "index.html") if is_game else ("index.html" if path == "/" else "app.js")
                 content_type = "text/html; charset=utf-8" if name.endswith(".html") else "text/javascript; charset=utf-8"
                 data = files("game" if is_game else "dagi_core").joinpath("static", name).read_bytes()
                 self.send_response(200)
@@ -1126,6 +1153,7 @@ class WebApp:
                 agent_name=self.config.model,
                 entry_point="web",
                 repeat_failure_threshold=self.config.goal_repeat_failure_threshold,
+                runtime_context_extension=(lambda: render_game_context(state.path, session_id, workspace, self.config.model)) if is_game else None,
             )
             for _event in agent.run_turn(
                 message,

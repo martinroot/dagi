@@ -47,12 +47,23 @@ def keys(args, allowed):
 
 def fresh_world(session_id):
     return {
-        "schema_version": 1, "session_id": session_id, "body_id": f"stickman:{session_id}",
+        "schema_version": 2, "session_id": session_id, "body_id": f"stickman:{session_id}",
         "revision": 0, "tick": 0, "gravity": 900,
         "nodes": {name: {"x": 180.0 + x, "y": 450.0 + y, "px": 180.0 + x, "py": 450.0 + y} for name, (x, y) in OFFSETS.items()},
         "controller": {"speed": 95, "balance": 0.85, "stride": 12, "jump": 310},
         "objects": [], "behaviors": {}, "goal": None, "reflections": [], "history": [], "motion": [],
+        "widgets": [], "components": [], "theme": {"background": "#ffffff", "accent": "#e6703a"},
+        "version": 0, "draft": None, "last_release": None, "previous": None, "browser_report": None,
     }
+
+
+def upgrade(world):
+    """Additive migration of v1 saved worlds; reading never resets a learned body."""
+    for name, value in {"widgets": [], "components": [], "theme": {"background": "#ffffff", "accent": "#e6703a"},
+                        "version": 0, "draft": None, "last_release": None, "previous": None, "browser_report": None}.items():
+        world.setdefault(name, copy.deepcopy(value))
+    world["schema_version"] = 2
+    return world
 
 
 def frame(world):
@@ -80,6 +91,7 @@ def observation(world):
         "behaviors": copy.deepcopy(world["behaviors"]), "goal": goal,
         "last_action": copy.deepcopy(world["history"][-1]) if world["history"] else None,
         "latest_reflection": copy.deepcopy(world["reflections"][-1]) if world["reflections"] else None,
+        "version": world.get("version", 0), "widget_count": len(world.get("widgets", [])),
     }
 
 
@@ -107,7 +119,7 @@ def _collide(world, p, radius):
             p[axis] = value
 
 
-def _step(world, direction):
+def _step(world, direction, climbing=0):
     nodes, motor = world["nodes"], world["controller"]
     grounded = any(_on_surface(world, nodes[n], 9) for n in ("left_foot", "right_foot"))
     hip = nodes["hip"]
@@ -120,6 +132,14 @@ def _step(world, direction):
         p["px"], p["py"] = p["x"], p["y"]
         p["x"] += vx
         p["y"] += vy + world["gravity"] * DT * DT
+        for obj in world["objects"]:
+            if obj["kind"] == "fan" and obj["enabled"]:
+                dx, dy = p["x"] - obj["x"], p["y"] - obj["y"]
+                if math.hypot(dx, dy) < obj["range"]:
+                    scale = (1 - math.hypot(dx, dy) / obj["range"]) * obj["force"] * DT * DT
+                    angle = math.radians(obj["angle"])
+                    p["x"] += math.cos(angle) * scale
+                    p["y"] += math.sin(angle) * scale
         if motor["balance"]:
             ox, oy = OFFSETS[name]
             if "foot" in name or "knee" in name:
@@ -130,6 +150,13 @@ def _step(world, direction):
             strength = motor["balance"] * 0.08
             p["x"] += (base_x + ox - p["x"]) * strength
             p["y"] += (base_y + oy - p["y"]) * strength
+    if climbing:
+        ladder = next((o for o in world["objects"] if o["kind"] == "ladder"
+                       and abs(hip["x"] - o["x"]) <= o["width"] / 2 + 30
+                       and o["y"] - 10 <= hip["y"] <= o["y"] + o["height"] + 10), None)
+        if ladder:
+            for p in nodes.values():
+                p["y"] += climbing * motor["speed"] * DT - (p["y"] - p["py"]) * 0.9
     # Assisted stance reacts to actual nearby support; no support -> no levitation.
     supports = [FLOOR] + [o["y"] for o in world["objects"] if o["kind"] == "block"
                           and o["x"] <= hip["x"] <= o["x"] + o["width"] and o["y"] >= hip["y"]]
@@ -155,8 +182,8 @@ def _step(world, direction):
 def validate_action(args):
     keys(args, ("action", "frames", "name"))
     action = args.get("action")
-    if not isinstance(action, str) or action not in {"left", "right", "idle", "jump", "behavior"}:
-        raise ValueError("action must be left, right, idle, jump, or behavior")
+    if not isinstance(action, str) or action not in {"left", "right", "idle", "jump", "climb_up", "climb_down", "behavior"}:
+        raise ValueError("action must be left, right, idle, jump, climb_up, climb_down, or behavior")
     ignored = []
     if action == "behavior":
         text(args.get("name"), 40, "name")
@@ -198,7 +225,8 @@ def act(world, args, cancelled=lambda: False):
         for i in range(frames):
             if cancelled():
                 raise ValueError("action cancelled before world commit")
-            _step(world, -1 if action == "left" else 1 if action == "right" else 0)
+            _step(world, -1 if action == "left" else 1 if action == "right" else 0,
+                  -1 if action == "climb_up" else 1 if action == "climb_down" else 0)
             if i % 8 == 0:
                 motion.append(frame(world))
     motion.append(frame(world))
@@ -224,17 +252,18 @@ def evolve(world, args):
         if len(world["objects"]) >= 32:
             raise ValueError("world is limited to 32 objects")
         obj = copy.deepcopy(args.get("object"))
-        keys(obj, ("id", "kind", "x", "y", "width", "height", "label"))
+        keys(obj, ("id", "kind", "x", "y", "width", "height", "label", "force", "range", "angle", "enabled"))
         text(obj.get("id"), 40, "object id")
         if any(o["id"] == obj["id"] for o in world["objects"]):
             raise ValueError("object id already exists")
-        if not isinstance(obj.get("kind"), str) or obj["kind"] not in {"block", "marker"}:
-            raise ValueError("object kind must be block or marker")
+        if not isinstance(obj.get("kind"), str) or obj["kind"] not in {"block", "marker", "ladder", "fan"}:
+            raise ValueError("object kind must be block, marker, ladder, or fan")
         number(obj.get("x"), 0, WIDTH, "x")
         number(obj.get("y"), 0, FLOOR, "y")
         if "label" in obj:
             text(obj["label"], 80, "label")
         if obj["kind"] == "block":
+            keys(obj, ("id", "kind", "x", "y", "width", "height", "label"))
             number(obj.get("width"), 10, 400, "width")
             number(obj.get("height"), 10, 300, "height")
             if obj["x"] + obj["width"] > WIDTH or obj["y"] + obj["height"] > FLOOR:
@@ -243,8 +272,21 @@ def evolve(world, args):
             if any(obj["x"] - 14 < p["x"] < obj["x"] + obj["width"] + 14
                    and obj["y"] - 14 < p["y"] < obj["y"] + obj["height"] + 14 for p in world["nodes"].values()):
                 raise ValueError("block overlaps the body; place it elsewhere")
-        elif "width" in obj or "height" in obj:
-            raise ValueError("markers do not have width or height")
+        elif obj["kind"] == "ladder":
+            keys(obj, ("id", "kind", "x", "y", "width", "height", "label"))
+            number(obj.get("width"), 16, 80, "width")
+            number(obj.get("height"), 30, 400, "height")
+            if obj["y"] + obj["height"] > FLOOR or not obj["width"] / 2 <= obj["x"] <= WIDTH - obj["width"] / 2:
+                raise ValueError("ladder must fit inside the world")
+        elif obj["kind"] == "fan":
+            keys(obj, ("id", "kind", "x", "y", "force", "range", "angle", "enabled", "label"))
+            for name, default, low, high in (("force", 500, 0, 1500), ("range", 180, 30, 400), ("angle", 0, -180, 180)):
+                obj[name] = number(obj.get(name, default), low, high, name)
+            obj.setdefault("enabled", True)
+            if type(obj["enabled"]) is not bool:
+                raise ValueError("enabled must be boolean")
+        else:
+            keys(obj, ("id", "kind", "x", "y", "label"))
         world["objects"].append(obj)
     elif operation == "remove":
         text(args.get("id"), 40, "id")

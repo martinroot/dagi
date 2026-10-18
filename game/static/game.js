@@ -67,6 +67,7 @@ async function sessions() {
 async function selectSession(id, title) {
   const token = ++generation; closeStream(); sessionId = id; runId = null; revision = -1;
   sceneData = displayed = animation = null;
+  if(typeof studioReset==="function")studioReset();
   $("title").textContent = title || `Эксперимент #${id}`; $("chat").replaceChildren(); toolCards.clear(); busy(false);
   const snapshot = await api(`sessions/${id}`);
   if (token !== generation) return;
@@ -117,11 +118,15 @@ async function refreshWorld(token = generation) {
   const id = sessionId;
   if (!id) return;
   const data = await api(`game/sessions/${id}`);
-  if (token !== generation || id !== sessionId || data.scene.revision <= revision) return;
+  if (token !== generation || id !== sessionId || data.scene.revision < revision) return;
+  if(typeof studioRuntime==="function")studioRuntime(data);
+  if(data.scene.revision === revision)return;
+  const previous=sceneData, changedVersion=previous && data.scene.version!==previous.scene.version;
+  if(typeof studioRelease==="function")studioRelease(previous,data);
   const hadFrame = displayed !== null;
   const oldTick = displayed ? displayed.tick : 0;
   revision = data.scene.revision; sceneData = data;
-  const motion = hadFrame ? data.motion.filter((frame) => frame.tick >= oldTick) : [];
+  const motion = hadFrame && !changedVersion ? data.motion.filter((frame) => frame.tick >= oldTick) : [];
   animation = motion.length > 1 ? {frames:motion, start:performance.now(), duration:Math.min(4000, (motion.at(-1).tick - motion[0].tick) / 60 * 1000)} : null;
   if (!animation) displayed = data.frame;
   $("body-id").textContent = data.self.body_id;
@@ -131,6 +136,7 @@ async function refreshWorld(token = generation) {
   $("reflection").textContent = pretty(s.latest_reflection || s.last_action || {status:"Готов к первому эксперименту"});
   $("scene").textContent = pretty({physics:s.physics, controller:s.controller, objects:s.objects, behaviors:s.behaviors, goal:s.goal});
   $("history").textContent = pretty(data.history);
+  if(typeof studioRefresh==="function")studioRefresh(data);
 }
 function stream(id, after, token, pending = null) {
   closeStream(); let assistant = pending; let cursor = BigInt(after);
@@ -140,6 +146,7 @@ function stream(id, after, token, pending = null) {
     if (event.lastEventId) { const next = BigInt(event.lastEventId); if (next <= cursor) return; cursor = next; }
     const data = JSON.parse(event.data);
     if (data.session_id !== sessionId || data.run_id !== id) return;
+    if(typeof studioEvent==="function")studioEvent(data);
     if (data.kind === "text") {
       if (!assistant) assistant = message("assistant", "");
       assistant.textContent += data.text || ""; $("chat").scrollTop = $("chat").scrollHeight;
@@ -193,12 +200,14 @@ function draw(now) {
     displayed = {tick, nodes:Object.fromEntries(Object.keys(a.nodes).map((key) => [key, [a.nodes[key][0] + (b.nodes[key][0] - a.nodes[key][0]) * ratio, a.nodes[key][1] + (b.nodes[key][1] - a.nodes[key][1]) * ratio]]))};
     if (fraction === 1) {displayed = sceneData.frame; animation = null;}
   }
-  ctx.clearRect(0, 0, 1000, 600); ctx.fillStyle="#fff";ctx.fillRect(0,0,1000,600);
+  ctx.clearRect(0, 0, 1000, 600); ctx.fillStyle=sceneData?.theme?.background || "#fff";ctx.fillRect(0,0,1000,600);
   ctx.fillStyle="#e6e9df";
   for (let x=20;x<1000;x+=30) for(let y=30;y<540;y+=30){ctx.beginPath();ctx.arc(x,y,1,0,Math.PI*2);ctx.fill();}
   ctx.fillStyle="#f0f1eb";ctx.fillRect(0,540,1000,60);ctx.strokeStyle="#bec5b3";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,540);ctx.lineTo(1000,540);ctx.stroke();
+  if(typeof drawAuthored==="function")drawAuthored(ctx,now,sceneData,displayed,"background");
   if (sceneData) {
     for(const o of sceneData.scene.objects){
+      if(typeof drawWorldObject==="function"){drawWorldObject(ctx,o,displayed?.tick||0);continue;}
       if(o.kind==="block"){ctx.fillStyle="#d8decb";ctx.fillRect(o.x,o.y,o.width,o.height);ctx.strokeStyle="#a7b094";ctx.strokeRect(o.x,o.y,o.width,o.height);}
       else {ctx.fillStyle="#e6703a";ctx.beginPath();ctx.arc(o.x,o.y,6,0,Math.PI*2);ctx.fill();}
       if(o.label){ctx.font="12px monospace";ctx.fillStyle="#69715c";ctx.fillText(o.label,o.x,o.y-12);}
@@ -210,11 +219,13 @@ function draw(now) {
     const n=displayed.nodes;ctx.lineWidth=5;ctx.lineCap="round";ctx.strokeStyle="#282d23";
     for(const [a,b] of sceneData.links){ctx.beginPath();ctx.moveTo(...n[a]);ctx.lineTo(...n[b]);ctx.stroke();}
     ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(...n.head,12,0,Math.PI*2);ctx.fill();ctx.stroke();
-    ctx.fillStyle="#e6703a";for(const [name,p] of Object.entries(n)){if(name==="head")continue;ctx.beginPath();ctx.arc(...p,3.5,0,Math.PI*2);ctx.fill();}
+    ctx.fillStyle=sceneData.theme?.accent||"#e6703a";for(const [name,p] of Object.entries(n)){if(name==="head")continue;ctx.beginPath();ctx.arc(...p,3.5,0,Math.PI*2);ctx.fill();}
     ctx.font="11px monospace";ctx.fillStyle="#e6703a";ctx.fillText("SELF",n.head[0]+22,n.head[1]-8);
     $("clock").textContent=`t = ${(displayed.tick/60).toFixed(2)} s · 60 Hz`;
     $("pose").textContent=animation?"Воспроизведение серверного действия":"Мир на паузе · ожидание действия";
   }
+  if(typeof drawAuthored==="function")drawAuthored(ctx,now,sceneData,displayed,"foreground");
+  if(typeof drawStudio==="function")drawStudio(ctx,now,sceneData,displayed);
   requestAnimationFrame(draw);
 }
 async function init() {
