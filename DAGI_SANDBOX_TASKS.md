@@ -60,6 +60,20 @@ This is the single repository-level status map for the sandbox roadmap and cross
 - World-12 loop/goal reliability: [#47 closed](https://github.com/martinroot/dagi/issues/47), code `1f1f268`; configured provider budget now sets a compatible tool-round ceiling and goal feedback carries signed direction/progress. Its original read-only diagnosis was preserved; a later operator-authorized test-session reset is recorded under #48.
 - Embodied self-improvement and session audit export: [#48 open](https://github.com/martinroot/dagi/issues/48), code `cf993cb` (deployed with docs commit `cdabb01`); guarded physical-skill progression, two local execution cycles, replayable motion/avatar cues, and authenticated session JSON export are live. All 18 test sessions were reset on the operator's request; post-reset DB integrity, counts, auth gate, and public assets were verified. The protected rollback backup still holds pre-reset data; no live model-driven smoke has been run.
 
+## Session #19 review: embodied interaction quality (user score 1/10)
+
+Review of the persisted "Чистый мир #19" log found three root causes: climbing was a scripted y-nudge with no body↔object contact; the complexity score grew from action-name counting while behavior did not change; and the UI could not show contact, climb or activity. Fixed as five issue-linked, independently revertable slices, each RED/GREEN with focused tests, pushed to `main`:
+
+| ID | Status | GitHub issue | Commit |
+|---|---|---|---|
+| Contact physics: climbable zones, contact-gated climb, alignment to the rail | Closed | [#49](https://github.com/martinroot/dagi/issues/49) | `133c22d` |
+| Honest verification: behavior trials, `interaction_verified`, `meaningful_displacement`, `complexity_delta_source` | Closed | [#50](https://github.com/martinroot/dagi/issues/50) | `69bb419` |
+| Behavior schema: 16 steps, phase labels, bounded program chaining | Closed | [#51](https://github.com/martinroot/dagi/issues/51) | `302a735` |
+| Live visibility: contact indicator, climb pose, activity status, verified score | Closed | [#52](https://github.com/martinroot/dagi/issues/52) | `bad5057` |
+| `complexity_score` from verified physics (travel, contact, posture), not action counting | Closed | [#53](https://github.com/martinroot/dagi/issues/53) | `44bbf78` |
+
+Closure gate per issue set: full pytest 236 passed, Node UI 36 passed, JS/Python/shell syntax and `git diff --check` passed; each issue closed only after remote readback of body/state. Consequences for self-improvement: a claimed climb without ladder contact is refused and blocks commit; repeats/renames cannot raise the gate score; score growth requires measured physical achievement. Live rollout after each slice keeps the operator's live test session intact.
+
 ## Runtime awareness proposal (SELF)
 
 Full proposal: [`DAGI_SELF_AWARENESS_MVP.md`](DAGI_SELF_AWARENESS_MVP.md). This is bounded operational knowledge of identity, task, tools, evidence, limits, and corrective action; it makes no claim of subjective consciousness.
