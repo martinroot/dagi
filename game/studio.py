@@ -247,6 +247,45 @@ def _simulate(world, cancelled):
     return {"finite": finite, "upright": state["upright"], "grounded": state["grounded"], "position": state["position"]}
 
 
+MOVEMENT_ACTIONS = {"left", "right", "jump", "climb_up", "climb_down"}
+CLIMB_ACTIONS = {"climb_up", "climb_down"}
+MIN_MEANINGFUL_TRAVEL = 12
+
+
+def _program_score(steps):
+    actions = [step["action"] for step in steps]
+    return 2 * len(set(actions)) + len({(a, b) for a, b in zip(actions, actions[1:]) if a != b})
+
+
+def _action_types(behaviors):
+    return {step["action"] for steps in behaviors.values() for step in steps}
+
+
+def _best_score(behaviors):
+    return max((_program_score(steps) for steps in behaviors.values()), default=0)
+
+
+def _behavior_trial(world, name, cancelled):
+    """Execute one saved behavior on a clone and measure what the body actually did."""
+    clone = copy.deepcopy(world)
+    clone["history"], clone["reflections"], clone["draft"], clone["motion"] = [], [], None, []
+    before = observation(clone)
+    refused = None
+    try:
+        act(clone, {"action": "behavior", "name": name}, cancelled)
+    except ValueError as exc:
+        refused = str(exc)
+    finite = all(math.isfinite(v) for p in clone["nodes"].values() for v in p.values())
+    after = observation(clone)
+    motion = clone["motion"] or [{"nodes": {n: [p["x"], p["y"]] for n, p in clone["nodes"].items()}}]
+    climbed = max(0.0, before["position"]["y"] - min(sample["nodes"]["hip"][1] for sample in motion))
+    return {"finite": finite, "upright": after["upright"], "grounded": after["grounded"],
+            "displacement_x": round(after["position"]["x"] - before["position"]["x"], 2),
+            "climbed_y": round(climbed, 2), "refused": refused,
+            "contact_after": after["contact"]["object_id"] if after["contact"] else None,
+            "activity_after": after["activity"], "frames_executed": after["tick"] - before["tick"]}
+
+
 def build(world, args, cancelled=lambda: False):
     keys(args, ("operation", "objective", "changes"))
     operation = args.get("operation")
@@ -288,19 +327,33 @@ def build(world, args, cancelled=lambda: False):
                   "posture_no_regression": not baseline["upright"] or after["upright"],
                   "layout_readable": visual["passed"], "goal_preserved": candidate["goal"] == world["goal"]}
         checks["authored_components_executed"] = all(c["status"] == "passed" for c in visual["component_execution"])
+        trials = {name: _behavior_trial(candidate, name, cancelled) for name in candidate["behaviors"]}
         skill_tests = []
-        for widget in candidate["widgets"]:
-            if widget["kind"] == "skill" and widget["target"]["type"] == "behavior":
-                clone = copy.deepcopy(candidate)
-                outcome = act(clone, {"action": "behavior", "name": widget["target"]["name"]}, cancelled)
-                healthy = all(math.isfinite(v) for p in clone["nodes"].values() for v in p.values())
-                checks[f"skill:{widget['id']}"] = healthy
-                skill_tests.append({"widget_id": widget["id"], "behavior": widget["target"]["name"], "displacement_x": outcome["displacement_x"],
-                                    "finite": healthy, "upright": outcome["upright"], "scope": "program executes with finite physics; task correctness remains unverified"})
+        for name, trial in trials.items():
+            checks[f"behavior:{name}"] = trial["finite"]
+            skill_tests.append({"widget_id": next((w["id"] for w in candidate["widgets"] if w["kind"] == "skill"
+                                                   and w["target"]["type"] == "behavior" and w["target"]["name"] == name), None),
+                                "behavior": name, "displacement_x": trial["displacement_x"], "climbed_y": trial["climbed_y"],
+                                "refused": trial["refused"], "contact_after": trial["contact_after"],
+                                "finite": trial["finite"], "upright": trial["upright"], "grounded": trial["grounded"],
+                                "frames_executed": trial["frames_executed"],
+                                "scope": "one measured execution of the saved program; refusal means a claimed climb had no ladder contact"})
+        new_actions = _action_types(candidate["behaviors"]) - _action_types(world["behaviors"])
+        climb_names = [name for name, steps in candidate["behaviors"].items()
+                       if any(step["action"] in CLIMB_ACTIONS for step in steps)]
+        improvement_checks = {
+            "interaction_verified": all(trials[name]["refused"] is None for name in climb_names),
+            "meaningful_displacement": any(abs(trial["displacement_x"]) + trial["climbed_y"] >= MIN_MEANINGFUL_TRAVEL
+                                           for trial in trials.values()),
+            "complexity_delta_source": _best_score(candidate["behaviors"]) > _best_score(world["behaviors"])
+                                       and bool(new_actions & MOVEMENT_ACTIONS),
+        }
         draft["test_count"] += 1
         draft["state"] = "tested"
         draft["report"] = {"passed": all(checks.values()), "checks": checks, "baseline": baseline, "candidate": after,
                            "visual": visual, "skill_tests": skill_tests, "candidate_hash": digest(draft["candidate"]),
+                           "improvement_checks": improvement_checks,
+                           "improvement_scope": "embodied-skill gates: claimed climbs must show contact, a program must measurably move/climb, and the score must grow from new physical action types",
                            "scope": "bounded physical health, preserved goal and readable layout; not proof of general intelligence or all user requirements"}
     elif operation == "commit":
         keys(args, ("operation",))

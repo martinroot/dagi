@@ -44,6 +44,40 @@ def test_ladder_assists_real_climbing_and_fan_changes_measured_motion():
     assert observation(on)["position"]["x"] > observation(off)["position"]["x"] + 40
 
 
+def test_draft_report_measures_every_behavior_and_blocks_score_without_new_physics():
+    world = fresh_world(1)
+    evolve(world, {"operation": "behavior", "name": "pace", "steps": [{"action": "right", "frames": 20}, {"action": "left", "frames": 20}]})
+    build(world, {"operation": "begin", "objective": "measurable improvement"})
+    build(world, {"operation": "edit", "changes": [
+        {"operation": "behavior", "name": "pace-two", "steps": [
+            {"action": "right", "frames": 10}, {"action": "left", "frames": 10},
+            {"action": "right", "frames": 10}, {"action": "left", "frames": 10}]}]})
+    build(world, {"operation": "test"})
+    report = world["draft"]["report"]
+    assert {t["behavior"] for t in report["skill_tests"]} == {"pace", "pace-two"}
+    assert report["improvement_checks"]["complexity_delta_source"] is False
+    assert report["improvement_checks"]["interaction_verified"] is True
+    assert report["improvement_checks"]["meaningful_displacement"] is False
+
+
+def test_verified_ladder_climb_behavior_passes_interaction_and_displacement_checks():
+    world = fresh_world(1)
+    evolve(world, {"operation": "add", "object": {"id": "ladder", "kind": "ladder", "x": 180, "y": 200, "width": 35, "height": 340}})
+    build(world, {"operation": "begin", "objective": "climb the ladder"})
+    build(world, {"operation": "edit", "changes": [
+        {"operation": "behavior", "name": "mount", "steps": [
+            {"action": "right", "frames": 20}, {"action": "climb_up", "frames": 30}, {"action": "climb_down", "frames": 20}]}]})
+    build(world, {"operation": "test"})
+    report = world["draft"]["report"]
+    trial = next(t for t in report["skill_tests"] if t["behavior"] == "mount")
+    assert trial["refused"] is None
+    assert trial["climbed_y"] > 10
+    assert trial["contact_after"] == "ladder"
+    assert report["improvement_checks"]["interaction_verified"] is True
+    assert report["improvement_checks"]["complexity_delta_source"] is True
+    assert report["improvement_checks"]["meaningful_displacement"] is True
+
+
 def test_draft_is_invisible_to_live_physics_until_exact_passing_release(monkeypatch):
     world = fresh_world(1)
     before = snapshot(world)

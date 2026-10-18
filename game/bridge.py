@@ -62,7 +62,11 @@ current program versions/scores; create or improve one named behavior so its
 complexity_score exceeds the prior best through a useful new action/transition,
 never filler. Use game_build begin -> edit game_evolve behavior -> test -> inspect
 -> commit, then execute cycles and compare displacement, posture and goal_progress;
-record a short reflection. If no safe improvement exists, report the blocker.
+record a short reflection. If no safe improvement exists, report the blocker. The draft test
+report measures every saved behavior (displacement, climbed height, contact, refusal) and adds
+improvement_checks: interaction_verified (a claimed climb must show ladder contact),
+meaningful_displacement (a program must measurably move or climb), complexity_delta_source
+(the score must grow from new physical action types). A commit is blocked when any check fails.
 Build fields are top-level (e.g. {"operation":"begin","objective":"..."});
 do not use a `parameters` wrapper. Max three tests/draft; only commit tested code.
 While a draft is open, game_act/game_goal are blocked; test/commit or discard first.
@@ -447,6 +451,11 @@ def register_game(tools):
                 world = current_world(store)
                 draft = world.get("draft")
                 if operation_name == "commit" and draft and draft.get("improvement_mode") == "embodied_skill":
+                    improvement = (draft.get("report") or {}).get("improvement_checks") or {}
+                    failed = [name for name in ("interaction_verified", "meaningful_displacement", "complexity_delta_source")
+                              if improvement.get(name) is not True]
+                    if failed:
+                        raise ValueError("self-improvement commit blocked: physical skill complexity must exceed the previous best with at least two action types including movement; chart-only edits do not count; failing improvement checks: " + ", ".join(failed))
                     baseline = int(draft.get("baseline_complexity_score", 0))
                     candidate = draft.get("candidate") or {}
                     movement = {"left", "right", "jump", "climb_up", "climb_down"}
@@ -490,7 +499,7 @@ def register_game(tools):
                     run_result["program_execution"] = world["autonomy_execution"]
             summary = build_summary(world)
             if summary and summary.get("report"):
-                summary["report"] = {k: summary["report"][k] for k in ("passed", "checks", "scope")}
+                summary["report"] = {k: summary["report"][k] for k in ("passed", "checks", "scope", "improvement_checks", "skill_tests")}
             result = {"version": world["version"], "build": summary, "last_release": world["last_release"]}
             if execution_result:
                 result["program_execution"] = execution_result["program_execution"]

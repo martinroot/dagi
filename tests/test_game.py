@@ -315,6 +315,28 @@ def test_self_improve_draft_rejects_dashboard_only_commit(stored_world, tmp_path
     assert saved["draft"]["state"] == "tested"
 
 
+def test_climb_skill_without_ladder_contact_cannot_commit(stored_world, tmp_path):
+    state, session = stored_world
+    state.append_message(session, {"role": "user", "content": "Улучши себя как физического персонажа"})
+    tools = ToolRegistry(tmp_path / "climb-no-contact", state, session)
+    register_game(tools)
+    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
+
+    assert tools.call("game_build", {"operation": "begin", "objective": "Add ladder dancing"}).is_error is False
+    change = {"operation": "behavior", "name": "ladder_dance", "steps": [
+        {"action": "right", "frames": 12}, {"action": "climb_up", "frames": 24}, {"action": "climb_down", "frames": 12}]}
+    assert tools.call("game_build", {"operation": "edit", "changes": [change]}).is_error is False
+    tested = json.loads(tools.call("game_build", {"operation": "test"}).content)
+    assert tested["build"]["report"]["improvement_checks"]["interaction_verified"] is False
+
+    blocked = tools.call("game_build", {"operation": "commit"})
+    assert blocked.is_error is True
+    assert "physical skill complexity" in blocked.content
+    assert "interaction_verified" in blocked.content
+    with GameStore(state.path) as store:
+        assert store.get(session)["version"] == 0
+
+
 def test_autonomous_behavior_stops_inside_goal_tolerance_before_overshooting(stored_world, tmp_path):
     state, session = stored_world
     with GameStore(state.path) as store:
