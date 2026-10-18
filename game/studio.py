@@ -261,8 +261,29 @@ def _action_types(behaviors):
     return {step["action"] for steps in behaviors.values() for step in steps}
 
 
-def _best_score(behaviors):
-    return max((_program_score(steps) for steps in behaviors.values()), default=0)
+def verified_complexity(steps, trial=None):
+    """Score action diversity plus what a measured execution actually achieved.
+
+    Without a clean measured trial the score stays structural; travel with contact and
+    retained posture add a bounded bonus so repeating or renaming actions cannot inflate it.
+    """
+    actions = [step["action"] for step in steps]
+    structural = 2 * len(set(actions)) + len({(a, b) for a, b in zip(actions, actions[1:]) if a != b})
+    if not trial or trial.get("refused"):
+        return {"structural_score": structural, "verified_score": structural, "verified_bonus": 0, "basis": "structure only"}
+    travel = abs(trial.get("displacement_x", 0)) + trial.get("climbed_y", 0)
+    bonus = min(20, int(travel // 6)) + (6 if trial.get("contact_after") else 0) + (2 if trial.get("upright") else 0)
+    # The gate score counts distinct action types plus measured achievement; repeated
+    # transitions cannot inflate it, so padding right/left/right/left is not progress.
+    return {"structural_score": structural, "verified_score": 2 * len(set(actions)) + bonus, "verified_bonus": bonus,
+            "travel_units": round(travel, 2), "contact": bool(trial.get("contact_after")),
+            "basis": "measured travel, contact and posture"}
+
+
+def _best_score(behaviors, trials=None):
+    trials = trials or {}
+    return max((verified_complexity(steps, trials.get(name))["verified_score"]
+                for name, steps in behaviors.items()), default=0)
 
 
 def _behavior_trial(world, name, cancelled):
@@ -328,32 +349,34 @@ def build(world, args, cancelled=lambda: False):
                   "layout_readable": visual["passed"], "goal_preserved": candidate["goal"] == world["goal"]}
         checks["authored_components_executed"] = all(c["status"] == "passed" for c in visual["component_execution"])
         trials = {name: _behavior_trial(candidate, name, cancelled) for name in candidate["behaviors"]}
+        baseline_trials = {name: _behavior_trial(world, name, cancelled) for name in world["behaviors"]}
         skill_tests = []
         for name, trial in trials.items():
             checks[f"behavior:{name}"] = trial["finite"]
+            breakdown = verified_complexity(candidate["behaviors"][name], trial)
             skill_tests.append({"widget_id": next((w["id"] for w in candidate["widgets"] if w["kind"] == "skill"
                                                    and w["target"]["type"] == "behavior" and w["target"]["name"] == name), None),
                                 "behavior": name, "displacement_x": trial["displacement_x"], "climbed_y": trial["climbed_y"],
                                 "refused": trial["refused"], "contact_after": trial["contact_after"],
                                 "finite": trial["finite"], "upright": trial["upright"], "grounded": trial["grounded"],
                                 "frames_executed": trial["frames_executed"],
+                                "verified_score": breakdown["verified_score"], "verified_bonus": breakdown["verified_bonus"],
                                 "scope": "one measured execution of the saved program; refusal means a claimed climb had no ladder contact"})
-        new_actions = _action_types(candidate["behaviors"]) - _action_types(world["behaviors"])
         climb_names = [name for name, steps in candidate["behaviors"].items()
                        if any(step["action"] in CLIMB_ACTIONS for step in steps)]
         improvement_checks = {
             "interaction_verified": all(trials[name]["refused"] is None for name in climb_names),
             "meaningful_displacement": any(abs(trial["displacement_x"]) + trial["climbed_y"] >= MIN_MEANINGFUL_TRAVEL
                                            for trial in trials.values()),
-            "complexity_delta_source": _best_score(candidate["behaviors"]) > _best_score(world["behaviors"])
-                                       and bool(new_actions & MOVEMENT_ACTIONS),
+            "complexity_delta_source": _best_score(candidate["behaviors"], trials) > _best_score(world["behaviors"], baseline_trials),
         }
         draft["test_count"] += 1
         draft["state"] = "tested"
         draft["report"] = {"passed": all(checks.values()), "checks": checks, "baseline": baseline, "candidate": after,
                            "visual": visual, "skill_tests": skill_tests, "candidate_hash": digest(draft["candidate"]),
-                           "improvement_checks": improvement_checks,
-                           "improvement_scope": "embodied-skill gates: claimed climbs must show contact, a program must measurably move/climb, and the score must grow from new physical action types",
+                           "improvement_checks": improvement_checks, "baseline_verified_best": _best_score(world["behaviors"], baseline_trials),
+                           "candidate_verified_best": _best_score(candidate["behaviors"], trials),
+                           "improvement_scope": "embodied-skill gates: claimed climbs must show contact, a program must measurably move/climb, and the verified score (measured travel, contact and posture plus action diversity) must exceed the measured baseline",
                            "scope": "bounded physical health, preserved goal and readable layout; not proof of general intelligence or all user requirements"}
     elif operation == "commit":
         keys(args, ("operation",))

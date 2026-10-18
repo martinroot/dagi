@@ -11,7 +11,7 @@ from dagi_core.tools import Tool, ToolResult
 
 from .store import GameStore
 from .world import act, evolve, keys, observation, reflect, set_goal, validate_action
-from .studio import activate, abort_release, build, build_summary, digest, review, visual_edit
+from .studio import activate, abort_release, build, build_summary, digest, review, verified_complexity, visual_edit
 
 SOURCE_FILES = {
     "game/world.py": Path(__file__).with_name("world.py"),
@@ -51,7 +51,9 @@ Only your session's world/body is available; do not claim unmeasured success.
 
 The self-passport refreshes before each request. MLL selects/refines programs;
 physics executes saved steps locally. Named behaviors are versioned parts of this
-character's identity. complexity_score = 2*unique_actions + non-repeated_transitions; repeating an action cannot inflate it.
+character's identity. complexity_score counts action diversity; verified_complexity adds what a measured execution
+actually achieved (travel, ladder contact, retained posture), so repeating or renaming actions
+cannot inflate the score that gates self-improvement.
 `game_act` behavior cycles=1..10 runs without an MLL call per action step, max
 2400 frames, persists progress and stops on goal/cancel by default. Set
 stop_on_goal=false for non-goal skills such as dance. Use cycles, not a separate
@@ -62,11 +64,10 @@ current program versions/scores; create or improve one named behavior so its
 complexity_score exceeds the prior best through a useful new action/transition,
 never filler. Use game_build begin -> edit game_evolve behavior -> test -> inspect
 -> commit, then execute cycles and compare displacement, posture and goal_progress;
-record a short reflection. If no safe improvement exists, report the blocker. The draft test
-report measures every saved behavior (displacement, climbed height, contact, refusal) and adds
-improvement_checks: interaction_verified (a claimed climb must show ladder contact),
-meaningful_displacement (a program must measurably move or climb), complexity_delta_source
-(the score must grow from new physical action types). A commit is blocked when any check fails.
+record a short reflection. If no safe improvement exists, report the blocker. Draft tests measure
+every saved behavior; commit is blocked unless a claimed climb shows ladder contact, a program
+measurably moves, and verified_complexity (measured travel/contact/posture plus action types)
+beats the measured baseline.
 Build fields are top-level (e.g. {"operation":"begin","objective":"..."});
 do not use a `parameters` wrapper. Max three tests/draft; only commit tested code.
 While a draft is open, game_act/game_goal are blocked; test/commit or discard first.
@@ -311,6 +312,7 @@ def register_game(tools):
             "frames_requested": frames_requested, "frames_executed": 0,
             "start_tick": before["tick"], "current_tick": before["tick"],
             "start_x": before["position"]["x"], "current_x": before["position"]["x"],
+            "start_y": before["position"]["y"], "climbed_y": 0.0,
             "goal_distance_before": goal_before["distance"] if goal_before else None,
             "goal_distance_after": goal_before["distance"] if goal_before else None,
             "goal_distance_change": 0.0 if goal_before else None,
@@ -363,7 +365,17 @@ def register_game(tools):
                 save_autonomy_progress(store, report)
                 if report["status"] != "running":
                     break
-        result = compact_observation(observation(store.get(tools.session_id)))
+        executed_world = store.get(tools.session_id)
+        result = compact_observation(observation(executed_world))
+        motion = executed_world.get("motion") or []
+        climbed = max(0.0, report["start_y"] - min(sample["nodes"]["hip"][1] for sample in motion)) if motion else 0.0
+        report["climbed_y"] = round(climbed, 2)
+        breakdown = verified_complexity(steps, {"displacement_x": round(report["current_x"] - report["start_x"], 2),
+                                               "climbed_y": round(climbed, 2),
+                                               "contact_after": (result.get("contact") or {}).get("object_id"),
+                                               "upright": result["upright"], "refused": None})
+        report["verified_complexity"] = breakdown["verified_score"]
+        save_autonomy_progress(store, report)
         result["program_execution"] = dict(report)
         if goal_before and result.get("goal"):
             distance_change = round(result["goal"]["distance"] - goal_before["distance"], 2)
@@ -456,18 +468,21 @@ def register_game(tools):
                               if improvement.get(name) is not True]
                     if failed:
                         raise ValueError("self-improvement commit blocked: physical skill complexity must exceed the previous best with at least two action types including movement; chart-only edits do not count; failing improvement checks: " + ", ".join(failed))
-                    baseline = int(draft.get("baseline_complexity_score", 0))
+                    report = draft.get("report") or {}
+                    trials = {t["behavior"]: t for t in report.get("skill_tests", [])}
+                    baseline_verified = int(report.get("baseline_verified_best", draft.get("baseline_complexity_score", 0)))
                     candidate = draft.get("candidate") or {}
                     movement = {"left", "right", "jump", "climb_up", "climb_down"}
                     eligible = []
                     for item in program_identity(candidate):
                         steps = candidate.get("behaviors", {}).get(item["name"], [])
                         actions = {step["action"] for step in steps}
-                        if item["complexity_score"] > baseline and len(actions) >= 2 and actions & movement:
-                            eligible.append(item)
+                        verified = trials.get(item["name"], {}).get("verified_score", item["complexity_score"])
+                        if verified > baseline_verified and len(actions) >= 2 and actions & movement:
+                            eligible.append((verified, item["name"]))
                     if not eligible:
                         raise ValueError("self-improvement commit blocked: physical skill complexity must exceed the previous best with at least two action types including movement; chart-only edits do not count")
-                    release_program = max(eligible, key=lambda item: item["complexity_score"])["name"]
+                    release_program = max(eligible)[1]
                 store.apply(tools.session_id, build, args, cancelled=cancelled)
             world = current_world(store)
             if operation_name == "commit":

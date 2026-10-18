@@ -78,6 +78,38 @@ def test_verified_ladder_climb_behavior_passes_interaction_and_displacement_chec
     assert report["improvement_checks"]["meaningful_displacement"] is True
 
 
+def test_repeated_program_cannot_raise_the_verified_complexity_score():
+    world = fresh_world(1)
+    evolve(world, {"operation": "add", "object": {"id": "ladder", "kind": "ladder", "x": 180, "y": 200, "width": 35, "height": 340}})
+    evolve(world, {"operation": "behavior", "name": "mount", "steps": [
+        {"action": "right", "frames": 20}, {"action": "climb_up", "frames": 30}, {"action": "climb_down", "frames": 20}]})
+    build(world, {"operation": "begin", "objective": "repeat the same skill under a new name"})
+    build(world, {"operation": "edit", "changes": [
+        {"operation": "behavior", "name": "mount-copy", "steps": [
+            {"action": "right", "frames": 20}, {"action": "climb_up", "frames": 30}, {"action": "climb_down", "frames": 20}]}]})
+    build(world, {"operation": "test"})
+    report = world["draft"]["report"]
+    assert report["improvement_checks"]["complexity_delta_source"] is False
+    trials = {t["behavior"]: t for t in report["skill_tests"]}
+    assert trials["mount"]["verified_score"] == trials["mount-copy"]["verified_score"]
+
+
+def test_verified_climb_scores_above_structural_walking():
+    world = fresh_world(1)
+    evolve(world, {"operation": "add", "object": {"id": "ladder", "kind": "ladder", "x": 180, "y": 200, "width": 35, "height": 340}})
+    evolve(world, {"operation": "behavior", "name": "walk", "steps": [{"action": "right", "frames": 40}]})
+    evolve(world, {"operation": "behavior", "name": "mount", "steps": [
+        {"action": "right", "frames": 20}, {"action": "climb_up", "frames": 30}, {"action": "climb_down", "frames": 20}]})
+    build(world, {"operation": "begin", "objective": "measure both skills"})
+    build(world, {"operation": "edit", "changes": [panel()]})
+    build(world, {"operation": "test"})
+    trials = {t["behavior"]: t for t in world["draft"]["report"]["skill_tests"]}
+    assert trials["mount"]["contact_after"] == "ladder"
+    assert trials["mount"]["verified_bonus"] > trials["walk"]["verified_bonus"]
+    assert trials["mount"]["verified_score"] > trials["walk"]["verified_score"]
+    assert trials["mount"]["climbed_y"] > 12
+
+
 def test_draft_is_invisible_to_live_physics_until_exact_passing_release(monkeypatch):
     world = fresh_world(1)
     before = snapshot(world)

@@ -315,6 +315,26 @@ def test_self_improve_draft_rejects_dashboard_only_commit(stored_world, tmp_path
     assert saved["draft"]["state"] == "tested"
 
 
+def test_program_execution_report_exposes_climbed_height_and_verified_complexity(stored_world, tmp_path):
+    state, session = stored_world
+    with GameStore(state.path) as store:
+        store.apply(session, evolve, {"operation": "add", "object": {"id": "ladder", "kind": "ladder", "x": 180, "y": 200, "width": 35, "height": 340}})
+        store.apply(session, evolve, {"operation": "behavior", "name": "mount", "steps": [
+            {"action": "climb_up", "frames": 30}, {"action": "climb_down", "frames": 20}]})
+    tools = ToolRegistry(tmp_path / "verified-complexity", state, session)
+    register_game(tools)
+    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
+
+    result = tools.call("game_act", {"action": "behavior", "name": "mount", "cycles": 2})
+    assert result.is_error is False
+    execution = json.loads(result.content)["program_execution"]
+    assert execution["climbed_y"] > 10
+    assert execution["verified_complexity"] > execution["complexity_score"]
+    with GameStore(state.path) as store:
+        saved = store.get(session)["autonomy_execution"]
+    assert saved["climbed_y"] > 10 and saved["verified_complexity"] > saved["complexity_score"]
+
+
 def test_climb_skill_without_ladder_contact_cannot_commit(stored_world, tmp_path):
     state, session = stored_world
     state.append_message(session, {"role": "user", "content": "Улучши себя как физического персонажа"})
