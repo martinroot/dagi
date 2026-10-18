@@ -440,6 +440,26 @@ class WebApp:
                     elif path == "/api/game/sessions":
                         with GameStore(app.config.database) as game:
                             self._send_json(200, {"sessions": game.list_sessions()})
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/export", path):
+                        session_id = int(match.group(1))
+                        with GameStore(app.config.database) as game:
+                            world = game.get(session_id)
+                        if world is None:
+                            self._send_json(404, {"error": "game session not found"})
+                            return
+                        with _StateContext(self._state()) as state:
+                            try:
+                                export = _game_session_export(state, session_id, world)
+                            except ValueError as exc:
+                                self._send_json(404, {"error": str(exc)})
+                                return
+                        serialized = json.dumps(_json_safe(export), ensure_ascii=False).encode("utf-8")
+                        if len(serialized) > 50_000_000:
+                            self._send_json(413, {"error": "session export exceeds 50 MB; no partial export was produced"})
+                            return
+                        self._send_json(200, export, headers={
+                            "Content-Disposition": f'attachment; filename="dagi-session-{session_id}.json"',
+                        })
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)", path):
                         session_id = int(match.group(1))
                         with GameStore(app.config.database) as game:
@@ -459,7 +479,7 @@ class WebApp:
                                         "model": pending["model"] if pending else app.config.model, "provider_calls": len(calls), "run_id": active["run_id"] if active else None,
                                         "tool": executing["name"] if executing else None}
                         workspace = resolve_session_workspace(app.config.workspace, session["workspace"])
-                        self._send_json(200, {"self": game_identity(session_id, workspace),
+                        self._send_json(200, {"self": game_identity(session_id, workspace, world),
                             "scene": game_observation(world), "frame": game_frame(world),
                             "links": PAIRS, "motion": world["motion"], "history": world["history"],
                             "reflections": world["reflections"], "widgets": world["widgets"], "components": world["components"], "theme": world["theme"],
@@ -1185,6 +1205,85 @@ class WebApp:
             server.serve_forever()
         finally:
             server.server_close()
+
+
+_EXPORT_SENSITIVE_KEY = re.compile(
+    r"(?i)(password|passwd|secret|api[_-]?key|api[_-]?token|access[_-]?token|refresh[_-]?token|authorization|cookie|credential|private[_-]?key|cvc|cvv)"
+)
+_EXPORT_AUTH_TEXT = re.compile(r"(?i)\b(authorization\b\s*[:=]\s*)bearer\s+[^\s,;]+")
+_EXPORT_KV_TEXT = re.compile(
+    r"(?i)\b(password|passwd|api[_-]?key|api[_-]?token|access[_-]?token|refresh[_-]?token|secret|cookie|credential)\b(\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
+)
+_EXPORT_TOKEN_PATTERNS = (
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
+    re.compile(r"(?s)-----BEGIN [^-\n]*PRIVATE KEY-----.*?-----END [^-\n]*PRIVATE KEY-----"),
+)
+
+
+def _redact_export(value: Any) -> Any:
+    """Redact credential-shaped fields/text before returning a session download."""
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if isinstance(key, str) and _EXPORT_SENSITIVE_KEY.search(key)
+            else _redact_export(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_export(item) for item in value]
+    if isinstance(value, str):
+        value = _EXPORT_AUTH_TEXT.sub(r"\1Bearer [REDACTED]", value)
+        value = _EXPORT_KV_TEXT.sub(r"\1\2[REDACTED]", value)
+        for pattern in _EXPORT_TOKEN_PATTERNS:
+            value = pattern.sub("[REDACTED]", value)
+    return value
+
+
+def _game_session_export(state: StateStore, session_id: int, world: dict[str, Any]) -> dict[str, Any]:
+    session = state.get_session(session_id)
+    if session is None:
+        raise ValueError("session not found")
+    runs = state.list_runs(session_id, limit=None)
+    run_exports = []
+    for run in runs:
+        event_rows: list[dict[str, Any]] = []
+        after_id = 0
+        while True:
+            page = state.list_run_events(run["run_id"], after_id=after_id, limit=5000)
+            if not page:
+                break
+            event_rows.extend(page)
+            after_id = page[-1]["id"]
+            if len(page) < 5000:
+                break
+        provider_calls = state.list_provider_calls(run["run_id"])
+        run_exports.append({
+            key: run.get(key) for key in
+            ("run_id", "session_id", "agent_id", "parent_run_id", "depth", "agent_name", "status", "started_at", "finished_at", "error")
+        } | {
+            "provider_calls": [{key: call.get(key) for key in
+                ("id", "model", "purpose", "usage_source", "input_tokens", "output_tokens", "cost_usd", "started_at", "finished_at")}
+                for call in provider_calls],
+            "events": event_rows,
+        })
+    payload = {
+        "format": "dagi-session-export-v1",
+        "exported_at": time.time(),
+        "scope": {
+            "includes": ["persisted visible messages", "all stored run events", "tool arguments/results/errors", "provider usage metadata", "current game world and retained history"],
+            "excludes": ["raw provider request payloads/system prompts", "private internal reasoning (not stored/exportable)"],
+            "history_note": "The world history is bounded by the runtime; all remaining persisted entries and all run/tool events are included.",
+            "redaction_note": "Credential-shaped keys and common bearer/API-token patterns are redacted; review before sharing externally.",
+        },
+        "session": {key: session.get(key) for key in ("id", "title", "created_at", "parent_id")},
+        "messages": state.messages(session_id, include_metadata=True),
+        "runs": run_exports,
+        "tool_calls": state.list_tool_calls(session_id),
+        "game_world": world,
+    }
+    return _redact_export(payload)
 
 
 def _json_safe(value: Any) -> Any:

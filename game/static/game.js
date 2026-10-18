@@ -28,6 +28,7 @@ function showLogin() {
 function closeStream() { if (source) source.close(); source = null; }
 function busy(active) {
   $("send").disabled = active || !sessionId; $("stop").hidden = !active;
+  $("download-log").disabled = !sessionId;
   $("run-state").textContent = active ? "RUNNING" : "READY";
   $("status").textContent = active ? "● Агент действует" : sessionId ? "○ Мир на паузе" : "Выберите сессию";
 }
@@ -130,9 +131,18 @@ async function refreshWorld(token = generation) {
   animation = motion.length > 1 ? {frames:motion, start:performance.now(), duration:Math.min(4000, (motion.at(-1).tick - motion[0].tick) / 60 * 1000)} : null;
   if (!animation) displayed = data.frame;
   $("body-id").textContent = data.self.body_id;
-  $("identity").textContent = `Я: ${data.self.body_id}\nСессия: ${data.self.session_id}\nСреда: browser canvas + чат\nВосприятие: структурированная сцена\nКод тела: ${data.self.code.engine}\nМоё поведение: controller + behaviors\nРабочая папка: ${data.self.workspace}\nЧеловек видит тело и результаты действий`;
+  const programs = (data.self.programs || []).map((program) => `${program.name}@${program.version} C${program.complexity_score} (${program.steps} шаг.)`).join(", ") || "нет сохранённых программ";
+  $("identity").textContent = `Я: ${data.self.body_id}\nСессия: ${data.self.session_id}\nСреда: browser canvas + чат\nВосприятие: структурированная сцена\nКод тела: ${data.self.code.engine}\nМоё поведение: controller + versioned skills\nМои программы: ${programs}\nРабочая папка: ${data.self.workspace}\nЧеловек видит тело и результаты действий`;
   const s = data.scene;
-  $("observation").textContent = `Позиция: x=${s.position.x}, y=${s.position.y}\nСтоит: ${s.upright ? "да" : "нет"} · Опора: ${s.grounded ? "да" : "нет"}\nРевизия: ${s.revision} · Кадр: ${s.tick}\n\n${s.goal ? `${s.goal.label}\nЦель x=${s.goal.x} ±${s.goal.tolerance}\nРасстояние: ${s.goal.distance}\nПроверка позы: ${s.goal.passed ? "ПРОЙДЕНА" : "НЕ ПРОЙДЕНА"}` : "Цель ещё не задана"}`;
+  const autonomy = s.autonomy_execution, autonomyBadge = $("autonomy-status");
+  autonomyBadge.hidden = !autonomy;
+  if (autonomy) {
+    autonomyBadge.className = `autonomy-status ${autonomy.status || ""}`;
+    const dx = (Number(autonomy.current_x) - Number(autonomy.start_x)).toFixed(2);
+    const goalDelta = typeof autonomy.goal_distance_change === "number" ? ` · goal Δ ${autonomy.goal_distance_change > 0 ? "+" : ""}${autonomy.goal_distance_change.toFixed(2)}` : "";
+    autonomyBadge.textContent = `SELF PROGRAM ${autonomy.program}@${autonomy.program_version} C${autonomy.complexity_score} · ${(autonomy.status || "").toUpperCase()} · ${autonomy.cycles_completed}/${autonomy.cycles_requested} циклов · ${autonomy.frames_executed} кадров · Δx ${dx}${goalDelta}`;
+  }
+  $("observation").textContent = `Позиция: x=${s.position.x}, y=${s.position.y}\nСтоит: ${s.upright ? "да" : "нет"} · Опора: ${s.grounded ? "да" : "нет"}\nРевизия: ${s.revision} · Кадр: ${s.tick}\n\n${s.goal ? `${s.goal.label}\nЦель x=${s.goal.x} ±${s.goal.tolerance}\nРасстояние: ${s.goal.distance} · signed_error: ${s.goal.signed_error} · курс: ${s.goal.direction_to_goal}\nПроверка позы: ${s.goal.passed ? "ПРОЙДЕНА" : "НЕ ПРОЙДЕНА"}` : "Цель ещё не задана"}`;
   $("reflection").textContent = pretty(s.latest_reflection || s.last_action || {status:"Готов к первому эксперименту"});
   $("scene").textContent = pretty({physics:s.physics, controller:s.controller, objects:s.objects, behaviors:s.behaviors, goal:s.goal});
   $("history").textContent = pretty(data.history);
@@ -166,6 +176,18 @@ function stream(id, after, token, pending = null) {
     }
   };
 }
+async function downloadSessionLog() {
+  const id = sessionId;
+  if (!id) return;
+  const payload = await api(`game/sessions/${id}/export`);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:"application/json;charset=utf-8"});
+  const url = URL.createObjectURL(blob), anchor = document.createElement("a");
+  anchor.href = url; anchor.download = `dagi-session-${id}.json`;
+  document.body.appendChild(anchor); anchor.click();
+  setTimeout(() => {anchor.remove(); URL.revokeObjectURL(url);}, 1000);
+}
+$("download-log").onclick = () => downloadSessionLog().catch(error);
+
 async function send(text) {
   if (!sessionId || runId) return;
   $("error").textContent = "";
@@ -188,6 +210,25 @@ $("login").onsubmit = async (event) => {
   try {await api("auth/login", "POST", {username:$("username").value, password:$("password").value}); $("password").value=""; await init();} catch (exc) {error(exc);}
 };
 $("logout").onclick = async () => {try {await api("auth/logout", "POST", {}); showLogin();} catch (exc) {error(exc);} };
+
+function drawAvatarExpression(ctx, head, state, now) {
+  const [x,y]=head, mode=state||"resting";
+  ctx.save();ctx.strokeStyle="#282d23";ctx.fillStyle="#282d23";ctx.lineWidth=1.3;ctx.lineCap="round";
+  if(mode==="resting"){
+    ctx.beginPath();ctx.moveTo(x-6,y-2);ctx.lineTo(x-2,y-1);ctx.moveTo(x+2,y-1);ctx.lineTo(x+6,y-2);ctx.stroke();
+  }else{
+    ctx.beginPath();ctx.arc(x-4,y-2,1.1,0,Math.PI*2);ctx.arc(x+4,y-2,1.1,0,Math.PI*2);ctx.fill();
+  }
+  ctx.beginPath();
+  if(mode==="satisfied")ctx.arc(x,y+2,4,Math.PI*.12,Math.PI*.88);
+  else if(mode==="uncertain")ctx.arc(x,y+7,4,Math.PI*1.12,Math.PI*1.88);
+  else {ctx.moveTo(x-3,y+5);ctx.lineTo(x+3,y+5);}
+  ctx.stroke();
+  const glyph={focused:"•",satisfied:"✓",uncertain:"?",curious:"…",resting:"z"}[mode]||"·";
+  ctx.font="12px system-ui";ctx.textAlign="center";ctx.fillStyle=mode==="uncertain"?"#d07a3e":"#739953";
+  ctx.fillText(glyph,x,y-15+(mode==="focused"?Math.sin(now/160)*1.5:Math.sin(now/420)*.6));
+  ctx.restore();
+}
 
 function draw(now) {
   if (animation) {
@@ -219,6 +260,7 @@ function draw(now) {
     const n=displayed.nodes;ctx.lineWidth=5;ctx.lineCap="round";ctx.strokeStyle="#282d23";
     for(const [a,b] of sceneData.links){ctx.beginPath();ctx.moveTo(...n[a]);ctx.lineTo(...n[b]);ctx.stroke();}
     ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(...n.head,12,0,Math.PI*2);ctx.fill();ctx.stroke();
+    drawAvatarExpression(ctx,n.head,sceneData.scene.avatar_state,now);
     ctx.fillStyle=sceneData.theme?.accent||"#e6703a";for(const [name,p] of Object.entries(n)){if(name==="head")continue;ctx.beginPath();ctx.arc(...p,3.5,0,Math.PI*2);ctx.fill();}
     ctx.font="11px monospace";ctx.fillStyle="#e6703a";ctx.fillText("SELF",n.head[0]+22,n.head[1]-8);
     $("clock").textContent=`t = ${(displayed.tick/60).toFixed(2)} s · 60 Hz`;

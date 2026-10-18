@@ -39,6 +39,18 @@ test("countdown waits for server activation before showing the updated-world bur
   assert.equal(ui.elements.get("release-overlay").hidden,true);
 });
 
+test("improve-self prioritizes growing physical skills over dashboard components",async()=>{
+  const ui=studioUi();let prompt="";
+  ui.context.send=(text)=>{prompt=text;return Promise.resolve();};
+  await ui.elements.get("improve-self").onclick();
+  assert.match(prompt,/физического персонажа/);
+  assert.match(prompt,/complexity_score/);
+  assert.match(prompt,/dashboard/);
+  assert.match(prompt,/bounded cycles/);
+  assert.match(prompt,/avatar_state/);
+  assert.match(prompt,/измеренный результат/);
+});
+
 test("draft widgets are visibly staged and reset on a session change",()=>{
   const ui=studioUi(),world=data();world.build={state:"building",objective:"try",edits:1,test_count:0};
   world.preview={objects:[],widgets:[{id:"button",kind:"button",x:600,y:70,width:200,height:60,title:"Walk",target:{type:"action",action:"right",frames:30}}]};

@@ -70,6 +70,24 @@ def frame(world):
     return {"tick": world["tick"], "nodes": {name: [round(p["x"], 2), round(p["y"], 2)] for name, p in world["nodes"].items()}}
 
 
+def avatar_state(world):
+    if world.get("history") and world["history"][-1].get("kind") == "reflection":
+        return "curious"
+    execution = world.get("autonomy_execution") or {}
+    status = execution.get("status")
+    if status == "running":
+        return "focused"
+    if status == "goal_passed":
+        return "satisfied"
+    if status == "cancelled":
+        return "resting"
+    if status == "completed" and execution.get("goal_distance_change") is not None:
+        return "uncertain" if execution["goal_distance_change"] > 0 else "curious"
+    if world.get("reflections"):
+        return "curious"
+    return "resting"
+
+
 def observation(world):
     nodes = world["nodes"]
     hip, head = nodes["hip"], nodes["head"]
@@ -77,11 +95,16 @@ def observation(world):
     upright = head["y"] < hip["y"] - 45 and abs(head["x"] - hip["x"]) < 35
     goal = copy.deepcopy(world["goal"])
     if goal:
-        distance = abs(hip["x"] - goal["x"])
-        goal.update({"distance": round(distance, 2), "passed": distance <= goal["tolerance"] and upright and grounded,
+        signed_error = goal["x"] - hip["x"]
+        distance = abs(signed_error)
+        passed = distance <= goal["tolerance"] and upright and grounded
+        direction = "hold" if distance <= goal["tolerance"] else "right" if signed_error > 0 else "left"
+        goal.update({"distance": round(distance, 2), "signed_error": round(signed_error, 2),
+                     "direction_to_goal": direction, "passed": passed,
                      "scope": "Current pose reaches configured x while upright and grounded; does not verify the whole user task."})
     return {
         "session_id": world["session_id"], "body_id": world["body_id"], "revision": world["revision"],
+        "avatar_state": avatar_state(world),
         "tick": world["tick"], "seconds": round(world["tick"] * DT, 2),
         "position": {"x": round(hip["x"], 2), "y": round(hip["y"], 2)},
         "upright": upright, "grounded": grounded,
@@ -91,6 +114,7 @@ def observation(world):
         "behaviors": copy.deepcopy(world["behaviors"]), "goal": goal,
         "last_action": copy.deepcopy(world["history"][-1]) if world["history"] else None,
         "latest_reflection": copy.deepcopy(world["reflections"][-1]) if world["reflections"] else None,
+        "autonomy_execution": copy.deepcopy(world.get("autonomy_execution")),
         "version": world.get("version", 0), "widget_count": len(world.get("widgets", [])),
     }
 
@@ -205,7 +229,7 @@ def validate_action(args):
     return action, frames, ignored
 
 
-def act(world, args, cancelled=lambda: False):
+def act(world, args, cancelled=lambda: False, stop_on_goal=False):
     action, frames, ignored = validate_action(args)
     is_behavior = action == "behavior"
     command = {key: copy.deepcopy(value) for key, value in args.items() if key not in ignored}
@@ -216,6 +240,9 @@ def act(world, args, cancelled=lambda: False):
             raise ValueError("unknown behavior")
     else:
         steps = [{"action": action, "frames": frames}]
+    frames_requested = sum(step["frames"] for step in steps)
+    frames_executed = 0
+    goal_stopped = False
     motion = [frame(world)]
     for step in steps:
         action, frames, _ignored = validate_action(step)
@@ -227,13 +254,23 @@ def act(world, args, cancelled=lambda: False):
                 raise ValueError("action cancelled before world commit")
             _step(world, -1 if action == "left" else 1 if action == "right" else 0,
                   -1 if action == "climb_up" else 1 if action == "climb_down" else 0)
+            frames_executed += 1
             if i % 8 == 0:
                 motion.append(frame(world))
+            if stop_on_goal:
+                current_goal = observation(world)["goal"]
+                if current_goal and current_goal["passed"]:
+                    goal_stopped = True
+                    break
+        if goal_stopped:
+            break
     motion.append(frame(world))
     world["motion"] = motion[-122:]
     after = observation(world)
     return {"kind": "action", "command": command, "ignored_arguments": ignored,
             "duration_source": "saved behavior steps" if is_behavior else "frames",
+            "frames_requested": frames_requested, "frames_executed": frames_executed,
+            "cycle_completed": not goal_stopped, "stop_reason": "goal_passed" if goal_stopped else None,
             "from_tick": before["tick"], "to_tick": after["tick"],
             "displacement_x": round(after["position"]["x"] - before["position"]["x"], 2),
             "upright": after["upright"], "grounded": after["grounded"], "goal": after["goal"]}

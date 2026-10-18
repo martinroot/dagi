@@ -5,20 +5,24 @@ import vm from "node:vm";
 
 const response = (value) => ({ok:true, status:200, json:async()=>value});
 const snapshot = (id, runs = []) => ({session:{id}, runs, messages:[], tool_calls:[], event_cursors:{}});
-const world = (id, revision = 0) => ({self:{body_id:`stickman:${id}`,session_id:id,workspace:`/world/${id}`,code:{engine:"game/world.py"}},
-  scene:{revision,position:{x:180+revision,y:450},tick:revision*60,upright:true,grounded:true,controller:{},physics:{},objects:[],behaviors:{}},
-  frame:{tick:revision*60,nodes:{}},motion:[],history:[]});
+const world = (id, revision = 0) => ({self:{body_id:`stickman:${id}`,session_id:id,workspace:`/world/${id}`,code:{engine:"game/world.py"},programs:[]},
+  scene:{revision,position:{x:180+revision,y:450},tick:revision*60,upright:true,grounded:true,controller:{},physics:{},objects:[],behaviors:{},autonomy_execution:null},
+  frame:{tick:revision*60,nodes:{}},links:[],motion:[],history:[]});
 function ui(fetch) {
-  const elements = new Map(), sources = [];
-  const element = () => ({children:[],textContent:"",value:"",hidden:false,disabled:false,
-    append(...children){this.children.push(...children);},replaceChildren(...children){this.children=children;},getContext(){return {};}});
-  const document = {hidden:false,querySelectorAll:()=>[],createElement:element,
+  const elements = new Map(), sources = [], created = [], drawnText = [];
+  const canvasContext = {clearRect(){},fillRect(){},beginPath(){},arc(){},fill(){},stroke(){},moveTo(){},lineTo(){},setLineDash(){},save(){},restore(){},fillText(text){drawnText.push(text);}};
+  const element = (tagName = "") => ({tagName,children:[],textContent:"",value:"",hidden:false,disabled:false,
+    append(...children){this.children.push(...children);},appendChild(child){this.children.push(child);},
+    replaceChildren(...children){this.children=children;},getContext(){return canvasContext;},
+    click(){this.clicked=true;},remove(){this.removed=true;}});
+  const document = {hidden:false,body:element("body"),querySelectorAll:()=>[],
+    createElement(tagName){const node=element(tagName);created.push(node);return node;},
     getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);}};
   class EventSource {constructor(url){this.url=String(url);sources.push(this);}close(){this.closed=true;}}
-  const context = {document,location:{href:"https://example.com/dagi/game/"},URL,EventSource,
-    fetch:(url,options)=>fetch(new URL(url),options),requestAnimationFrame(){},setInterval(){},performance:{now:()=>0}};
+  const context = {document,location:{href:"https://example.com/dagi/game/"},URL,Blob,EventSource,
+    fetch:(url,options)=>fetch(new URL(url),options),requestAnimationFrame(){},setInterval(){},setTimeout(callback){callback();return 1;},performance:{now:()=>0}};
   vm.runInNewContext(fs.readFileSync(new URL("../game/static/game.js",import.meta.url),"utf8"),context);
-  return {context,elements,sources};
+  return {context,elements,sources,created,drawnText};
 }
 const tick = () => new Promise((resolve)=>setImmediate(resolve));
 
@@ -41,6 +45,63 @@ test("game UI keeps API calls inside the mounted prefix and ignores stale sessio
   resolveOld(response(snapshot(1))); await old;
   assert.equal(elements.get("title").textContent,"new");
   assert.match(elements.get("identity").textContent,/stickman:2/);
+});
+
+test("game UI identifies saved skill versions and displays autonomous execution progress",async()=>{
+  const active=world(12,5);
+  active.self.programs=[{name:"pace",version:"abc123def456",steps:2,complexity_score:7}];
+  active.scene.autonomy_execution={program:"pace",program_version:"abc123def456",complexity_score:7,status:"running",
+    cycles_completed:2,cycles_requested:5,frames_executed:48,start_x:200,current_x:210,goal_distance_change:-1.5};
+  const {context,elements}=ui(async(url)=>{
+    const path=url.pathname.slice("/dagi/api/".length);
+    if(path==="auth/session")return response({authenticated:true});
+    if(path==="game/sessions")return response({sessions:[]});
+    if(path==="sessions/12")return response(snapshot(12));
+    if(path==="game/sessions/12")return response(active);
+    throw new Error(path);
+  });
+  await tick();await context.selectSession(12,"autonomous");
+  assert.match(elements.get("identity").textContent,/pace@abc123def456/);
+  assert.equal(elements.get("autonomy-status").hidden,false);
+  assert.match(elements.get("autonomy-status").textContent,/2\/5 циклов/);
+  assert.match(elements.get("autonomy-status").textContent,/Δx 10.00/);
+  assert.match(elements.get("autonomy-status").textContent,/goal Δ -1.50/);
+});
+
+test("character avatar draws a state expression derived from its simulation status",async()=>{
+  const active=world(12,5);active.scene.avatar_state="satisfied";active.frame.nodes={head:[500,300]};
+  const {context,drawnText}=ui(async(url)=>{
+    const path=url.pathname.slice("/dagi/api/".length);
+    if(path==="auth/session")return response({authenticated:true});
+    if(path==="game/sessions")return response({sessions:[]});
+    if(path==="sessions/12")return response(snapshot(12));
+    if(path==="game/sessions/12")return response(active);
+    throw new Error(path);
+  });
+  await tick();await context.selectSession(12,"embodied expression");context.draw(1000);
+  assert.ok(drawnText.includes("✓"));
+});
+
+test("download button saves the selected session's log as JSON",async()=>{
+  assert.match(fs.readFileSync(new URL("../game/static/index.html",import.meta.url),"utf8"),/id="download-log"/);
+  const requested=[];
+  const {context,created}=ui(async(url,options)=>{
+    requested.push({path:url.pathname,credentials:options.credentials});
+    const path=url.pathname.slice("/dagi/api/".length);
+    if(path==="auth/session")return response({authenticated:true});
+    if(path==="game/sessions")return response({sessions:[]});
+    if(path==="sessions/12")return response(snapshot(12));
+    if(path==="game/sessions/12")return response(world(12));
+    if(path==="game/sessions/12/export")return response({format:"dagi-session-export-v1",session:{id:12}});
+    throw new Error(path);
+  });
+  await tick();await context.selectSession(12,"export target");
+  await context.downloadSessionLog();
+  assert.ok(requested.some((item)=>item.path==="/dagi/api/game/sessions/12/export"&&item.credentials==="same-origin"));
+  const anchor=created.find((item)=>item.tagName==="a"&&item.download);
+  assert.equal(anchor.download,"dagi-session-12.json");
+  assert.equal(anchor.clicked,true);
+  assert.equal(anchor.removed,true);
 });
 
 test("a delayed lower world revision cannot roll back the displayed body",async()=>{

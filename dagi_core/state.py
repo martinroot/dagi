@@ -403,11 +403,16 @@ class StateStore:
         row = self._db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
         return dict(row) if row is not None else None
 
-    def list_runs(self, session_id: int, limit: int = 100) -> list[dict[str, Any]]:
-        rows = self._db.execute(
-            "SELECT * FROM runs WHERE session_id=? ORDER BY started_at DESC LIMIT ?",
-            (session_id, max(1, min(int(limit), 500))),
-        ).fetchall()
+    def list_runs(self, session_id: int, limit: int | None = 100) -> list[dict[str, Any]]:
+        if limit is None:
+            rows = self._db.execute(
+                "SELECT * FROM runs WHERE session_id=? ORDER BY started_at", (session_id,)
+            ).fetchall()
+        else:
+            rows = self._db.execute(
+                "SELECT * FROM runs WHERE session_id=? ORDER BY started_at DESC LIMIT ?",
+                (session_id, max(1, min(int(limit), 500))),
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def list_child_runs(self, parent_run_id: str) -> list[dict[str, Any]]:

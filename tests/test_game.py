@@ -11,7 +11,7 @@ from dagi_core.provider import StreamEvent
 from dagi_core.state import StateStore
 from dagi_core.tools import ToolExecutionContext, ToolRegistry
 from dagi_core.web import WebApp
-from game.bridge import GAME_PROMPT, register_game
+from game.bridge import GAME_PROMPT, program_identity, register_game
 from game.store import GameStore
 from game.world import LINKS, act, evolve, fresh_world, observation, reflect, set_goal
 from test_core_web import _config, _request, _start, _stop, _wait_for_status
@@ -44,6 +44,48 @@ def test_actions_are_deterministic_bounded_and_produce_grounded_goal_evidence():
     for left, right, length in LINKS:
         p, q = a["nodes"][left], a["nodes"][right]
         assert abs(math.hypot(p["x"] - q["x"], p["y"] - q["y"]) - length) < 2
+
+
+def test_goal_observation_exposes_signed_error_and_direction_to_recover_overshoot():
+    world = fresh_world(1)
+    start_x = observation(world)["position"]["x"]
+
+    set_goal(world, {"x": start_x + 30, "tolerance": 5})
+    rightward = observation(world)["goal"]
+    assert rightward["signed_error"] == 30
+    assert rightward["direction_to_goal"] == "right"
+
+    set_goal(world, {"x": start_x - 30, "tolerance": 5})
+    overshot = observation(world)["goal"]
+    assert overshot["signed_error"] == -30
+    assert overshot["direction_to_goal"] == "left"
+
+
+def test_avatar_state_is_derived_from_persisted_experiment_outcomes():
+    world = fresh_world(1)
+    assert observation(world)["avatar_state"] == "resting"
+    world["reflections"] = [{"expected": "progress", "hypothesis": "test", "next_test": "observe"}]
+    assert observation(world)["avatar_state"] == "curious"
+    world["autonomy_execution"] = {"status": "running"}
+    assert observation(world)["avatar_state"] == "focused"
+    world["autonomy_execution"] = {"status": "goal_passed"}
+    assert observation(world)["avatar_state"] == "satisfied"
+    world["autonomy_execution"] = {"status": "completed", "goal_distance_change": 2.0}
+    assert observation(world)["avatar_state"] == "uncertain"
+
+
+def test_saved_skill_complexity_is_measurable_and_versioned():
+    steps = [
+        {"action": "right", "frames": 12},
+        {"action": "jump", "frames": 6},
+        {"action": "left", "frames": 8},
+    ]
+    program = program_identity({"behaviors": {"dance": steps}})[0]
+    assert program["name"] == "dance"
+    assert len(program["version"]) == 12
+    assert program["steps"] == 3
+    assert program["unique_actions"] == 3
+    assert program["complexity_score"] > program["steps"]
 
 
 def test_jump_has_measured_airtime_and_wall_blocks_horizontal_progress():
@@ -197,11 +239,115 @@ def test_game_inspect_accepts_unique_source_basename_and_rejects_ambiguous_or_un
     assert tools.call("game_inspect", {"view": "source", "path": "../../.env"}).is_error is True
 
 
-def test_studio_prompt_uses_canonical_source_paths_and_limits_source_scanning():
+def test_game_act_reports_signed_goal_progress_for_wrong_direction(stored_world, tmp_path):
+    state, session = stored_world
+    with GameStore(state.path) as store:
+        world = store.get(session)
+        start_x = world["nodes"]["hip"]["x"]
+        store.apply(session, set_goal, {"x": start_x - 30, "tolerance": 5})
+    tools = ToolRegistry(tmp_path / "goal-progress", state, session)
+    register_game(tools)
+    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
+
+    result = tools.call("game_act", {"action": "right", "frames": 10})
+    assert result.is_error is False
+    payload = json.loads(result.content)
+    assert payload["goal"]["direction_to_goal"] == "left"
+    assert payload["goal_progress"]["distance_change"] > 0
+    assert payload["goal_progress"]["improved"] is False
+    assert payload["goal_progress"]["signed_error"] < 0
+
+
+def test_game_act_runs_saved_behavior_cycles_without_provider_calls(stored_world, tmp_path):
+    state, session = stored_world
+    with GameStore(state.path) as store:
+        store.apply(session, evolve, {"operation": "behavior", "name": "pace", "steps": [
+            {"action": "right", "frames": 3}, {"action": "left", "frames": 3},
+        ]})
+    tools = ToolRegistry(tmp_path / "autonomous-program", state, session)
+    register_game(tools)
+    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
+
+    result = tools.call("game_act", {"action": "behavior", "name": "pace", "cycles": 4})
+    assert result.is_error is False
+    payload = json.loads(result.content)
+    assert payload["program_execution"]["program"] == "pace"
+    assert payload["program_execution"]["cycles_requested"] == 4
+    assert payload["program_execution"]["cycles_completed"] == 4
+    assert payload["program_execution"]["frames_executed"] == 24
+    assert payload["autonomy_execution"]["status"] == "completed"
+    with GameStore(state.path) as store:
+        saved = store.get(session)
+    assert saved["tick"] == 24
+    assert saved["autonomy_execution"]["program"] == "pace"
+    assert any(item.get("kind") == "autonomy_execution" for item in saved["history"])
+
+
+def test_autonomous_behavior_stops_inside_goal_tolerance_before_overshooting(stored_world, tmp_path):
+    state, session = stored_world
+    with GameStore(state.path) as store:
+        world = store.get(session)
+        start_x = world["nodes"]["hip"]["x"]
+        store.apply(session, set_goal, {"x": start_x + 30, "tolerance": 5})
+        store.apply(session, evolve, {"operation": "behavior", "name": "approach", "steps": [
+            {"action": "right", "frames": 60},
+        ]})
+    tools = ToolRegistry(tmp_path / "goal-stop", state, session)
+    register_game(tools)
+    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
+
+    result = tools.call("game_act", {"action": "behavior", "name": "approach", "cycles": 5})
+    assert result.is_error is False
+    payload = json.loads(result.content)
+    assert payload["goal"]["passed"] is True
+    assert payload["program_execution"]["status"] == "goal_passed"
+    assert payload["program_execution"]["stop_reason"] == "goal_passed"
+    assert payload["program_execution"]["frames_executed"] < 60
+    assert payload["program_execution"]["cycles_completed"] == 0
+    assert payload["program_execution"]["cycles_requested"] == 5
+
+
+def test_dance_program_runs_multiple_cycles_and_frame_ceiling_is_enforced(stored_world, tmp_path):
+    state, session = stored_world
+    with GameStore(state.path) as store:
+        store.apply(session, evolve, {"operation": "behavior", "name": "dance", "steps": [
+            {"action": "jump", "frames": 4}, {"action": "left", "frames": 4},
+            {"action": "right", "frames": 4}, {"action": "idle", "frames": 4},
+        ]})
+        store.apply(session, evolve, {"operation": "behavior", "name": "long-program", "steps": [
+            {"action": "left", "frames": 240}, {"action": "right", "frames": 240},
+            {"action": "left", "frames": 240}, {"action": "right", "frames": 240},
+        ]})
+    tools = ToolRegistry(tmp_path / "dance-program", state, session)
+    register_game(tools)
+    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
+
+    dance = tools.call("game_act", {"action": "behavior", "name": "dance", "cycles": 2})
+    assert dance.is_error is False
+    dance_payload = json.loads(dance.content)
+    assert dance_payload["program_execution"]["cycles_completed"] == 2
+    assert dance_payload["program_execution"]["frames_executed"] == 32
+    before_rejected_run = dance_payload["tick"]
+    too_long = tools.call("game_act", {"action": "behavior", "name": "long-program", "cycles": 10})
+    assert too_long.is_error is True
+    assert "2400 frames" in too_long.content
+    with GameStore(state.path) as store:
+        after = store.get(session)
+    assert after["tick"] == before_rejected_run
+    assert after["autonomy_execution"]["program"] == "dance"
+
+
+def test_studio_prompt_uses_canonical_paths_and_explains_autonomous_goal_and_draft_rules():
     assert "game/static/component-host.js" in GAME_PROMPT
     assert "Do not scan the full source tree" in GAME_PROMPT
     assert "Use at most two source inspection calls" in GAME_PROMPT
     assert "6000 characters" in GAME_PROMPT
+    assert "top-level" in GAME_PROMPT and "`parameters` wrapper" in GAME_PROMPT
+    assert "While a draft is open" in GAME_PROMPT
+    assert "signed_error" in GAME_PROMPT and "goal_progress" in GAME_PROMPT
+    assert "cycles" in GAME_PROMPT and "without an MLL call per action step" in GAME_PROMPT
+    assert "physical skill" in GAME_PROMPT and "dashboards" in GAME_PROMPT
+    assert "complexity_score" in GAME_PROMPT and "avatar_state" in GAME_PROMPT
 
 
 class EmbodiedProvider:
@@ -250,13 +396,35 @@ def test_web_agent_chat_moves_its_own_body_persists_evidence_and_new_session_is_
         assert len(detail["tool_calls"]) == 4
         assert all(call["status"] == "succeeded" for call in detail["tool_calls"])
         request = next(p.requests[0] for p in instances if p.requests)
-        assert "Your stickman IS your body" in request[0]["content"]
+        assert "You are Dagi's body" in request[0]["content"]
         _, _, payload = _request(f"{base}/api/game/sessions/{session}")
         body = json.loads(payload)
         assert body["scene"]["goal"]["passed"] is True
         assert body["scene"]["tick"] == 120
         assert body["reflections"][-1]["evidence_tick"] == 120
         assert f"stickman:{session}" == body["self"]["body_id"]
+        state = StateStore(app.config.database)
+        state.append_message(session, {"role": "user", "content": "authorization: Bearer dummy-export-secret"})
+        state.close()
+        with pytest.raises(HTTPError) as export_auth:
+            from urllib.request import urlopen
+            urlopen(f"{base}/api/game/sessions/{session}/export")
+        assert export_auth.value.code == 401
+        _, export_type, export_body = _request(f"{base}/api/game/sessions/{session}/export")
+        exported = json.loads(export_body)
+        assert "application/json" in export_type
+        assert exported["format"] == "dagi-session-export-v1"
+        assert exported["session"]["id"] == session
+        assert any(m.get("role") == "assistant" and "Observed physical progress" in (m.get("content") or "") for m in exported["messages"])
+        assert any((m.get("content") or "").startswith("authorization:") and "[REDACTED]" in (m.get("content") or "") for m in exported["messages"])
+        assert len(exported["tool_calls"]) == 4
+        assert all(call["status"] == "succeeded" for call in exported["tool_calls"])
+        session_run = next(item for item in exported["runs"] if item["run_id"] == run)
+        assert any(row["event"].get("kind") == "tool_call" for row in session_run["events"])
+        assert session_run["provider_calls"]
+        assert exported["game_world"]["tick"] == 120
+        assert "provider_requests" not in exported and "private_reasoning" not in exported
+        assert "dummy-export-secret" not in json.dumps(exported, ensure_ascii=False)
         _, _, payload = _request(f"{base}/api/game/sessions/{clean}")
         clean_body = json.loads(payload)
         assert clean_body["scene"]["tick"] == 0
