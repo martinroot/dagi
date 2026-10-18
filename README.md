@@ -95,6 +95,23 @@ uv run dagi-web
 
 It binds to `127.0.0.1:8765` by default. The sandbox shows sessions, runs, chat/events, exact provider requests, tool outcomes, errors, and usage. The login form creates an HttpOnly, SameSite=Strict session cookie; APIs reject unauthenticated requests, login attempts are rate-limited, and logout revokes the current session. Configure a PBKDF2-SHA256 password hash and exact public HTTPS origin in the protected service environment file. Run events are persisted and replayed after reconnect; opening a saved run only inspects it and never starts it again. Each HTTP handler and run worker opens its own SQLite connection. Shell tools are disabled in the web sandbox; use the CLI for individually approved shell actions. Keep the server on loopback unless you add an authenticated reverse proxy.
 
+## Embodied debugging lab
+
+Open **`http://127.0.0.1:8765/game/`** after starting `uv run dagi-web` with the
+same provider and web-login settings used by the visual sandbox.
+
+Each new game session starts with a clean physical stickman, an empty world,
+its own workspace and session-scoped memory search. The stickman is the agent's
+body. Chat runs through the existing agent loop; game tools inspect its actual
+code and scene, move its constrained physical joints, add obstacles, change its
+controller, compose behaviors, check a positional goal and record evidence-backed
+experiment notes. Reopening an existing session preserves its world.
+
+Physics is deterministic and action-driven on the server. The browser renders
+the resulting poses and streams real tool events; it does not decide success.
+No extra runtime dependency or per-frame model calls are needed. See
+[game/README.md](game/README.md) for the experiment loop, API and limitations.
+
 ## Custom tools
 
 Register tools through the public registry; duplicate names raise `ValueError`.

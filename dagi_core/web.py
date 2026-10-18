@@ -20,7 +20,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
-from .agent import Agent
+from .agent import Agent, SYSTEM_PROMPT
 from .auth import create_session_token, verify_password, verify_session_token
 from .config import Config, load_config
 from .context import ContextBuilder
@@ -33,6 +33,9 @@ from .tools import ToolRegistry, _resolve
 from .workspace import resolve_session_workspace
 from .goals import validate_checks, verify
 from .worker import load_workers
+from game.bridge import GAME_PROMPT, identity as game_identity, register_game
+from game.store import GameStore
+from game.world import PAIRS, frame as game_frame, observation as game_observation
 
 ProviderFactory = Callable[[str, str, str], Any]
 _REFLECTION_VOLATILE_KEYS = {"timestamp", "created_at", "updated_at", "request_id", "event_id", "nonce"}
@@ -403,7 +406,13 @@ class WebApp:
                 parsed = urlparse(self.path)
                 path = parsed.path
                 try:
-                    if path == "/" or path == "/app.js":
+                    if path == "/game":
+                        self.send_response(302)
+                        self.send_header("Location", "game/")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js"}:
                         self._static(path)
                     elif path == "/api/auth/session":
                         if app._is_authenticated(self.headers):
@@ -425,6 +434,23 @@ class WebApp:
                         ]})
                     elif match := re.fullmatch(r"/api/workers/([A-Za-z0-9_-]+)/proxy(/api/.*)", path):
                         self._proxy(match.group(1), match.group(2))
+                    elif path == "/api/game/sessions":
+                        with GameStore(app.config.database) as game:
+                            self._send_json(200, {"sessions": game.list_sessions()})
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)", path):
+                        session_id = int(match.group(1))
+                        with GameStore(app.config.database) as game:
+                            world = game.get(session_id)
+                        if world is None:
+                            self._send_json(404, {"error": "game session not found"})
+                            return
+                        with _StateContext(self._state()) as state:
+                            session = state.get_session(session_id)
+                        workspace = resolve_session_workspace(app.config.workspace, session["workspace"])
+                        self._send_json(200, {"self": game_identity(session_id, workspace),
+                            "scene": game_observation(world), "frame": game_frame(world),
+                            "links": PAIRS, "motion": world["motion"], "history": world["history"],
+                            "reflections": world["reflections"]})
                     elif path == "/api/sessions":
                         with _StateContext(self._state()) as state:
                             sessions = state.list_sessions(100)
@@ -518,6 +544,16 @@ class WebApp:
                         self._send_json(202, app.start_goal(int(match.group(1)), body))
                     elif match := re.fullmatch(r"/api/goals/([^/]+)/(stop|resume)", parsed.path):
                         self._send_json(202, app.control_goal(match.group(1), match.group(2)))
+                    elif parsed.path == "/api/game/sessions":
+                        title = body.get("title", "Embodied experiment")
+                        if not isinstance(title, str) or not 1 <= len(title.strip()) <= 160:
+                            raise ValueError("title must be 1..160 characters")
+                        workspace = f"game/sessions/{uuid4().hex}"
+                        with _StateContext(self._state()) as state:
+                            session_id = state.create_session(title, workspace=workspace)
+                        with GameStore(app.config.database) as game:
+                            game.create(session_id)
+                        self._send_json(201, {"session_id": session_id})
                     elif parsed.path == "/api/sessions":
                         title = body.get("title")
                         if title is not None and not isinstance(title, str):
@@ -556,9 +592,10 @@ class WebApp:
                 self._send_json(200, result)
 
             def _static(self, path: str) -> None:
-                name = "index.html" if path == "/" else "app.js"
+                is_game = path.startswith("/game")
+                name = ("game.js" if path.endswith("game.js") else "index.html") if is_game else ("index.html" if path == "/" else "app.js")
                 content_type = "text/html; charset=utf-8" if name.endswith(".html") else "text/javascript; charset=utf-8"
-                data = files("dagi_core").joinpath("static", name).read_bytes()
+                data = files("game" if is_game else "dagi_core").joinpath("static", name).read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(data)))
@@ -1053,6 +1090,7 @@ class WebApp:
                 raise ValueError("session not found")
             workspace = resolve_session_workspace(self.config.workspace, session["workspace"])
             tools = ToolRegistry(workspace, state, session_id, shell_enabled=False)
+            is_game = register_game(tools)
             delegation = DelegationManager(
                 state,
                 self.config.workspace,
@@ -1081,6 +1119,7 @@ class WebApp:
                 tools,
                 state,
                 session_id,
+                system_prompt=GAME_PROMPT if is_game else SYSTEM_PROMPT,
                 usage_policy=self.config.usage_policy,
                 context_builder=context,
                 agent_id=self.agent_id,
