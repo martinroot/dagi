@@ -5,6 +5,9 @@ const apiRoot = new URL("../api/", location.href);
 let sessionId = null, runId = null, source = null, generation = 0, revision = -1;
 let sceneData = null, displayed = null, animation = null, polling = false;
 const toolCards = new Map();
+const seenLifeRuns = new Set();
+let trailFrames = [];
+let policyControlsKey = null;
 const canvas = $("world"), ctx = canvas.getContext("2d");
 const pretty = (value) => JSON.stringify(value, null, 2);
 
@@ -67,7 +70,7 @@ async function sessions() {
 }
 async function selectSession(id, title) {
   const token = ++generation; closeStream(); sessionId = id; runId = null; revision = -1;
-  sceneData = displayed = animation = null;
+  sceneData = displayed = animation = null; trailFrames = []; seenLifeRuns.clear(); policyControlsKey = null;
   if(typeof studioReset==="function")studioReset();
   $("title").textContent = title || `Эксперимент #${id}`; $("chat").replaceChildren(); toolCards.clear(); busy(false);
   const snapshot = await api(`sessions/${id}`);
@@ -78,7 +81,10 @@ async function selectSession(id, title) {
   }
   for (const item of snapshot.messages) {
     const msg = item.message || item;
-    if ((msg.role === "user" || msg.role === "assistant") && msg.content) message(msg.role, msg.content);
+    if ((msg.role === "user" || msg.role === "assistant") && msg.content) {
+      if(msg.role==="user"&&msg.content.startsWith("Continue your own development in this living world."))message("assistant","Самостоятельная итерация развития");
+      else message(msg.role,msg.content);
+    }
     for (const call of msg.tool_calls || []) {
       const saved = savedCalls.get(call.id);
       if (saved) savedTool(saved);
@@ -120,6 +126,7 @@ async function refreshWorld(token = generation) {
   if (!id) return;
   const data = await api(`game/sessions/${id}`);
   if (token !== generation || id !== sessionId || data.scene.revision < revision) return;
+  lifeRefresh(data);
   if(typeof studioRuntime==="function")studioRuntime(data);
   if(data.scene.revision === revision)return;
   const previous=sceneData, changedVersion=previous && data.scene.version!==previous.scene.version;
@@ -127,11 +134,12 @@ async function refreshWorld(token = generation) {
   const hadFrame = displayed !== null;
   const oldTick = displayed ? displayed.tick : 0;
   revision = data.scene.revision; sceneData = data;
+  if(data.frame?.nodes?.head){trailFrames.push(data.frame);trailFrames=trailFrames.slice(-12);}
   const motion = hadFrame && !changedVersion ? data.motion.filter((frame) => frame.tick >= oldTick) : [];
   animation = motion.length > 1 ? {frames:motion, start:performance.now(), duration:Math.min(4000, (motion.at(-1).tick - motion[0].tick) / 60 * 1000)} : null;
   if (!animation) displayed = data.frame;
   $("body-id").textContent = data.self.body_id;
-  const programs = (data.self.programs || []).map((program) => `${program.name}@${program.version} C${program.complexity_score} (${program.steps} шаг.)`).join(", ") || "нет сохранённых программ";
+  const programs = [...(data.self.programs || []),...(data.policies || [])].map((program) => `${program.name}@${program.version}`).join(", ") || "нет сохранённых программ";
   $("identity").textContent = `Я: ${data.self.body_id}\nСессия: ${data.self.session_id}\nСреда: browser canvas + чат\nВосприятие: структурированная сцена\nКод тела: ${data.self.code.engine}\nМоё поведение: controller + versioned skills\nМои программы: ${programs}\nРабочая папка: ${data.self.workspace}\nЧеловек видит тело и результаты действий`;
   const s = data.scene;
   const autonomy = s.autonomy_execution, autonomyBadge = $("autonomy-status");
@@ -140,11 +148,9 @@ async function refreshWorld(token = generation) {
     autonomyBadge.className = `autonomy-status ${autonomy.status || ""}`;
     const dx = (Number(autonomy.current_x) - Number(autonomy.start_x)).toFixed(2);
     const goalDelta = typeof autonomy.goal_distance_change === "number" ? ` · goal Δ ${autonomy.goal_distance_change > 0 ? "+" : ""}${autonomy.goal_distance_change.toFixed(2)}` : "";
-    const verified = typeof autonomy.verified_complexity === "number" ? `→V${autonomy.verified_complexity}` : "";
-    const climbed = typeof autonomy.climbed_y === "number" && autonomy.climbed_y > 0 ? ` · подъём ${autonomy.climbed_y.toFixed(2)}` : "";
-    autonomyBadge.textContent = `SELF PROGRAM ${autonomy.program}@${autonomy.program_version} C${autonomy.complexity_score}${verified} · ${(autonomy.status || "").toUpperCase()} · ${autonomy.cycles_completed}/${autonomy.cycles_requested} циклов · ${autonomy.frames_executed} кадров · Δx ${dx}${climbed}${goalDelta}`;
+    autonomyBadge.textContent = `SELF PROGRAM ${autonomy.program}@${autonomy.program_version} · ${(autonomy.status || "").toUpperCase()} · ${autonomy.cycles_completed}/${autonomy.cycles_requested} циклов · ${autonomy.frames_executed} кадров · Δx ${dx}${goalDelta}`;
   }
-  $("observation").textContent = `Позиция: x=${s.position.x}, y=${s.position.y}\nСтоит: ${s.upright ? "да" : "нет"} · Опора: ${s.grounded ? "да" : "нет"}\nРевизия: ${s.revision} · Кадр: ${s.tick}\nАктивность: ${s.activity || "idle"}${s.contact ? ` · Контакт: ${s.contact.object_id}` : ""}\n\n${s.goal ? `${s.goal.label}\nЦель x=${s.goal.x} ±${s.goal.tolerance}\nРасстояние: ${s.goal.distance} · signed_error: ${s.goal.signed_error} · курс: ${s.goal.direction_to_goal}\nПроверка позы: ${s.goal.passed ? "ПРОЙДЕНА" : "НЕ ПРОЙДЕНА"}` : "Цель ещё не задана"}`;
+  $("observation").textContent = `Позиция: x=${s.position.x}, y=${s.position.y}\nСтоит: ${s.upright ? "да" : "нет"} · Опора: ${s.grounded ? "да" : "нет"}\nРевизия: ${s.revision} · Кадр: ${s.tick}\n\n${s.goal ? `${s.goal.label}\nЦель x=${s.goal.x} ±${s.goal.tolerance}\nРасстояние: ${s.goal.distance} · signed_error: ${s.goal.signed_error} · курс: ${s.goal.direction_to_goal}\nПроверка позы: ${s.goal.passed ? "ПРОЙДЕНА" : "НЕ ПРОЙДЕНА"}` : "Цель ещё не задана"}`;
   $("reflection").textContent = pretty(s.latest_reflection || s.last_action || {status:"Готов к первому эксперименту"});
   $("scene").textContent = pretty({physics:s.physics, controller:s.controller, objects:s.objects, behaviors:s.behaviors, goal:s.goal});
   $("history").textContent = pretty(data.history);
@@ -255,38 +261,84 @@ function draw(now) {
       else {ctx.fillStyle="#e6703a";ctx.beginPath();ctx.arc(o.x,o.y,6,0,Math.PI*2);ctx.fill();}
       if(o.label){ctx.font="12px monospace";ctx.fillStyle="#69715c";ctx.fillText(o.label,o.x,o.y-12);}
     }
-    const contact=sceneData.scene.contact;
-    if(contact){
-      ctx.save();ctx.strokeStyle="#e6703a";ctx.setLineDash([4,4]);
-      ctx.beginPath();ctx.moveTo(contact.x,Math.max(0,contact.y-24));ctx.lineTo(contact.x,contact.y+(contact.height||0)+24);ctx.stroke();ctx.setLineDash([]);
-      ctx.font="11px monospace";ctx.fillStyle="#e6703a";ctx.fillText("CONTACT",contact.x+8,Math.max(12,contact.y-28));
-      ctx.restore();
-    }
     const goal=sceneData.scene.goal;
     if(goal){ctx.fillStyle=goal.passed?"#73995322":"#e6703a18";ctx.fillRect(goal.x-goal.tolerance,75,goal.tolerance*2,465);ctx.strokeStyle="#e6703a";ctx.setLineDash([5,6]);ctx.beginPath();ctx.moveTo(goal.x,100);ctx.lineTo(goal.x,540);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle="#c16a3d";ctx.font="12px monospace";ctx.fillText(`TARGET x=${goal.x}`,Math.min(goal.x+12,850),90);}
   }
   if(displayed&&sceneData){
-    const n=displayed.nodes;ctx.lineWidth=5;ctx.lineCap="round";ctx.strokeStyle="#282d23";
-    for(const [a,b] of sceneData.links){ctx.beginPath();ctx.moveTo(...n[a]);ctx.lineTo(...n[b]);ctx.stroke();}
-    ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(...n.head,12,0,Math.PI*2);ctx.fill();ctx.stroke();
-    drawAvatarExpression(ctx,n.head,animation?"focused":sceneData.scene.avatar_state,now);
-    if(sceneData.scene.activity==="climbing"&&sceneData.scene.contact&&n.left_hand&&n.right_hand){
-      ctx.save();ctx.strokeStyle="#282d23";ctx.lineWidth=3;
-      for(const hand of [n.left_hand,n.right_hand]){ctx.beginPath();ctx.moveTo(...hand);ctx.lineTo(sceneData.scene.contact.x,hand[1]-8);ctx.stroke();}
-      ctx.restore();
+    const n=displayed.nodes;const skin=sceneData.appearance||{};
+    const tail=trailFrames.slice(-Math.round(skin.trail||0));
+    for(let i=0;i<tail.length;i++){
+      ctx.save();ctx.globalAlpha=(i+1)/tail.length*.12;ctx.strokeStyle=skin.accent||"#e6703a";ctx.lineWidth=skin.line_width||5;ctx.lineCap="round";
+      for(const [a,b] of sceneData.links){const t=tail[i].nodes;if(t[a]&&t[b]){ctx.beginPath();ctx.moveTo(...t[a]);ctx.lineTo(...t[b]);ctx.stroke();}}ctx.restore();
     }
-    ctx.fillStyle=sceneData.theme?.accent||"#e6703a";for(const [name,p] of Object.entries(n)){if(name==="head")continue;ctx.beginPath();ctx.arc(...p,3.5,0,Math.PI*2);ctx.fill();}
+    ctx.lineWidth=skin.line_width||5;ctx.lineCap="round";ctx.strokeStyle=skin.stroke||"#282d23";
+    for(const [a,b] of sceneData.links){ctx.beginPath();ctx.moveTo(...n[a]);ctx.lineTo(...n[b]);ctx.stroke();}
+    ctx.fillStyle=skin.fill||"#fff";ctx.beginPath();ctx.arc(...n.head,skin.head_radius||12,0,Math.PI*2);ctx.fill();ctx.stroke();
+    drawAvatarExpression(ctx,n.head,animation?"focused":sceneData.scene.avatar_state,now);
+    ctx.fillStyle=skin.accent||sceneData.theme?.accent||"#e6703a";for(const [name,p] of Object.entries(n)){if(name==="head")continue;ctx.beginPath();ctx.arc(...p,skin.joint_radius??3.5,0,Math.PI*2);ctx.fill();}
     ctx.font="11px monospace";ctx.fillStyle="#e6703a";ctx.fillText("SELF",n.head[0]+22,n.head[1]-8);
     $("clock").textContent=`t = ${(displayed.tick/60).toFixed(2)} s · 60 Hz`;
-    $("pose").textContent=animation?"Воспроизведение серверного действия":"Мир на паузе · ожидание действия";
+    const life=sceneData.life||{};
+    $("pose").textContent=sceneData.build?"Проверяю изменения · тело на паузе":life.running?"Живой мир · локальное исполнение":animation?"Воспроизведение серверного действия":"Мир на паузе";
+    if(life.intent){
+      const bx=Math.max(12,Math.min(770,n.head[0]+28)),by=Math.max(70,n.head[1]-36);
+      ctx.save();ctx.fillStyle="#ffffffee";ctx.fillRect(bx-8,by-18,220,30);ctx.font="12px system-ui";ctx.fillStyle="#536348";ctx.fillText(life.intent.slice(0,34),bx,by+1);ctx.restore();
+    }
   }
   if(typeof drawAuthored==="function")drawAuthored(ctx,now,sceneData,displayed,"foreground");
   if(typeof drawStudio==="function")drawStudio(ctx,now,sceneData,displayed);
   requestAnimationFrame(draw);
 }
+async function lifeAction(action,name) {
+  if(!sessionId)return;
+  const token=generation;
+  const payload={action};
+  if(action==="start")payload.iterations=Number($("life-iterations").value)||5;
+  if(name)payload.name=name;
+  await api(`game/sessions/${sessionId}/life`,"POST",payload);
+  if(token===generation)await refreshWorld(token);
+}
+function lifeRefresh(data){
+  const life=data.life||{}, policies=data.policies||[];
+  const working=!!life.thinking;
+  const blocked=!!data.scene.policy_error;
+  $("life-status").textContent=life.running?(blocked?"Контроллер требует исправления":working?`Развивается · итерация ${life.iteration}/${life.limit}`:life.iteration>=life.limit&&life.limit?`Занимается своим делом · попыток завершено: ${life.iteration}`:"Живёт · локальный контроллер"):"На паузе";
+  $("life-intent").textContent=data.scene.policy_error||life.error||life.intent||"Чистый скелет. Следующее занятие выберет агент.";
+  $("life-pause").disabled=!life.running;
+  $("life-play").disabled=!data.scene.active_policy||!!data.build||!!life.running;
+  $("improve-self").disabled=working||!!runId;
+  if(life.running)$("status").textContent=working?"● Развивается":"● Живёт";
+  const key=JSON.stringify([policies,data.scene.active_policy,!!data.build]);
+  if(key!==policyControlsKey){
+    policyControlsKey=key;$("policy-controls").replaceChildren();
+    for(const p of policies){
+      const button=document.createElement("button");button.type="button";button.textContent=`${p.name===data.scene.active_policy?"● ":"▷ "}${p.name}`;button.title=p.description||p.name;button.disabled=!!data.build;
+      button.onclick=()=>lifeAction("select",p.name).then(()=>lifeAction("play")).catch(error);$("policy-controls").append(button);
+    }
+    if(!policies.length)$("policy-controls").textContent="Здесь появятся программы, созданные агентом. Их можно запускать без обращения к модели.";
+  }
+  const versions=data.evolution||[];
+  const timelineKey=JSON.stringify(versions);
+  if($("evolution-history").dataset.key!==timelineKey){
+    $("evolution-history").dataset.key=timelineKey;$("evolution-history").replaceChildren();
+    for(const change of [...versions].reverse()){
+      const row=document.createElement("div");row.className="evolution-entry";
+      const title=document.createElement("strong");title.textContent=`v${change.version} · ${change.objective}`;row.append(title);
+      const a=change.trial?.baseline,b=change.trial?.candidate;
+      if(a&&b){const detail=document.createElement("span");detail.textContent=`Проверено ${b.frames||0} кадров · перемещение ${a.dx??"?"} → ${b.dx??"?"} · доля устойчивых поз ${a.upright_ratio??"?"} → ${b.upright_ratio??"?"}`;row.append(detail);}
+      $("evolution-history").append(row);
+    }
+  }
+  const background=life.run_id;
+  if(background&&!runId&&!seenLifeRuns.has(background)){
+    seenLifeRuns.add(background);runId=background;busy(true);message("assistant",`Самостоятельная итерация ${life.iteration}/${life.limit}`);stream(background,0,generation);
+  }
+}
+$("life-pause").onclick=()=>lifeAction("pause").catch(error);
+$("life-play").onclick=()=>lifeAction("play").catch(error);
 async function init() {
   await api("auth/session"); $("error").textContent=""; $("login").hidden=true; $("lab").hidden=false; $("logout").hidden=false;
   busy(false); const list=await sessions(); if(list.length) await selectSession(list[0].id,list[0].title);
 }
-setInterval(async()=>{if(polling||!sessionId||document.hidden)return;polling=true;try{await refreshWorld();}catch(exc){error(exc);}finally{polling=false;}},600);
+setInterval(async()=>{if(polling||!sessionId||document.hidden)return;polling=true;try{await refreshWorld();}catch(exc){error(exc);}finally{polling=false;}},160);
 requestAnimationFrame(draw); init().catch(error);

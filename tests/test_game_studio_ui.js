@@ -39,16 +39,15 @@ test("countdown waits for server activation before showing the updated-world bur
   assert.equal(ui.elements.get("release-overlay").hidden,true);
 });
 
-test("improve-self prioritizes growing physical skills over dashboard components",async()=>{
-  const ui=studioUi();let prompt="";
-  ui.context.send=(text)=>{prompt=text;return Promise.resolve();};
+test("development control starts the bounded living mechanism without prescribing an activity",async()=>{
+  const ui=studioUi();let action="";
+  ui.context.lifeAction=(value)=>{action=value;return Promise.resolve();};
   await ui.elements.get("improve-self").onclick();
-  assert.match(prompt,/физического персонажа/);
-  assert.match(prompt,/complexity_score/);
-  assert.match(prompt,/dashboard/);
-  assert.match(prompt,/bounded cycles/);
-  assert.match(prompt,/avatar_state/);
-  assert.match(prompt,/измеренный результат/);
+  assert.equal(action,"start");
+  const html=fs.readFileSync(new URL("../game/static/index.html",import.meta.url),"utf8");
+  assert.match(html,/id="life-pause"/);
+  assert.match(html,/id="life-iterations"/);
+  assert.doesNotMatch(html,/data-prompt=/);
 });
 
 test("draft widgets are visibly staged and reset on a session change",()=>{

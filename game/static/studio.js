@@ -112,7 +112,11 @@ function studioRelease(previous,data){
 }
 function drawWorldObject(ctx,o,tick,ghost=false){
   ctx.save();if(ghost){ctx.globalAlpha=.35;ctx.setLineDash([5,5]);}
-  if(o.kind==="block"){ctx.fillStyle="#d8decb";ctx.fillRect(o.x,o.y,o.width,o.height);ctx.strokeStyle="#a7b094";ctx.strokeRect(o.x,o.y,o.width,o.height);}
+  if(o.kind==="body"){
+    ctx.fillStyle=o.color||"#b7c5a4";ctx.strokeStyle="#52644b";ctx.lineWidth=1.5;
+    if(o.shape==="circle"){ctx.beginPath();ctx.arc(o.x,o.y,o.radius,0,Math.PI*2);ctx.fill();ctx.stroke();}
+    else{ctx.fillRect(o.x-o.width/2,o.y-o.height/2,o.width,o.height);ctx.strokeRect(o.x-o.width/2,o.y-o.height/2,o.width,o.height);}
+  }else if(o.kind==="block"){ctx.fillStyle="#d8decb";ctx.fillRect(o.x,o.y,o.width,o.height);ctx.strokeStyle="#a7b094";ctx.strokeRect(o.x,o.y,o.width,o.height);}
   else if(o.kind==="ladder"){
     ctx.strokeStyle="#b28b55";ctx.lineWidth=4;
     for(const side of [-1,1]){ctx.beginPath();ctx.moveTo(o.x+side*o.width/2,o.y);ctx.lineTo(o.x+side*o.width/2,o.y+o.height);ctx.stroke();}
@@ -152,7 +156,7 @@ function drawStudio(ctx,now,data,body){
     overlay.hidden=false;overlay.className="release-overlay activated";number.textContent="БАХ";label.textContent=`WORLD v${releaseFlash.version} · ОБНОВЛЕНО`;
   }else{overlay.hidden=true;}
 }
-$("improve-self").onclick=()=>send("Улучши себя как физического персонажа; не рисуй график, панель телеметрии или dashboard вместо изменения поведения. Сначала прочитай self-passport: свои versioned skill-программы, complexity_score и последний измеренный результат. Выбери одно телесное умение (например, pacing, dance, balance, climb или работа с механизмом) и создай/усложни сохранённый behavior так, чтобы его complexity_score стал выше прежнего лучшего за счёт полезного нового действия/перехода, без пустых шагов ради цифры. Используй game_build begin → edit с game_evolve behavior → test → inspect → commit. После публикации выполни game_act behavior с несколькими bounded cycles без MLL на каждый шаг; следи за signed_error/goal_progress и stop_on_goal. Покажи изменение телом и avatar_state: focused во время программы, satisfied при пройденной цели, uncertain при ухудшении, curious при рефлексии. Добавляй visual component только если он прямо помогает увидеть физическое движение/состояние персонажа. В конце сообщи версию программы и измеренный результат; не заявляй, что изменились веса или скрытое рассуждение.").catch(error);
+$("improve-self").onclick=()=>lifeAction("start").catch(error);
 $("show-skills").onclick=()=>send("Визуализируй свои реальные навыки вокруг себя: создай карточки skill с привязкой к доступным инструментам или сохранённым программам поведения. Проверь читаемость. Покажи разницу между доступным инструментом и проверенным навыком.").catch(error);
 if(typeof ResizeObserver!=="undefined")new ResizeObserver(()=>{if(sceneData)studioRefresh(sceneData);}).observe(canvas);
 if(sceneData)studioRefresh(sceneData);

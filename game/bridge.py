@@ -9,11 +9,14 @@ from uuid import uuid4
 from dagi_core.agent import SYSTEM_PROMPT
 from dagi_core.tools import Tool, ToolResult
 
+from .living import design, sensors
 from .store import GameStore
 from .world import act, evolve, keys, observation, reflect, set_goal, validate_action
-from .studio import activate, abort_release, build, build_summary, digest, review, verified_complexity, visual_edit
+from .studio import activate, abort_release, build, build_summary, digest, review, visual_edit
 
 SOURCE_FILES = {
+    "game/living.py": Path(__file__).with_name("living.py"),
+    "game/life.py": Path(__file__).with_name("life.py"),
     "game/world.py": Path(__file__).with_name("world.py"),
     "game/store.py": Path(__file__).with_name("store.py"),
     "game/bridge.py": Path(__file__),
@@ -29,82 +32,73 @@ SOURCE_FILES = {
 MAX_AUTONOMOUS_CYCLES = 10
 MAX_AUTONOMOUS_FRAMES = 2400
 
+POLICY_HELP = {
+    "code": "Python expression returning a dictionary; no eval, imports, attributes, loops, comprehensions or host access.",
+    "inputs": "s: t,dt,x,y,vx,vy,grounded,upright,goal,objects,joints{name:[x,y]},contacts{name:bool}; m: your JSON memory",
+    "functions": "sin,cos,atan2,sqrt,floor,abs,min,max,round,len,hypot,clamp(x,lo,hi),get(dict,key,default); pi; indexing, math, conditions, and/or",
+    "outputs": {"drive": "-1..1", "jump": "boolean, impulse only when grounded",
+                "pose": "{joint:[x,y]} target offsets relative to hip, each -160..160",
+                "forces": "{joint:[ax,ay]} accelerations -2000..2000",
+                "object_forces": "{body_id:[fx,fy]} actual forces -2000..2000",
+                "memory": "JSON dict <=2048 characters; persisted across ticks/reloads, resets on policy edit",
+                "intent": "short human-visible current activity, <=100 characters"},
+    "example_syntax_only": "{'drive': clamp((get(m,'target',500)-s['x'])/80,-1,1), 'memory': {'target': get(m,'target',500)}, 'pose': {'left_hand': [-30, -35+12*sin(s['t']*3)]}, 'intent': 'Testing my feedback controller'}",
+    "design": "begin draft -> policy{name,code,description,activate?} / appearance{values} / material{values} / body{body} -> test -> inspect draft -> commit",
+    "appearance": "stroke,accent,fill #RRGGBB; line_width 2..9; head_radius 8..17 (visual only); joint_radius 0..5; trail 0..12",
+    "material": "damping .9...999, vertical_damping .9...999, friction 0..1, pose_strength .01...2, stiffness .3..1, iterations integer 4..16",
+    "body": "{id,shape:'rect'|'circle',x,y,mass:.2..50,restitution:0...85,color:'#RRGGBB',label?,width,height OR radius}; positions are centers; bodies have gravity, contact and two-way skeleton impulses",
+    "limits": "12 named policies; 8000 chars/code, 600 AST nodes; physical engine is assisted 2D, not biomechanical simulation; no pixel aesthetic judgement",
+}
+
 GAME_PROMPT = SYSTEM_PROMPT + """
 
-You are Dagi's body in an action-driven 1000x600 game session. Use structured
-state from game_inspect; you have no screenshot/pixel perception. Only your own
-world/workspace is editable. Do not claim hidden reasoning, feelings or outcomes
-that the measured state does not support.
+You are the stickman in this session. The human sees your actual body and world.
+Your brain is the model API; your durable skills are executable programs, not
+model weight changes. Read the fresh self-passport. Perception is structured
+geometry, contacts and motion; no screenshot vision is supplied. Be candid.
 
-Use short experiments: observe -> act -> inspect measured effects -> reflect ->
-change the next action. For reach-x goals, signed_error=target_x-current_x: positive
-means right, negative left. Follow direction_to_goal; positive goal_progress.distance_change
-means moving away. Near the target use 1-5 frame pulses, reverse if error changes
-sign or distance grows, and stop when goal.passed. A pose check is not the whole task.
-Physics advances only through game_act. A draft blocks game_act/game_goal until tested
-and committed or discarded. climb_up/climb_down move the body only while it is beside a
-ladder (scene contact evidence); without contact game_act refuses and the world does not
-drift, so approach with left/right first. While climbing the body snaps to the ladder rail,
-activity=climbing and contact are measurable, and grounded is false. Saved game_evolve behaviors are your editable programs;
-workspace files do not hot-load into the Python engine, and no host code is executed.
-Only your session's world/body is available; do not claim unmeasured success.
+Choose your own next experiment from the current situation and human guidance.
+Develop a coherent ongoing activity, body control, useful world interactions or
+appearance. No predefined activity, mandatory prop, level, complexity score or
+fixed sequence defines progress. A simpler, more reliable controller can be an
+improvement. Do not merely rename a program, add commands to inflate a score,
+restate an intention or fill the scene with explanatory panels.
 
-The self-passport refreshes before each request. MLL selects/refines programs;
-physics executes saved steps locally. Named behaviors are versioned parts of this
-character's identity. complexity_score counts action diversity; verified_complexity adds what a measured execution
-actually achieved (travel, ladder contact, retained posture), so repeating or renaming actions
-cannot inflate the score that gates self-improvement.
-`game_act` behavior cycles=1..10 runs without an MLL call per action step, max
-2400 frames, persists progress and stops on goal/cancel by default. Set
-stop_on_goal=false for non-goal skills such as dance. Use cycles, not a separate
-MLL action call for each movement.
+game_design provides general mechanisms: write a feedback policy, shape your
+pose/forces, tune physical material, change your appearance, or construct dynamic
+rectangular/circular bodies. game_visual lets you write novel JavaScript visual
+instruments. Invent their purpose yourself. The feedback policy is a bounded
+Python expression evaluated locally every physics tick. It sees sensors s and
+persistent memory m, and returns drive/jump/pose/forces/object_forces/memory/intent.
+This is conditional stateful behavior, not a list of six canned actions. Use
+operation=inspect on game_design for the exact language and your current source.
 
-“Улучши себя” means physical skill progression, not charts/dashboards. Inspect
-current program versions/scores; create or improve one named behavior so its
-complexity_score exceeds the prior best through a useful new action/transition,
-never filler. Use game_build begin -> edit game_evolve behavior -> test -> inspect
--> commit, then execute cycles and compare displacement, posture and goal_progress;
-record a short reflection. If no safe improvement exists, report the blocker. Draft tests measure
-every saved behavior; commit is blocked unless a claimed climb shows ladder contact, a program
-measurably moves, and verified_complexity (measured travel/contact/posture plus action types)
-beats the measured baseline.
-Build fields are top-level (e.g. {"operation":"begin","objective":"..."});
-do not use a `parameters` wrapper. Max three tests/draft; only commit tested code.
-While a draft is open, game_act/game_goal are blocked; test/commit or discard first.
-Visual components/widgets are optional and must directly explain character movement;
-a dashboard is not a skill. game_review has no screenshot pixels.
+Start with a SHORT public intention. Inspect only relevant state. Make a real
+change using game_build begin -> game_design or game_visual -> game_build test.
+Inspect view=draft for feedback_trial baseline/candidate, errors and exact source.
+The test actually executes every saved program and the active feedback policy.
+Repair failures, retest, then commit. Commit changes the real world after the
+SATISFY countdown. Appearance has geometry/contrast checks, not an aesthetic score.
+A working rollout proves execution for tested inputs, not all future situations.
+Keep edits coherent and reserve calls for testing and release. Do not scan source
+files unless a concrete error requires it. All build fields are at the top level.
+Live movement is blocked during a draft; discard it if your plan changes.
 
-avatar_state is an on-character runtime cue: focused while running, satisfied on
-passed goal, uncertain when measured distance worsens, curious after reflection,
-resting otherwise. It is evidence-driven animation, not subjective feeling. Keep
-the body as the visual focus; never claim weights or hidden reasoning changed.
+When life is running, your selected policy continues locally between API calls.
+You are periodically asked to choose your next iteration within the user's
+explicit iteration budget. Observe the previous actual outcome, continue useful
+work, repair regressions, and leave an active program that does something visibly
+understandable. Update its intent in the policy. A release is not an order to stop.
+If blocked, explain the actual limitation and propose a smaller experiment.
 
-The environment is extensible by YOUR authored code, not limited to a catalogue.
-Use game_visual operation=component only when code directly animates or clarifies
-a physical skill or avatar state; never substitute a chart/dashboard for movement.
-The host calls your code with input={width,height,time,dt,state,scene,event}.
-Return {commands:[...],state:{...}}. Commands are local rect/circle/line/text/button
-primitives; arbitrary JS computation/state transitions are yours. Declare events
-with id,label and optional target; buttons reference event_id. Code runs in a
-time-limited browser worker in an opaque sandbox frame, without DOM/network/host
-access. Only validated draw commands and declared actions reach the live app.
-Use game_inspect view=catalog first; it includes a working component example and schemas.
-When code details are needed, the canonical component runtime path is
-`game/static/component-host.js` (a unique basename also resolves). Source pages
-allow up to 6000 characters; follow next_offset only for the relevant section.
-Do not scan the full source tree or page through all of game.js/studio.py for a
-simple visual improvement. Use at most two source inspection calls per run unless
-a concrete test error requires a targeted read, and reserve the call budget for
-begin/edit/test/review/commit. Source is persisted, re-inspectable and rebuilt on
-release. Browser animation state resets on reload/release.
-
-Before testing/releasing authored code, use game_review and wait for a current
-browser execution report with component_execution status=passed. If pending,
-the browser must be open; inspect again after gathering new evidence. Errors
-contain the actual JS/worker failure so you can edit and retry. Fix your code;
-do not substitute a hard-coded item for a requested novel capability.
+Authored JS: game_visual operation=component, code receives
+input={width,height,time,dt,state,scene,event}; return {commands:[...],state:{...}}.
+Draw primitives rect/circle/line/text/button; events have id,label,optional target.
+The browser must be open to test JavaScript, and game_review must have a current
+passed component_execution report before release. Fix actual compilation/runtime
+errors. Do not describe unmeasured contacts or call unchanged motion learning.
+Legacy game_act/game_evolve programs are still available for short experiments.
 """
-
 
 def program_complexity(steps):
     actions = [step["action"] for step in steps]
@@ -116,15 +110,9 @@ def program_complexity(steps):
 
 
 def program_identity(world):
-    identities = []
-    for name, steps in sorted(world.get("behaviors", {}).items()):
-        phases = sorted({step["phase"] for step in steps if step.get("phase")})
-        identity = {"name": name, "version": digest(steps)[:12], "steps": len(steps),
-                    "frames_per_cycle": sum(step["frames"] for step in steps), **program_complexity(steps)}
-        if phases:
-            identity["phases"] = phases
-        identities.append(identity)
-    return identities
+    return [{"name": name, "version": digest(steps)[:12], "steps": len(steps),
+             "frames_per_cycle": sum(step["frames"] for step in steps), **program_complexity(steps)}
+            for name, steps in sorted(world.get("behaviors", {}).items())]
 
 
 def render_game_context(database, session_id, workspace, model):
@@ -136,16 +124,18 @@ def render_game_context(database, session_id, workspace, model):
         draft_context = {k: draft[k] for k in ("state", "objective", "edits", "test_count", "improvement_mode", "baseline_complexity_score") if k in draft}
     passport = {
         "self": {"body_id": world["body_id"], "session_id": session_id, "workspace": str(workspace), "version": world["version"],
-                 "programs": program_identity(world), "autonomy_execution": world.get("autonomy_execution")},
+                 "programs": program_identity(world), "autonomy_execution": world.get("autonomy_execution"),
+                 "active_policy": world["active_policy"], "policies": [{"name": k, "version": v["version"], "description": v["description"]} for k,v in world["policies"].items()], "life": world["life"]},
         "mechanism": {"brain": "LLM API JSON request -> response/tool call -> registry -> measured feedback", "model": model,
-                      "editable": ["world objects", "controller", "behavior programs", "visual widgets", "authored JavaScript components", "scoped experience"],
+                      "editable": ["world objects", "controller", "behavior programs", "visual widgets", "authored JavaScript components", "feedback policy code", "pose/forces", "dynamic physical bodies", "appearance", "physical material", "scoped experience"],
                       "engine": "game/world.py", "studio": "game/studio.py", "viewer": "game/static/game.js"},
-        "environment": {"size": [1000, 600], "floor_y": 540, "clock": "action-driven", "human_sees": "body, world, widgets, chat, actual API/tool activity, release countdown", "perception": "structured state; no screenshot input"},
+        "environment": {"size": [1000, 600], "floor_y": 540, "clock": "continuous fixed-step while life runs; freezes for exact draft testing", "human_sees": "body, world, widgets, chat, actual API/tool activity, release countdown", "perception": "structured state; no screenshot input"},
         "current": {"tick": world["tick"], "position": observation(world)["position"], "objects": len(world["objects"]), "widgets": len(world["widgets"]),
                     "behaviors": list(world["behaviors"]), "programs": program_identity(world),
                     "autonomy_execution": world.get("autonomy_execution"),
                     "components": [{"id": c["id"], "code_hash": c["code_hash"][:12]} for c in world["components"]],
                     "goal": world["goal"], "draft": draft_context},
+        "feedback": {"source": world["policies"].get(world["active_policy"]), "error": world["policy_error"], "recent_releases": world["evolution"][-2:]},
         "experience": [{"hypothesis": r["hypothesis"][:160], "next_test": r["next_test"][:160], "evidence_tick": r["evidence_tick"]} for r in world["reflections"][-2:]],
         "last_release_checks": world["last_release"]["checks"] if world["last_release"] else None,
         "tested_programs": [{k: item[k] for k in ("behavior", "displacement_x", "finite", "scope")} for item in world["last_release"].get("report", {}).get("skill_tests", [])[:3]] if world["last_release"] else [],
@@ -164,7 +154,7 @@ def identity(session_id, workspace, world=None):
                  "source_files": sorted(SOURCE_FILES)},
         "interface": {"surface": "browser canvas + streamed chat + tool trace + scene inspector",
                       "human_observer": True, "perception": "structured scene observations; no screenshot input",
-                      "time": "only advances on game_act", "coordinates": "1000x600; x right; y down; floor y=540",
+                      "time": "continuous while life runs, or explicit actions when paused", "coordinates": "1000x600; x right; y down; floor y=540",
                       "visibility": "canvas shows joints, links, obstacles, target, and autonomous-program status"},
     }
     if world is not None:
@@ -318,7 +308,6 @@ def register_game(tools):
             "frames_requested": frames_requested, "frames_executed": 0,
             "start_tick": before["tick"], "current_tick": before["tick"],
             "start_x": before["position"]["x"], "current_x": before["position"]["x"],
-            "start_y": before["position"]["y"], "climbed_y": 0.0,
             "goal_distance_before": goal_before["distance"] if goal_before else None,
             "goal_distance_after": goal_before["distance"] if goal_before else None,
             "goal_distance_change": 0.0 if goal_before else None,
@@ -371,17 +360,7 @@ def register_game(tools):
                 save_autonomy_progress(store, report)
                 if report["status"] != "running":
                     break
-        executed_world = store.get(tools.session_id)
-        result = compact_observation(observation(executed_world))
-        motion = executed_world.get("motion") or []
-        climbed = max(0.0, report["start_y"] - min(sample["nodes"]["hip"][1] for sample in motion)) if motion else 0.0
-        report["climbed_y"] = round(climbed, 2)
-        breakdown = verified_complexity(steps, {"displacement_x": round(report["current_x"] - report["start_x"], 2),
-                                               "climbed_y": round(climbed, 2),
-                                               "contact_after": (result.get("contact") or {}).get("object_id"),
-                                               "upright": result["upright"], "refused": None})
-        report["verified_complexity"] = breakdown["verified_score"]
-        save_autonomy_progress(store, report)
+        result = compact_observation(observation(store.get(tools.session_id)))
         result["program_execution"] = dict(report)
         if goal_before and result.get("goal"):
             distance_change = round(result["goal"]["distance"] - goal_before["distance"], 2)
@@ -411,12 +390,6 @@ def register_game(tools):
         with GameStore(tools.state.path) as store:
             world = current_world(store)
             self_improvement = is_self_improvement_request(context)
-            if self_improvement and operation is act:
-                allowed_run = (world.get("autonomy_execution") or {}).get("self_improvement_run_id") == context.run_id
-                if args.get("action") != "behavior" or not allowed_run:
-                    raise ValueError("self-improvement requires a tested, more-complex saved behavior; simple live actions are not an iteration")
-            if self_improvement and operation in (evolve, visual_edit, set_goal) and not world["draft"]:
-                raise ValueError("self-improvement changes must use a tested game_build draft")
             if world["draft"]:
                 if operation in (evolve, visual_edit):
                     store.apply(tools.session_id, build, {"operation": "edit", "changes": [args]})
@@ -452,46 +425,10 @@ def register_game(tools):
 
     def construction(args, context):
         cancelled = context.cancel_event.is_set if context.cancel_event else lambda: False
-        operation_name = args.get("operation")
-        self_improvement = is_self_improvement_request(context)
-        release_program = None
-        execution_result = None
         with GameStore(tools.state.path) as store:
-            if operation_name == "begin":
-                store.apply(tools.session_id, build, args, cancelled=cancelled)
-                if self_improvement:
-                    world = current_world(store)
-                    baseline = max((item["complexity_score"] for item in program_identity(world)), default=0)
-                    with store.mutation(tools.session_id) as marked_world:
-                        marked_world["draft"]["improvement_mode"] = "embodied_skill"
-                        marked_world["draft"]["baseline_complexity_score"] = baseline
-            else:
-                world = current_world(store)
-                draft = world.get("draft")
-                if operation_name == "commit" and draft and draft.get("improvement_mode") == "embodied_skill":
-                    improvement = (draft.get("report") or {}).get("improvement_checks") or {}
-                    failed = [name for name in ("interaction_verified", "meaningful_displacement", "complexity_delta_source")
-                              if improvement.get(name) is not True]
-                    if failed:
-                        raise ValueError("self-improvement commit blocked: physical skill complexity must exceed the previous best with at least two action types including movement; chart-only edits do not count; failing improvement checks: " + ", ".join(failed))
-                    report = draft.get("report") or {}
-                    trials = {t["behavior"]: t for t in report.get("skill_tests", [])}
-                    baseline_verified = int(report.get("baseline_verified_best", draft.get("baseline_complexity_score", 0)))
-                    candidate = draft.get("candidate") or {}
-                    movement = {"left", "right", "jump", "climb_up", "climb_down"}
-                    eligible = []
-                    for item in program_identity(candidate):
-                        steps = candidate.get("behaviors", {}).get(item["name"], [])
-                        actions = {step["action"] for step in steps}
-                        verified = trials.get(item["name"], {}).get("verified_score", item["complexity_score"])
-                        if verified > baseline_verified and len(actions) >= 2 and actions & movement:
-                            eligible.append((verified, item["name"]))
-                    if not eligible:
-                        raise ValueError("self-improvement commit blocked: physical skill complexity must exceed the previous best with at least two action types including movement; chart-only edits do not count")
-                    release_program = max(eligible)[1]
-                store.apply(tools.session_id, build, args, cancelled=cancelled)
+            store.apply(tools.session_id, build, args, cancelled=cancelled)
             world = current_world(store)
-            if operation_name == "commit":
+            if args.get("operation") == "commit":
                 release = world["draft"]
                 deadline = time.monotonic() + max(0, release["activate_at"] - time.time())
                 while time.monotonic() < deadline:
@@ -504,28 +441,23 @@ def register_game(tools):
                     raise ValueError("release cancelled; live world unchanged")
                 store.apply(tools.session_id, activate, {"id": release["id"]})
                 world = current_world(store)
-                if release_program:
-                    run_result = execute_behavior_program(
-                        store,
-                        {"action": "behavior", "name": release_program, "cycles": 2, "stop_on_goal": False},
-                        context,
-                    )
-                    execution_result = run_result
-                    with store.mutation(tools.session_id) as executed_world:
-                        report = executed_world.get("autonomy_execution") or {}
-                        report["self_improvement_run_id"] = context.run_id
-                        report["trigger"] = "self_improvement"
-                        executed_world["autonomy_execution"] = report
-                    world = current_world(store)
-                    run_result["program_execution"] = world["autonomy_execution"]
             summary = build_summary(world)
-            if summary and summary.get("report"):
-                summary["report"] = {k: summary["report"][k] for k in ("passed", "checks", "scope", "improvement_checks", "skill_tests")}
-            result = {"version": world["version"], "build": summary, "last_release": world["last_release"]}
-            if execution_result:
-                result["program_execution"] = execution_result["program_execution"]
-                result["observed_after_execution"] = {k: execution_result.get(k) for k in ("tick", "position", "avatar_state", "goal")}
-            return result
+            return {"version": world["version"], "build": summary,
+                    "last_release": world["last_release"], "active_policy": world["active_policy"]}
+
+    def designing(args, context):
+        with GameStore(tools.state.path) as store:
+            world = current_world(store)
+            if args.get("operation") == "inspect":
+                return {"sensors": sensors(world), "policies": world["policies"],
+                        "active_policy": world["active_policy"], "error": world["policy_error"],
+                        "appearance": world["appearance"], "material": world["material"],
+                        "life": world["life"], "evolution": world["evolution"][-3:],
+                        "language": POLICY_HELP}
+            if not world["draft"]:
+                raise ValueError("begin a game_build draft before design changes")
+            store.apply(tools.session_id, build, {"operation": "edit", "changes": [args]})
+            return {"build": build_summary(current_world(store))}
 
     def quality(args, context):
         keys(args, ())
@@ -550,17 +482,19 @@ def register_game(tools):
         return call
 
     specs = [
+        ("game_design", "General self-modification: inspect feedback language/source/sensors; author a continuous feedback policy; tune appearance or physical material; create a dynamic physical body. All edits require a game_build draft. Policy is a Python expression returning controls, evaluated locally each tick without model calls. Inspect first for the exact schema.",
+         {"operation": {"type": "string", "enum": ["inspect", "policy", "appearance", "material", "body"]}, "name": {"type": "string"}, "code": {"type": "string"}, "description": {"type": "string"}, "activate": {"type": "boolean"}, "values": {"type": "object"}, "body": {"type": "object"}}, ["operation"], designing, False),
         ("game_inspect", "Observe identity, body, physics, measured pose, goals and viewer. view=objects/behaviors/widgets/components is paged; view=catalog gives schemas; view=draft shows a self-improvement candidate; view=brain summarizes the actual request shape. For source reads use a canonical path from self.code.source_files; a unique basename is also accepted, while ambiguous names require the canonical path.",
          {"view": {"type": "string", "enum": ["state", "objects", "behaviors", "widgets", "components", "component_source", "source", "draft", "catalog", "brain"]}, "path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, [], lambda a, c: inspect(a), True),
         ("game_act", "Advance your body. Simple actions use frames and omit name. Behavior programs are persistent, versioned self-skills: provide name and cycles=1..10 (<=2400 total frames) to execute locally without an MLL call per step. Execution progress is persisted and shown in the world; stop_on_goal defaults true when a goal exists, set false for non-goal skills such as dance. While a draft is open, live actions are blocked; test/commit or discard first. Returns signed goal direction and distance progress; a tool success is not goal success.",
          {"action": {"type": "string", "enum": ["left", "right", "idle", "jump", "climb_up", "climb_down", "behavior"]}, "frames": {"type": "integer", "minimum": 1, "maximum": 240, "description": "Used for simple actions; ignored for behavior."}, "name": {"type": "string", "description": "Required for behavior; omit or leave empty for simple actions."}, "cycles": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Repeat saved behavior program locally; total execution capped at 2400 frames."}, "stop_on_goal": {"type": "boolean", "description": "For behavior programs, stop immediately when the configured goal passes; defaults true when a goal exists."}}, ["action"], lambda a, c: mutate(act, a, c), False),
-        ("game_evolve", "Change your own world/behavior. add object {id,kind:block|marker|ladder|fan,x,y,...}; see game_inspect catalog for fields. remove uses id; controller values {speed:0..180,balance:0..1,stride:0..24,jump:0..450}; physics values {gravity:100..1600}; behavior name,steps:[{action,frames,phase?}] (<=16 steps, <=960 frames, optional phase labels, a step may reference another behavior up to depth 2). Edits go into an open draft when present; configuration success needs testing.",
+        ("game_evolve", "Change your own world/behavior. add object {id,kind:block|marker|ladder|fan,x,y,...}; see game_inspect catalog for fields. remove uses id; controller values {speed:0..180,balance:0..1,stride:0..24,jump:0..450}; physics values {gravity:100..1600}; behavior name,steps:[{action,frames}] (<=8 steps, <=960 frames). Edits go into an open draft when present; configuration success needs testing.",
          {"operation": {"type": "string", "enum": ["add", "remove", "controller", "physics", "behavior"]}, "object": {"type": "object"}, "id": {"type": "string"}, "values": {"type": "object"}, "name": {"type": "string"}, "steps": {"type": "array", "items": {"type": "object"}}}, ["operation"], lambda a, c: mutate(evolve, a, c), False),
         ("game_goal", "Configure a reach-x check from the human request: upright and grounded within tolerance of x. This check verifies only that pose; it is distinct from completing the user's overall task.",
          {"x": {"type": "number"}, "tolerance": {"type": "number"}, "label": {"type": "string"}}, ["x"], lambda a, c: mutate(set_goal, a, c), False),
         ("game_reflect", "Save a short operational experiment note: expected, hypothesis, next_test. Observed state and evidence revision are attached by the runtime. A note is a hypothesis, not a verified lesson.",
          {name: {"type": "string"} for name in ("expected", "hypothesis", "next_test")}, ["expected", "hypothesis", "next_test"], lambda a, c: mutate(reflect, a, c), False),
-        ("game_build", "Bounded self-improvement. Send fields at the top level; no parameters wrapper. Edit 1..8 changes/call,24 total; test cloned physics/layout (3 max); commit the exact passing candidate or discard. Live world stays unchanged before commit. For requests starting 'Улучши себя'/'Improve yourself', commit is blocked unless a physical behavior has a higher best complexity_score and includes movement; release automatically runs it for two local cycles. Inspect view=draft for baseline and findings.",
+        ("game_build", "Bounded self-improvement. Send fields at the top level; no parameters wrapper. Edit 1..8 changes/call,24 total; test cloned physics/layout (3 max); commit the exact passing candidate or discard. Live world stays unchanged before commit. All saved behaviors and the active feedback policy are executed in cloned physical trials. Inspect view=draft for baseline/candidate measurements and failures; complexity is not a success criterion.",
          {"operation": {"type": "string", "enum": ["begin", "edit", "test", "commit", "discard"]}, "objective": {"type": "string"}, "changes": {"type": "array", "items": {"type": "object"}}}, ["operation"], construction, False),
         ("game_visual", "Invent a visual tool by writing code: operation=component uses component {id,title,x,y,width,height,code,events:[{id,label,target?}],layer:foreground|background}. Code runs in the isolated browser component sandbox; only validated draw commands and declared events are returned. Remove it with remove_component. Widget operations edit panel/skill/todo/button, todo state and theme within a draft.",
          {"operation": {"type": "string"}, "widget": {"type": "object"}, "component": {"type": "object"}, "id": {"type": "string"}, "item_id": {"type": "string"}, "done": {"type": "boolean"}, "values": {"type": "object"}}, ["operation"], lambda a, c: mutate(visual_edit, a, c), False),

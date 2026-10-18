@@ -60,6 +60,16 @@ This is the single repository-level status map for the sandbox roadmap and cross
 - World-12 loop/goal reliability: [#47 closed](https://github.com/martinroot/dagi/issues/47), code `1f1f268`; configured provider budget now sets a compatible tool-round ceiling and goal feedback carries signed direction/progress. Its original read-only diagnosis was preserved; a later operator-authorized test-session reset is recorded under #48.
 - Embodied self-improvement and session audit export: [#48 open](https://github.com/martinroot/dagi/issues/48), code `cf993cb` (deployed with docs commit `cdabb01`); guarded physical-skill progression, two local execution cycles, replayable motion/avatar cues, and authenticated session JSON export are live. All 18 test sessions were reset on the operator's request; post-reset DB integrity, counts, auth gate, and public assets were verified. The protected rollback backup still holds pre-reset data; no live model-driven smoke has been run.
 
+## Living agent mechanism integration (2026-10-18)
+
+Source: operator archive `dagi-living-agent-20261018.zip` (snapshot `bd28753`, branch `feat/living-agent`, base `ac12ca4`), plus `dagi-living-agent.patch` and Chromium verification screenshots taken with a fixed scripted provider (not a live LLM).
+
+Merge conflict check (`git apply --3way` against `b5486b3`): textual conflicts in `game/bridge.py`, `game/static/game.js`, `game/studio.py`; clean three-way in `game/world.py`, `tests/test_game*.py*`, `dagi_core/web.py`, `game/static/index.html`, `game/static/studio.js`, `game/README.md`. All seven files touched by the earlier #49–#53 slices also appear in the incoming patch, so the living-agent version (a designed replacement of the game progression subsystem, validated by its author at 244 Python + 35 JS tests) was taken wholesale for every patch-touched path; this task map's own sections are preserved.
+
+Consequences recorded for rollback: the incoming design deliberately removes the complexity-score release gate and the prescribed physical curriculum in favour of agent-authored `game_design` feedback policies, a bounded 1–20 iteration model scheduler with operator call/budget limits, dynamic bodies with contacts, and measured release diagnostics (travel, pose/support ratios, bone-length error, jitter, foot slip). The #49 contact-refusal, #50 improvement checks and #53 verified score are superseded by this mechanism and are not carried into the merged tree; the engine's contact/support detection replaces the score-gaming vector.
+
+Gate on the merged tree: 244 pytest passed, 35 Node UI passed, wheel/sdist build and syntax/diff checks passed. Session #19 (operator test session) preserved through deployment rehearsal.
+
 ## Session #19 review: embodied interaction quality (user score 1/10)
 
 Review of the persisted "Чистый мир #19" log found three root causes: climbing was a scripted y-nudge with no body↔object contact; the complexity score grew from action-name counting while behavior did not change; and the UI could not show contact, climb or activity. Fixed as five issue-linked, independently revertable slices, each RED/GREEN with focused tests, pushed to `main`:

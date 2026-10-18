@@ -34,6 +34,7 @@ from .workspace import resolve_session_workspace
 from .goals import validate_checks, verify
 from .worker import load_workers
 from game.bridge import GAME_PROMPT, identity as game_identity, register_game, render_game_context
+from game.life import LifeRuntime
 from game.store import GameStore
 from game.world import PAIRS, frame as game_frame, observation as game_observation
 from game.studio import browser_report, build_summary, human_prompt, digest as game_digest, snapshot as game_snapshot
@@ -270,6 +271,7 @@ class WebApp:
         self._session_secret = secrets.token_bytes(32)
         self._revoked_sessions: dict[str, int] = {}
         self._failed_logins: dict[str, tuple[int, float]] = {}
+        self.life = LifeRuntime(self)
         self.workers = load_workers(os.environ.get("DAGI_WORKERS", "{}"))
 
     def _cookie_token(self, headers: Any) -> str | None:
@@ -342,6 +344,7 @@ class WebApp:
                     pass
 
     def close(self) -> None:
+        self.life.close()
         with self._lock:
             controls = list({id(item): item for item in [*self._runs.values(), *self._goals.values()]}.values())
         for control in controls:
@@ -365,6 +368,7 @@ class WebApp:
                 state.recover_goals()
             with GameStore(self.config.database) as game:
                 game.recover_releases()
+            self.life.recover()
         except BaseException:
             lease.close()
             self._lease = None
@@ -483,6 +487,7 @@ class WebApp:
                             "scene": game_observation(world), "frame": game_frame(world),
                             "links": PAIRS, "motion": world["motion"], "history": world["history"],
                             "reflections": world["reflections"], "widgets": world["widgets"], "components": world["components"], "theme": world["theme"],
+                            "life": world["life"], "policies": [{"name": k, "version": v["version"], "description": v["description"]} for k,v in world["policies"].items()], "appearance": world["appearance"], "evolution": world["evolution"],
                             "build": build_summary(world), "preview": {k: world["draft"]["candidate"][k] for k in ("widgets", "objects", "components")} if world["draft"] else None,
                             "last_release": world["last_release"], "activity": activity, "server_time": time.time(),
                             "render_key": game_digest(world["draft"]["candidate"] if world["draft"] else game_snapshot(world))})
@@ -589,6 +594,8 @@ class WebApp:
                         with GameStore(app.config.database) as game:
                             game.create(session_id)
                         self._send_json(201, {"session_id": session_id})
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/life", parsed.path):
+                        self._send_json(200, app.life.control(int(match.group(1)), body))
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)/interact", parsed.path):
                         session_id = int(match.group(1))
                         with GameStore(app.config.database) as game:
@@ -744,33 +751,7 @@ class WebApp:
                     state.close()
 
             def _start_run(self, session_id: int, body: dict[str, Any]) -> None:
-                message = body.get("message")
-                if not isinstance(message, str) or not message.strip():
-                    raise ValueError("message must be non-empty text")
-                with _StateContext(self._state()) as state:
-                    if state.get_session(session_id) is None:
-                        self._send_json(404, {"error": "session not found"})
-                        return
-                    run_id = state.create_run(
-                        session_id,
-                        agent_id=app.agent_id,
-                        agent_name=app.config.model,
-                    )
-                control = _RunControl(session_id)
-                with app._lock:
-                    if any(item.session_id == session_id for item in [*app._runs.values(), *app._goals.values()]):
-                        with _StateContext(self._state()) as state:
-                            state.finish_run(run_id, "error", "another run is already active in this session")
-                        self._send_json(409, {"error": "a run is already active for this session"})
-                        return
-                    app._runs[run_id] = control
-                    control.thread = Thread(
-                        target=app._execute_run,
-                        args=(run_id, session_id, message, control),
-                        daemon=True,
-                    )
-                    control.thread.start()
-                self._send_json(202, {"run_id": run_id, "session_id": session_id, "status": "running"})
+                self._send_json(202, app.start_run(session_id, body.get("message")))
 
             def _cancel_run(self, run_id: str) -> None:
                 with app._lock:
@@ -800,6 +781,22 @@ class WebApp:
         except BaseException:
             app.close()
             raise
+
+    def start_run(self, session_id: int, message: str) -> dict[str, Any]:
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError("message must be non-empty text")
+        with self._lock:
+            if self._session_busy(session_id):
+                raise RuntimeError("a run is already active for this session")
+            with _StateContext(StateStore(self.config.database)) as state:
+                if state.get_session(session_id) is None:
+                    raise ValueError("session not found")
+                run_id = state.create_run(session_id, agent_id=self.agent_id, agent_name=self.config.model)
+            control = _RunControl(session_id)
+            self._runs[run_id] = control
+            control.thread = Thread(target=self._execute_run, args=(run_id, session_id, message, control), daemon=True)
+            control.thread.start()
+        return {"run_id": run_id, "session_id": session_id, "status": "running"}
 
     def _session_busy(self, session_id: int) -> bool:
         return any(

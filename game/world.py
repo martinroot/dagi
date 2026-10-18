@@ -8,6 +8,8 @@ from __future__ import annotations
 import copy
 import math
 
+from .living import upgrade as living_upgrade, collide_body, integrate_objects, body_extent
+
 DT = 1 / 60
 FLOOR = 540
 WIDTH = 1000
@@ -46,25 +48,24 @@ def keys(args, allowed):
 
 
 def fresh_world(session_id):
-    return {
+    return living_upgrade({
         "schema_version": 2, "session_id": session_id, "body_id": f"stickman:{session_id}",
         "revision": 0, "tick": 0, "gravity": 900,
         "nodes": {name: {"x": 180.0 + x, "y": 450.0 + y, "px": 180.0 + x, "py": 450.0 + y} for name, (x, y) in OFFSETS.items()},
         "controller": {"speed": 95, "balance": 0.85, "stride": 12, "jump": 310},
-        "objects": [], "behaviors": {}, "goal": None, "reflections": [], "history": [], "motion": [], "activity": "idle",
+        "objects": [], "behaviors": {}, "goal": None, "reflections": [], "history": [], "motion": [],
         "widgets": [], "components": [], "theme": {"background": "#ffffff", "accent": "#e6703a"},
         "version": 0, "draft": None, "last_release": None, "previous": None, "browser_report": None,
-    }
+    })
 
 
 def upgrade(world):
     """Additive migration of v1 saved worlds; reading never resets a learned body."""
     for name, value in {"widgets": [], "components": [], "theme": {"background": "#ffffff", "accent": "#e6703a"},
-                        "version": 0, "draft": None, "last_release": None, "previous": None, "browser_report": None,
-                        "activity": "idle"}.items():
+                        "version": 0, "draft": None, "last_release": None, "previous": None, "browser_report": None}.items():
         world.setdefault(name, copy.deepcopy(value))
     world["schema_version"] = 2
-    return world
+    return living_upgrade(world)
 
 
 def frame(world):
@@ -72,6 +73,13 @@ def frame(world):
 
 
 def avatar_state(world):
+    life = world.get("life", {})
+    if world.get("policy_error"):
+        return "uncertain"
+    if life.get("thinking"):
+        return "curious"
+    if life.get("running") and world.get("active_policy"):
+        return "focused"
     if world.get("history") and world["history"][-1].get("kind") == "reflection":
         return "curious"
     execution = world.get("autonomy_execution") or {}
@@ -108,8 +116,6 @@ def observation(world):
         "avatar_state": avatar_state(world),
         "tick": world["tick"], "seconds": round(world["tick"] * DT, 2),
         "position": {"x": round(hip["x"], 2), "y": round(hip["y"], 2)},
-        "activity": world.get("activity", "idle"),
-        "contact": _contact_view(world),
         "upright": upright, "grounded": grounded,
         "physics": {"gravity": world["gravity"], "step_hz": 60, "floor_y": FLOOR, "width": WIDTH,
                     "clock": "action-driven", "solver": "Verlet + distance constraints + circle/AABB contacts; assisted posture motor"},
@@ -119,40 +125,37 @@ def observation(world):
         "latest_reflection": copy.deepcopy(world["reflections"][-1]) if world["reflections"] else None,
         "autonomy_execution": copy.deepcopy(world.get("autonomy_execution")),
         "version": world.get("version", 0), "widget_count": len(world.get("widgets", [])),
+        "life": copy.deepcopy(world.get("life", {})),
+        "active_policy": world.get("active_policy"), "policy_error": world.get("policy_error"),
+        "appearance": copy.deepcopy(world.get("appearance", {})),
     }
-
-
-def _ladder_contact(world):
-    """Nearest climbable ladder the body is beside; proximity evidence, not proof of grip."""
-    hip = world["nodes"]["hip"]
-    for obj in world["objects"]:
-        if obj["kind"] != "ladder":
-            continue
-        if abs(hip["x"] - obj["x"]) <= obj["width"] / 2 + 24 and obj["y"] - 20 <= hip["y"] <= obj["y"] + obj["height"] + 20:
-            return obj
-    return None
-
-
-def _contact_view(world):
-    contact = _ladder_contact(world)
-    if contact is None:
-        return None
-    return {"object_id": contact["id"], "kind": contact["kind"], "x": contact["x"], "y": contact["y"],
-            "height": contact["height"], "scope": "body is beside a climbable ladder; proximity evidence only, not proof of a grip"}
 
 
 def _on_surface(world, p, tolerance):
     radius = 4
     if abs(p["y"] + radius - FLOOR) <= tolerance:
         return True
-    return any(o["kind"] == "block" and o["x"] - radius <= p["x"] <= o["x"] + o["width"] + radius
-               and abs(p["y"] + radius - o["y"]) <= tolerance for o in world["objects"])
+    return any(height is not None and abs(p["y"] + radius - height) <= tolerance
+               for height in (_surface_height(o, p["x"], radius) for o in world["objects"]))
+
+
+def _surface_height(obj, x, margin=0):
+    if obj["kind"] == "block" and obj["x"] - margin <= x <= obj["x"] + obj["width"] + margin:
+        return obj["y"]
+    if obj["kind"] == "body":
+        rx, ry = body_extent(obj)
+        dx = x - obj["x"]
+        if abs(dx) <= rx + margin:
+            return obj["y"] - (math.sqrt(max(0, rx * rx - dx * dx)) if obj["shape"] == "circle" else ry)
+    return None
 
 
 def _collide(world, p, radius):
     p["x"] = max(radius, min(WIDTH - radius, p["x"]))
     p["y"] = max(radius, min(FLOOR - radius, p["y"]))
     for o in world["objects"]:
+        if o["kind"] == "body":
+            collide_body(o, p, radius)
         if o["kind"] != "block":
             continue
         # Expanded AABB contact for circular joints; no rigid-segment collision.
@@ -165,19 +168,24 @@ def _collide(world, p, radius):
             p[axis] = value
 
 
-def _step(world, direction, climbing=0):
+def _step(world, direction, climbing=0, control=None):
+    control = control or {}
+    material = world["material"]
+    integrate_objects(world, control.get("object_forces", {}))
     nodes, motor = world["nodes"], world["controller"]
     grounded = any(_on_surface(world, nodes[n], 9) for n in ("left_foot", "right_foot"))
     hip = nodes["hip"]
     base_x, base_y = hip["x"], hip["y"]
     phase = world["tick"] * DT * 9
     for name, p in nodes.items():
-        vx, vy = (p["x"] - p["px"]) * 0.985, (p["y"] - p["py"]) * 0.995
+        vx, vy = (p["x"] - p["px"]) * material["damping"], (p["y"] - p["py"]) * material["vertical_damping"]
         # Velocity steering is bounded and weaker in the air.
         vx += (direction * motor["speed"] * DT - vx) * (0.12 if grounded else 0.02)
         p["px"], p["py"] = p["x"], p["y"]
         p["x"] += vx
-        p["y"] += vy + world["gravity"] * DT * DT
+        fx, fy = control.get("forces", {}).get(name, [0, 0])
+        p["x"] += fx * DT * DT
+        p["y"] += vy + (world["gravity"] + fy) * DT * DT
         for obj in world["objects"]:
             if obj["kind"] == "fan" and obj["enabled"]:
                 dx, dy = p["x"] - obj["x"], p["y"] - obj["y"]
@@ -187,38 +195,35 @@ def _step(world, direction, climbing=0):
                     p["x"] += math.cos(angle) * scale
                     p["y"] += math.sin(angle) * scale
         if motor["balance"]:
-            ox, oy = OFFSETS[name]
+            ox, oy = control.get("pose", {}).get(name, OFFSETS[name])
             if "foot" in name or "knee" in name:
                 swing = math.sin(phase + (math.pi if name.startswith("right") else 0)) * abs(direction)
                 ox += swing * motor["stride"]
                 if "foot" in name:
                     oy -= max(0, swing) * 9
-            strength = motor["balance"] * 0.08
+            strength = motor["balance"] * material["pose_strength"]
             p["x"] += (base_x + ox - p["x"]) * strength
             p["y"] += (base_y + oy - p["y"]) * strength
-    world["activity"] = "walking" if direction else ("airborne" if not grounded else "idle")
     if climbing:
-        ladder = _ladder_contact(world)
+        ladder = next((o for o in world["objects"] if o["kind"] == "ladder"
+                       and abs(hip["x"] - o["x"]) <= o["width"] / 2 + 30
+                       and o["y"] - 10 <= hip["y"] <= o["y"] + o["height"] + 10), None)
         if ladder:
-            # Grabbing the ladder pulls the body onto its rail, then rungs advance y.
-            shift = (ladder["x"] - hip["x"]) * 0.4
             for p in nodes.values():
-                p["x"] += shift
                 p["y"] += climbing * motor["speed"] * DT - (p["y"] - p["py"]) * 0.9
-            world["activity"] = "climbing"
     # Assisted stance reacts to actual nearby support; no support -> no levitation.
-    supports = [FLOOR] + [o["y"] for o in world["objects"] if o["kind"] == "block"
-                          and o["x"] <= hip["x"] <= o["x"] + o["width"] and o["y"] >= hip["y"]]
+    supports = [FLOOR] + [height for height in (_surface_height(o, hip["x"]) for o in world["objects"])
+                          if height is not None and height >= hip["y"]]
     support = min(supports)
     lift = max(0, hip["y"] - (support - 88)) * motor["balance"] * 0.18 if grounded else 0
     for p in nodes.values():
         p["y"] -= min(lift, 5)
-    for _ in range(10):
+    for _ in range(material["iterations"]):
         for a, b, length in LINKS:
             p, q = nodes[a], nodes[b]
             dx, dy = q["x"] - p["x"], q["y"] - p["y"]
             distance = max(0.0001, math.hypot(dx, dy))
-            correction = (distance - length) / distance * 0.5
+            correction = (distance - length) / distance * 0.5 * material["stiffness"]
             p["x"] += dx * correction
             p["y"] += dy * correction
             q["x"] -= dx * correction
@@ -226,14 +231,15 @@ def _step(world, direction, climbing=0):
         for name, p in nodes.items():
             _collide(world, p, 12 if name == "head" else 4)
     world["tick"] += 1
-
-
-MAX_BEHAVIOR_STEPS = 16
-MAX_CHAIN_DEPTH = 2
+    for obj in world["objects"]:
+        if obj["kind"] == "body":
+            rx, ry = body_extent(obj)
+            obj["x"] = max(rx, min(WIDTH - rx, obj["x"]))
+            obj["y"] = max(ry, min(FLOOR - ry, obj["y"]))
 
 
 def validate_action(args):
-    keys(args, ("action", "frames", "name", "phase"))
+    keys(args, ("action", "frames", "name"))
     action = args.get("action")
     if not isinstance(action, str) or action not in {"left", "right", "idle", "jump", "climb_up", "climb_down", "behavior"}:
         raise ValueError("action must be left, right, idle, jump, climb_up, climb_down, or behavior")
@@ -247,44 +253,15 @@ def validate_action(args):
                 raise ValueError("frames must be an integer")
             ignored.append("frames")
         return action, None, ignored
-    if args.get("phase") not in (None, ""):
-        text(args["phase"], 40, "phase")
     if "name" in args:
         if args["name"] != "":
             raise ValueError("name is only valid for action=behavior")
         ignored.append("name")
-    if args.get("phase") is not None:
-        ignored.append("phase")
     frames = args.get("frames", 60)
     number(frames, 1, 240, "frames")
     if not isinstance(frames, int):
         raise ValueError("frames must be an integer")
     return action, frames, ignored
-
-
-def _expand_steps(world, steps, depth=0, seen=()):
-    """Expand chained behavior references with cycle and depth guards."""
-    expanded = []
-    for step in steps:
-        action, frames, _ignored = validate_action(step)
-        if action == "behavior":
-            name = step.get("name")
-            if name in seen:
-                raise ValueError("behavior chaining cycle: " + str(name))
-            if depth >= MAX_CHAIN_DEPTH:
-                raise ValueError("behavior chaining exceeds the supported depth")
-            nested = world["behaviors"].get(name)
-            if nested is None:
-                raise ValueError("unknown behavior")
-            expanded.extend(_expand_steps(world, nested, depth + 1, seen + (name,)))
-        else:
-            entry = {"action": action, "frames": frames}
-            if step.get("phase"):
-                entry["phase"] = step["phase"]
-            expanded.append(entry)
-    if sum(step["frames"] for step in expanded) > 960:
-        raise ValueError("expanded behavior exceeds 960 frames")
-    return expanded
 
 
 def act(world, args, cancelled=lambda: False, stop_on_goal=False):
@@ -296,7 +273,6 @@ def act(world, args, cancelled=lambda: False, stop_on_goal=False):
         steps = world["behaviors"].get(args["name"])
         if steps is None:
             raise ValueError("unknown behavior")
-        steps = _expand_steps(world, steps)
     else:
         steps = [{"action": action, "frames": frames}]
     frames_requested = sum(step["frames"] for step in steps)
@@ -305,8 +281,6 @@ def act(world, args, cancelled=lambda: False, stop_on_goal=False):
     motion = [frame(world)]
     for step in steps:
         action, frames, _ignored = validate_action(step)
-        if action in {"climb_up", "climb_down"} and _ladder_contact(world) is None:
-            raise ValueError("climb requires contact with a ladder; approach the ladder first")
         if action == "jump" and observation(world)["grounded"]:
             for p in world["nodes"].values():
                 p["py"] = p["y"] + world["controller"]["jump"] * DT
@@ -403,13 +377,14 @@ def evolve(world, args):
     elif operation == "behavior":
         name = text(args.get("name"), 40, "name")
         steps = args.get("steps")
-        if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_BEHAVIOR_STEPS:
-            raise ValueError(f"behavior requires 1..{MAX_BEHAVIOR_STEPS} steps")
+        if not isinstance(steps, list) or not 1 <= len(steps) <= 8:
+            raise ValueError("behavior requires 1..8 steps")
         total = 0
         for step in steps:
             action, frames, _ignored = validate_action(step)
-            if frames:
-                total += frames
+            if action == "behavior":
+                raise ValueError("nested behaviors are not supported")
+            total += frames
         if total > 960 or (name not in world["behaviors"] and len(world["behaviors"]) >= 12):
             raise ValueError("behavior limit: 960 frames, 12 named behaviors")
         world["behaviors"][name] = copy.deepcopy(steps)

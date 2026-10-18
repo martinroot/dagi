@@ -158,7 +158,7 @@ def stored_world(tmp_path):
     (evolve, {"operation": "controller", "values": {"speed": float("nan")}}),
     (evolve, {"operation": "controller", "values": {"speed": 100, "balance": 2}}),
     (evolve, {"operation": "add", "object": {"id": "bad", "kind": "block", "x": 170, "y": 400, "width": 50, "height": 100}}),
-    (evolve, {"operation": "behavior", "name": "bad-phase", "steps": [{"action": "idle", "frames": 8, "phase": 123}]}),
+    (evolve, {"operation": "behavior", "name": "loop", "steps": [{"action": "behavior", "name": "loop"}]}),
     (evolve, {"operation": "add", "object": {"id": "marker", "kind": "marker", "x": 10, "y": 10, "width": {"unused": "payload"}}}),
     (evolve, {"operation": "behavior", "name": "payload", "steps": [{"action": "idle", "name": {"unused": "payload"}}]}),
 ])
@@ -287,74 +287,23 @@ def test_game_act_runs_saved_behavior_cycles_without_provider_calls(stored_world
     assert any(item.get("kind") == "autonomy_execution" for item in saved["history"])
 
 
-def test_self_improve_draft_rejects_dashboard_only_commit(stored_world, tmp_path):
+def test_self_improvement_allows_experiments_and_tests_an_appearance_change_without_a_complexity_gate(stored_world, tmp_path):
     state, session = stored_world
-    state.append_message(session, {"role": "user", "content": "Улучши себя как физического персонажа"})
-    tools = ToolRegistry(tmp_path / "self-improve-guard", state, session)
+    state.append_message(session, {"role": "user", "content": "Улучши себя"})
+    tools = ToolRegistry(tmp_path / "self-improve", state, session)
     register_game(tools)
     tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
-
-    simple_move = tools.call("game_act", {"action": "right", "frames": 30})
-    assert simple_move.is_error is True
-    assert "saved behavior" in simple_move.content
-    assert tools.call("game_build", {"operation": "begin", "objective": "Add a dashboard"}).is_error is False
-    visual = {"operation": "widget", "widget": {
-        "id": "only-panel", "kind": "panel", "x": 20, "y": 60,
-        "width": 180, "height": 80, "title": "Telemetry", "body": "Chart only",
-    }}
-    assert tools.call("game_build", {"operation": "edit", "changes": [visual]}).is_error is False
-    assert tools.call("game_build", {"operation": "test"}).is_error is False
-
-    rejected = tools.call("game_build", {"operation": "commit"})
-    assert rejected.is_error is True
-    assert "physical skill complexity" in rejected.content
+    assert not tools.call("game_act", {"action": "right", "frames": 3}).is_error
+    assert not tools.call("game_build", {"operation": "begin", "objective": "Make my body easier to see"}).is_error
+    assert not tools.call("game_design", {"operation": "appearance", "values": {"line_width": 7}}).is_error
+    tested = tools.call("game_build", {"operation": "test"})
+    assert not tested.is_error
     with GameStore(state.path) as store:
         saved = store.get(session)
-    assert saved["version"] == 0
-    assert saved["widgets"] == []
-    assert saved["draft"]["state"] == "tested"
-
-
-def test_program_execution_report_exposes_climbed_height_and_verified_complexity(stored_world, tmp_path):
-    state, session = stored_world
-    with GameStore(state.path) as store:
-        store.apply(session, evolve, {"operation": "add", "object": {"id": "ladder", "kind": "ladder", "x": 180, "y": 200, "width": 35, "height": 340}})
-        store.apply(session, evolve, {"operation": "behavior", "name": "mount", "steps": [
-            {"action": "climb_up", "frames": 30}, {"action": "climb_down", "frames": 20}]})
-    tools = ToolRegistry(tmp_path / "verified-complexity", state, session)
-    register_game(tools)
-    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
-
-    result = tools.call("game_act", {"action": "behavior", "name": "mount", "cycles": 2})
-    assert result.is_error is False
-    execution = json.loads(result.content)["program_execution"]
-    assert execution["climbed_y"] > 10
-    assert execution["verified_complexity"] > execution["complexity_score"]
-    with GameStore(state.path) as store:
-        saved = store.get(session)["autonomy_execution"]
-    assert saved["climbed_y"] > 10 and saved["verified_complexity"] > saved["complexity_score"]
-
-
-def test_climb_skill_without_ladder_contact_cannot_commit(stored_world, tmp_path):
-    state, session = stored_world
-    state.append_message(session, {"role": "user", "content": "Улучши себя как физического персонажа"})
-    tools = ToolRegistry(tmp_path / "climb-no-contact", state, session)
-    register_game(tools)
-    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
-
-    assert tools.call("game_build", {"operation": "begin", "objective": "Add ladder dancing"}).is_error is False
-    change = {"operation": "behavior", "name": "ladder_dance", "steps": [
-        {"action": "right", "frames": 12}, {"action": "climb_up", "frames": 24}, {"action": "climb_down", "frames": 12}]}
-    assert tools.call("game_build", {"operation": "edit", "changes": [change]}).is_error is False
-    tested = json.loads(tools.call("game_build", {"operation": "test"}).content)
-    assert tested["build"]["report"]["improvement_checks"]["interaction_verified"] is False
-
-    blocked = tools.call("game_build", {"operation": "commit"})
-    assert blocked.is_error is True
-    assert "physical skill complexity" in blocked.content
-    assert "interaction_verified" in blocked.content
-    with GameStore(state.path) as store:
-        assert store.get(session)["version"] == 0
+    assert saved["draft"]["report"]["passed"]
+    assert "baseline_complexity_score" not in saved["draft"]
+    assert saved["draft"]["candidate"]["appearance"]["line_width"] == 7
+    assert saved["appearance"]["line_width"] == 5
 
 
 def test_autonomous_behavior_stops_inside_goal_tolerance_before_overshooting(stored_world, tmp_path):
@@ -411,17 +360,14 @@ def test_dance_program_runs_multiple_cycles_and_frame_ceiling_is_enforced(stored
     assert after["autonomy_execution"]["program"] == "dance"
 
 
-def test_studio_prompt_uses_canonical_paths_and_explains_autonomous_goal_and_draft_rules():
-    assert "game/static/component-host.js" in GAME_PROMPT
-    assert "Do not scan the full source tree" in GAME_PROMPT
-    assert "Use at most two source inspection calls" in GAME_PROMPT
-    assert "6000 characters" in GAME_PROMPT
-    assert "top-level" in GAME_PROMPT and "`parameters` wrapper" in GAME_PROMPT
-    assert "While a draft is open" in GAME_PROMPT
-    assert "signed_error" in GAME_PROMPT and "goal_progress" in GAME_PROMPT
-    assert "cycles" in GAME_PROMPT and "without an MLL call per action step" in GAME_PROMPT
-    assert "physical skill" in GAME_PROMPT and "dashboards" in GAME_PROMPT
-    assert "complexity_score" in GAME_PROMPT and "avatar_state" in GAME_PROMPT
+def test_studio_prompt_describes_executable_feedback_and_honest_evidence():
+    assert "feedback policy" in GAME_PROMPT
+    assert "no screenshot vision" in GAME_PROMPT
+    assert "complexity score" in GAME_PROMPT
+    assert "no predefined activity" in GAME_PROMPT.lower()
+    assert "locally between API calls" in GAME_PROMPT
+    assert "baseline/candidate" in GAME_PROMPT
+    assert "Fix actual compilation/runtime" in GAME_PROMPT
 
 
 class EmbodiedProvider:
@@ -470,7 +416,7 @@ def test_web_agent_chat_moves_its_own_body_persists_evidence_and_new_session_is_
         assert len(detail["tool_calls"]) == 4
         assert all(call["status"] == "succeeded" for call in detail["tool_calls"])
         request = next(p.requests[0] for p in instances if p.requests)
-        assert "You are Dagi's body" in request[0]["content"]
+        assert "You are the stickman" in request[0]["content"]
         _, _, payload = _request(f"{base}/api/game/sessions/{session}")
         body = json.loads(payload)
         assert body["scene"]["goal"]["passed"] is True
@@ -510,76 +456,3 @@ def test_web_agent_chat_moves_its_own_body_persists_evidence_and_new_session_is_
         assert json.loads(again)["frame"] == body["frame"]
     finally:
         _stop(server, thread)
-
-
-def test_long_phased_behavior_program_is_accepted_and_executes():
-    world = fresh_world(1)
-    steps = [{"action": "right", "frames": 8, "phase": "approach"},
-             {"action": "climb_up", "frames": 8, "phase": "rise"},
-             {"action": "climb_down", "frames": 8, "phase": "return"},
-             {"action": "left", "frames": 8, "phase": "recover"}]
-    evolve(world, {"operation": "add", "object": {"id": "ladder", "kind": "ladder", "x": 200, "y": 260, "width": 35, "height": 280}})
-    long_steps = steps + [{"action": "idle", "frames": 8, "phase": f"hold{i}"} for i in range(8)]
-    evolve(world, {"operation": "behavior", "name": "phased", "steps": long_steps})
-    program = program_identity({"behaviors": {"phased": long_steps}})[0]
-    assert program["steps"] == 12
-    assert set(program["phases"]) >= {"approach", "rise", "return", "recover"}
-    act(world, {"action": "behavior", "name": "phased"})
-    assert world["tick"] == 96
-    with pytest.raises(ValueError, match="1..16 steps"):
-        evolve(world, {"operation": "behavior", "name": "too-long", "steps": [{"action": "idle", "frames": 8}] * 17})
-
-
-def test_behavior_chaining_expands_referenced_programs_and_rejects_cycles():
-    world = fresh_world(1)
-    evolve(world, {"operation": "behavior", "name": "base", "steps": [{"action": "right", "frames": 10}]})
-    evolve(world, {"operation": "behavior", "name": "combo", "steps": [
-        {"action": "behavior", "name": "base"}, {"action": "jump", "frames": 10}]})
-    act(world, {"action": "behavior", "name": "combo"})
-    assert world["tick"] == 20
-    evolve(world, {"operation": "behavior", "name": "loop-a", "steps": [{"action": "behavior", "name": "loop-b"}]})
-    evolve(world, {"operation": "behavior", "name": "loop-b", "steps": [{"action": "behavior", "name": "loop-a"}]})
-    with pytest.raises(ValueError, match="cycle"):
-        act(world, {"action": "behavior", "name": "loop-a"})
-    evolve(world, {"operation": "behavior", "name": "deep-1", "steps": [{"action": "behavior", "name": "deep-2"}]})
-    evolve(world, {"operation": "behavior", "name": "deep-2", "steps": [{"action": "behavior", "name": "deep-3"}]})
-    evolve(world, {"operation": "behavior", "name": "deep-3", "steps": [{"action": "behavior", "name": "deep-4"}]})
-    evolve(world, {"operation": "behavior", "name": "deep-4", "steps": [{"action": "idle", "frames": 4}]})
-    with pytest.raises(ValueError, match="depth"):
-        act(world, {"action": "behavior", "name": "deep-1"})
-
-
-def test_climb_actions_require_ladder_contact_and_are_refused_without_it():
-    world = fresh_world(1)
-    with pytest.raises(ValueError, match="contact"):
-        act(world, {"action": "climb_up", "frames": 10})
-    assert world["tick"] == 0
-    evolve(world, {"operation": "add", "object": {"id": "far-ladder", "kind": "ladder", "x": 900, "y": 260, "width": 35, "height": 280}})
-    with pytest.raises(ValueError, match="contact"):
-        act(world, {"action": "climb_down", "frames": 10})
-    assert world["tick"] == 0
-
-
-def test_approach_then_climb_grips_the_ladder_and_advances_height():
-    world = fresh_world(1)
-    evolve(world, {"operation": "add", "object": {"id": "wind-ladder", "kind": "ladder", "x": 250, "y": 260, "width": 35, "height": 280}})
-    act(world, {"action": "right", "frames": 90})
-    approaching = observation(world)
-    assert approaching["contact"]["object_id"] == "wind-ladder"
-    before = observation(world)
-    act(world, {"action": "climb_up", "frames": 30})
-    after = observation(world)
-    assert after["position"]["y"] < before["position"]["y"] - 20
-    assert abs(after["position"]["x"] - 250) <= 30
-    assert after["contact"]["object_id"] == "wind-ladder"
-    assert after["activity"] == "climbing"
-    assert after["grounded"] is False
-
-
-def test_climb_refusal_rolls_back_the_stored_world(stored_world):
-    state, session = stored_world
-    with GameStore(state.path) as store:
-        before = store.get(session)
-        with pytest.raises(ValueError, match="contact"):
-            store.apply(session, act, {"action": "climb_up", "frames": 10})
-        assert store.get(session) == before

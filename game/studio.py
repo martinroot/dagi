@@ -9,9 +9,10 @@ import re
 import time
 from uuid import uuid4
 
+from .living import design, trial
 from .world import act, evolve, keys, number, observation, text, validate_action
 
-LIVE_FIELDS = ("nodes", "tick", "gravity", "controller", "objects", "behaviors", "goal", "widgets", "components", "theme")
+LIVE_FIELDS = ("nodes", "tick", "gravity", "controller", "objects", "behaviors", "goal", "widgets", "components", "theme", "policies", "active_policy", "policy_state", "appearance", "material")
 TOOL_NAMES = {"game_inspect", "game_act", "game_evolve", "game_goal", "game_reflect", "game_build", "game_visual", "game_review"}
 
 
@@ -174,6 +175,8 @@ def visual_edit(world, args):
 def edit(world, change):
     if not isinstance(change, dict):
         raise ValueError("change must be an object")
+    if change.get("operation") in {"policy", "appearance", "material", "body"}:
+        return design(world, change)
     if change.get("operation") in ("component", "remove_component", "widget", "remove_widget", "todo", "theme"):
         return visual_edit(world, change)
     return evolve(world, change)
@@ -209,7 +212,7 @@ def review(world):
                 findings.append({"id": widget["id"], "other": other["id"], "issue": "widget_overlap"})
         if any(widget["x"] <= p["x"] <= widget["x"] + widget["width"] and widget["y"] <= p["y"] <= widget["y"] + widget["height"] for p in world["nodes"].values()):
             findings.append({"id": widget["id"], "issue": "body_occlusion"})
-    contrast = (max(_luminance(world["theme"]["background"]), _luminance("#282d23")) + .05) / (min(_luminance(world["theme"]["background"]), _luminance("#282d23")) + .05)
+    contrast = (max(_luminance(world["theme"]["background"]), _luminance(world["appearance"]["stroke"])) + .05) / (min(_luminance(world["theme"]["background"]), _luminance(world["appearance"]["stroke"])) + .05)
     for component in world["components"]:
         validate_component({k: v for k, v in copy.deepcopy(component).items() if k != "code_hash"}, world)
         if component["layer"] == "foreground" and any(component["x"] <= p["x"] <= component["x"] + component["width"] and component["y"] <= p["y"] <= component["y"] + component["height"] for p in world["nodes"].values()):
@@ -245,66 +248,6 @@ def _simulate(world, cancelled):
     state = observation(clone)
     finite = all(math.isfinite(v) for p in clone["nodes"].values() for v in p.values())
     return {"finite": finite, "upright": state["upright"], "grounded": state["grounded"], "position": state["position"]}
-
-
-MOVEMENT_ACTIONS = {"left", "right", "jump", "climb_up", "climb_down"}
-CLIMB_ACTIONS = {"climb_up", "climb_down"}
-MIN_MEANINGFUL_TRAVEL = 12
-
-
-def _program_score(steps):
-    actions = [step["action"] for step in steps]
-    return 2 * len(set(actions)) + len({(a, b) for a, b in zip(actions, actions[1:]) if a != b})
-
-
-def _action_types(behaviors):
-    return {step["action"] for steps in behaviors.values() for step in steps}
-
-
-def verified_complexity(steps, trial=None):
-    """Score action diversity plus what a measured execution actually achieved.
-
-    Without a clean measured trial the score stays structural; travel with contact and
-    retained posture add a bounded bonus so repeating or renaming actions cannot inflate it.
-    """
-    actions = [step["action"] for step in steps]
-    structural = 2 * len(set(actions)) + len({(a, b) for a, b in zip(actions, actions[1:]) if a != b})
-    if not trial or trial.get("refused"):
-        return {"structural_score": structural, "verified_score": structural, "verified_bonus": 0, "basis": "structure only"}
-    travel = abs(trial.get("displacement_x", 0)) + trial.get("climbed_y", 0)
-    bonus = min(20, int(travel // 6)) + (6 if trial.get("contact_after") else 0) + (2 if trial.get("upright") else 0)
-    # The gate score counts distinct action types plus measured achievement; repeated
-    # transitions cannot inflate it, so padding right/left/right/left is not progress.
-    return {"structural_score": structural, "verified_score": 2 * len(set(actions)) + bonus, "verified_bonus": bonus,
-            "travel_units": round(travel, 2), "contact": bool(trial.get("contact_after")),
-            "basis": "measured travel, contact and posture"}
-
-
-def _best_score(behaviors, trials=None):
-    trials = trials or {}
-    return max((verified_complexity(steps, trials.get(name))["verified_score"]
-                for name, steps in behaviors.items()), default=0)
-
-
-def _behavior_trial(world, name, cancelled):
-    """Execute one saved behavior on a clone and measure what the body actually did."""
-    clone = copy.deepcopy(world)
-    clone["history"], clone["reflections"], clone["draft"], clone["motion"] = [], [], None, []
-    before = observation(clone)
-    refused = None
-    try:
-        act(clone, {"action": "behavior", "name": name}, cancelled)
-    except ValueError as exc:
-        refused = str(exc)
-    finite = all(math.isfinite(v) for p in clone["nodes"].values() for v in p.values())
-    after = observation(clone)
-    motion = clone["motion"] or [{"nodes": {n: [p["x"], p["y"]] for n, p in clone["nodes"].items()}}]
-    climbed = max(0.0, before["position"]["y"] - min(sample["nodes"]["hip"][1] for sample in motion))
-    return {"finite": finite, "upright": after["upright"], "grounded": after["grounded"],
-            "displacement_x": round(after["position"]["x"] - before["position"]["x"], 2),
-            "climbed_y": round(climbed, 2), "refused": refused,
-            "contact_after": after["contact"]["object_id"] if after["contact"] else None,
-            "activity_after": after["activity"], "frames_executed": after["tick"] - before["tick"]}
 
 
 def build(world, args, cancelled=lambda: False):
@@ -348,35 +291,28 @@ def build(world, args, cancelled=lambda: False):
                   "posture_no_regression": not baseline["upright"] or after["upright"],
                   "layout_readable": visual["passed"], "goal_preserved": candidate["goal"] == world["goal"]}
         checks["authored_components_executed"] = all(c["status"] == "passed" for c in visual["component_execution"])
-        trials = {name: _behavior_trial(candidate, name, cancelled) for name in candidate["behaviors"]}
-        baseline_trials = {name: _behavior_trial(world, name, cancelled) for name in world["behaviors"]}
+        policy_before, policy_after = trial(world, cancelled=cancelled), trial(candidate, cancelled=cancelled)
+        checks["feedback_policy_executes"] = policy_after["passed"]
+        checks["feedback_posture_no_regression"] = not policy_before["passed"] or not policy_after["passed"] or policy_after["upright_ratio"] >= min(.65, policy_before.get("upright_ratio", 0))
         skill_tests = []
-        for name, trial in trials.items():
-            checks[f"behavior:{name}"] = trial["finite"]
-            breakdown = verified_complexity(candidate["behaviors"][name], trial)
-            skill_tests.append({"widget_id": next((w["id"] for w in candidate["widgets"] if w["kind"] == "skill"
-                                                   and w["target"]["type"] == "behavior" and w["target"]["name"] == name), None),
-                                "behavior": name, "displacement_x": trial["displacement_x"], "climbed_y": trial["climbed_y"],
-                                "refused": trial["refused"], "contact_after": trial["contact_after"],
-                                "finite": trial["finite"], "upright": trial["upright"], "grounded": trial["grounded"],
-                                "frames_executed": trial["frames_executed"],
-                                "verified_score": breakdown["verified_score"], "verified_bonus": breakdown["verified_bonus"],
-                                "scope": "one measured execution of the saved program; refusal means a claimed climb had no ladder contact"})
-        climb_names = [name for name, steps in candidate["behaviors"].items()
-                       if any(step["action"] in CLIMB_ACTIONS for step in steps)]
-        improvement_checks = {
-            "interaction_verified": all(trials[name]["refused"] is None for name in climb_names),
-            "meaningful_displacement": any(abs(trial["displacement_x"]) + trial["climbed_y"] >= MIN_MEANINGFUL_TRAVEL
-                                           for trial in trials.values()),
-            "complexity_delta_source": _best_score(candidate["behaviors"], trials) > _best_score(world["behaviors"], baseline_trials),
-        }
+        for name, steps in candidate["behaviors"].items():
+            clone = copy.deepcopy(candidate)
+            outcome = act(clone, {"action": "behavior", "name": name}, cancelled)
+            healthy = all(math.isfinite(v) for p in clone["nodes"].values() for v in p.values())
+            checks[f"program:{name}"] = healthy
+            skill_tests.append({"behavior": name, "displacement_x": outcome["displacement_x"], "finite": healthy, "upright": outcome["upright"], "scope": "actual saved program executed; semantic task correctness unverified"})
+        for widget in candidate["widgets"]:
+            if widget["kind"] == "skill" and widget["target"]["type"] == "behavior":
+                clone = copy.deepcopy(candidate)
+                outcome = act(clone, {"action": "behavior", "name": widget["target"]["name"]}, cancelled)
+                healthy = all(math.isfinite(v) for p in clone["nodes"].values() for v in p.values())
+                checks[f"skill:{widget['id']}"] = healthy
+                skill_tests.append({"widget_id": widget["id"], "behavior": widget["target"]["name"], "displacement_x": outcome["displacement_x"],
+                                    "finite": healthy, "upright": outcome["upright"], "scope": "program executes with finite physics; task correctness remains unverified"})
         draft["test_count"] += 1
         draft["state"] = "tested"
         draft["report"] = {"passed": all(checks.values()), "checks": checks, "baseline": baseline, "candidate": after,
-                           "visual": visual, "skill_tests": skill_tests, "candidate_hash": digest(draft["candidate"]),
-                           "improvement_checks": improvement_checks, "baseline_verified_best": _best_score(world["behaviors"], baseline_trials),
-                           "candidate_verified_best": _best_score(candidate["behaviors"], trials),
-                           "improvement_scope": "embodied-skill gates: claimed climbs must show contact, a program must measurably move/climb, and the verified score (measured travel, contact and posture plus action diversity) must exceed the measured baseline",
+                           "visual": visual, "skill_tests": skill_tests, "feedback_trial": {"baseline": policy_before, "candidate": policy_after}, "candidate_hash": digest(draft["candidate"]),
                            "scope": "bounded physical health, preserved goal and readable layout; not proof of general intelligence or all user requirements"}
     elif operation == "commit":
         keys(args, ("operation",))
@@ -402,9 +338,11 @@ def activate(world, args):
     world["previous"] = snapshot(world)
     world.update(copy.deepcopy(draft["candidate"]))
     world["version"] += 1
+    world["policy_error"] = None
     world["motion"] = []
     world["last_release"] = {"id": draft["id"], "version": world["version"], "objective": draft["objective"],
                              "activated_at": time.time(), "checks": draft["report"]["checks"], "report": copy.deepcopy(draft["report"])}
+    world["evolution"] = (world["evolution"] + [{"version": world["version"], "objective": draft["objective"], "at": time.time(), "policy": world["active_policy"], "trial": copy.deepcopy(draft["report"].get("feedback_trial"))}])[-30:]
     world["browser_report"], world["draft"] = None, None
     return {"kind": "release", "version": world["version"], "build_id": args["id"]}
 
