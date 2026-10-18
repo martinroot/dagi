@@ -157,21 +157,31 @@ def validate_action(args):
     action = args.get("action")
     if not isinstance(action, str) or action not in {"left", "right", "idle", "jump", "behavior"}:
         raise ValueError("action must be left, right, idle, jump, or behavior")
+    ignored = []
     if action == "behavior":
         text(args.get("name"), 40, "name")
         if "frames" in args:
-            raise ValueError("behavior duration is defined by its saved steps")
-    elif "name" in args:
-        raise ValueError("name is only valid for action=behavior")
+            frames_hint = args["frames"]
+            number(frames_hint, 1, 240, "frames")
+            if not isinstance(frames_hint, int):
+                raise ValueError("frames must be an integer")
+            ignored.append("frames")
+        return action, None, ignored
+    if "name" in args:
+        if args["name"] != "":
+            raise ValueError("name is only valid for action=behavior")
+        ignored.append("name")
     frames = args.get("frames", 60)
     number(frames, 1, 240, "frames")
     if not isinstance(frames, int):
         raise ValueError("frames must be an integer")
-    return action, frames
+    return action, frames, ignored
 
 
 def act(world, args, cancelled=lambda: False):
-    action, frames = validate_action(args)
+    action, frames, ignored = validate_action(args)
+    is_behavior = action == "behavior"
+    command = {key: copy.deepcopy(value) for key, value in args.items() if key not in ignored}
     before = observation(world)
     if action == "behavior":
         steps = world["behaviors"].get(args["name"])
@@ -181,7 +191,7 @@ def act(world, args, cancelled=lambda: False):
         steps = [{"action": action, "frames": frames}]
     motion = [frame(world)]
     for step in steps:
-        action, frames = validate_action(step)
+        action, frames, _ignored = validate_action(step)
         if action == "jump" and observation(world)["grounded"]:
             for p in world["nodes"].values():
                 p["py"] = p["y"] + world["controller"]["jump"] * DT
@@ -194,7 +204,9 @@ def act(world, args, cancelled=lambda: False):
     motion.append(frame(world))
     world["motion"] = motion[-122:]
     after = observation(world)
-    return {"kind": "action", "command": copy.deepcopy(args), "from_tick": before["tick"], "to_tick": after["tick"],
+    return {"kind": "action", "command": command, "ignored_arguments": ignored,
+            "duration_source": "saved behavior steps" if is_behavior else "frames",
+            "from_tick": before["tick"], "to_tick": after["tick"],
             "displacement_x": round(after["position"]["x"] - before["position"]["x"], 2),
             "upright": after["upright"], "grounded": after["grounded"], "goal": after["goal"]}
 
@@ -255,7 +267,7 @@ def evolve(world, args):
             raise ValueError("behavior requires 1..8 steps")
         total = 0
         for step in steps:
-            action, frames = validate_action(step)
+            action, frames, _ignored = validate_action(step)
             if action == "behavior":
                 raise ValueError("nested behaviors are not supported")
             total += frames

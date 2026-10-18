@@ -70,6 +70,31 @@ def test_behavior_executes_changed_program_and_reflection_attaches_actual_eviden
     assert record["status"].startswith("hypothesis")
 
 
+def test_game_act_ignores_empty_name_on_simple_action_and_reports_normalization():
+    world = fresh_world(1)
+
+    result = act(world, {"action": "right", "frames": 30, "name": ""})
+
+    assert world["tick"] == 30
+    assert result["command"] == {"action": "right", "frames": 30}
+    assert result["ignored_arguments"] == ["name"]
+    assert result["duration_source"] == "frames"
+
+
+def test_game_act_behavior_duration_comes_from_saved_steps_not_frames_hint():
+    world = fresh_world(1)
+    evolve(world, {"operation": "behavior", "name": "short-walk", "steps": [
+        {"action": "right", "frames": 18}, {"action": "idle", "frames": 12},
+    ]})
+
+    result = act(world, {"action": "behavior", "name": "short-walk", "frames": 20})
+
+    assert world["tick"] == 30
+    assert result["command"] == {"action": "behavior", "name": "short-walk"}
+    assert result["ignored_arguments"] == ["frames"]
+    assert result["duration_source"] == "saved behavior steps"
+
+
 @pytest.fixture
 def stored_world(tmp_path):
     state = StateStore(tmp_path / "state.db")
