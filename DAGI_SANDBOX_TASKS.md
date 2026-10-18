@@ -5,9 +5,10 @@ This is the single repository-level status map for the sandbox roadmap and cross
 - Umbrella: [#16 — sandbox UI integration](https://github.com/martinroot/dagi/issues/16) (open until all remaining acceptance criteria are complete).
 - Integration umbrella: [#20 — incremental 0.3.0 integration](https://github.com/martinroot/dagi/issues/20).
 - Current branch: `main`.
-- Latest full-gate code commit: `5ef035976f6ce47daf13cca028f43355739e86b7`; remote `main` was verified at this SHA before this roadmap update.
-- Verification at this checkpoint: `pytest -q` — **177 passed**; Node UI — **23 passed**; `bash -n` and `git diff --check` passed; `uv build` produced wheel and sdist, including `dagi_core/runtime_context.py`, `dagi_core/workspace.py`, and both static assets.
-- Deployment boundary: no service restart or live `DAGI_HOME` migration has been performed. Backend changes are not claimed as active in the running service; #15 backup/restore rehearsal remains required before any live schema migration.
+- Latest full-gate code commit: `79ebeb5743eb846604cdcb87e96683358afe18e6`; remote `main` was verified at this SHA before this documentation-only checkpoint.
+- Verification at this checkpoint: `pytest -q` — **196 passed**; Node UI — **27 passed**; `node --check` for both live game assets, `git diff --check`, and `uv build` wheel+sdist passed.
+- User-directed game rollout: live `dagi-web` serves `https://pornfluxx.ru/dagi/game/` from commit `79ebeb5`; existing loopback listener/auth/proxy path retained. Additive `game_worlds` migration was rehearsed on a protected copy, then initialized live after backup; no production game world or provider call was created.
+- Rollback snapshot retained at `/home/dagi/.dagi/backups/state-pre-game-79ebeb5-20261018T063637-0400.sqlite3` (file `0600`, parent directory `0700`, integrity `ok`). No DNS, Nginx, firewall, or unrelated service changes.
 
 ## Ten implementation iterations
 
@@ -51,7 +52,8 @@ This is the single repository-level status map for the sandbox roadmap and cross
 
 ## Future layer
 
-- Visual-world debugger as a read-only renderer over persisted entities/events: [#36 open](https://github.com/martinroot/dagi/issues/36). Do not start a game engine before the event model, tool cards, artifacts, and agent tree are stable.
+- Visual-world debugger as a read-only renderer over persisted entities/events: [#36 open](https://github.com/martinroot/dagi/issues/36). Do not treat the separate physics game as satisfying or closing this renderer issue.
+- User-directed experimental embodied physics lab: [#43 closed](https://github.com/martinroot/dagi/issues/43), deployed at `/dagi/game/` through existing session auth and APIs. Uses one bounded world per game session; does not affect ordinary sessions, run a background model loop, or hot-load proposed code.
 
 ## Runtime awareness proposal (SELF)
 
@@ -66,7 +68,7 @@ Full proposal: [`DAGI_SELF_AWARENESS_MVP.md`](DAGI_SELF_AWARENESS_MVP.md). This 
 | SELF-05 — reflection on repeated non-goal tool failures and task conclusions | Done | [#42 closed](https://github.com/martinroot/dagi/issues/42) | `2cb9393` persists bounded repeated-failure reflections, exposes them in refreshed runtime context, blocks unchanged retries after the configured threshold, and records tool-run conclusions with `goal_status=unknown`. Full pytest 175, Node UI 21, build passed |
 
 
-Execution order from the proposal: prerequisites #34, #35, and #23 are closed. SELF-01 structural context and SELF-02 tool outcomes are implemented; SELF-01 remains open for a bounded model-driven smoke, pending operator approval due possible provider cost. SELF-03 goal-check reflection/lessons (#40), non-goal repeated-failure/run-conclusion records (#42), and the read-only inspector card (#41) are complete. Resume the preserved backlog at CORE-03/#22, then ITER-05/SB-04/#27; keep the stashed async-child WIP untouched until its separate review.
+Execution order from the proposal: prerequisites #34, #35, and #23 are closed. SELF-01 structural context and SELF-02 tool outcomes are implemented; SELF-01 remains open for a bounded model-driven smoke, pending operator approval due possible provider cost. SELF-03 goal-check reflection/lessons (#40), non-goal repeated-failure/run-conclusion records (#42), the read-only inspector card (#41), and the separately user-directed embodied game experiment (#43) are complete. Resume the preserved backlog at CORE-03/#22, then ITER-05/SB-04/#27; keep the stashed async-child WIP untouched until its separate review.
 
 ## Current SB-03 sequence
 
@@ -86,6 +88,7 @@ Execution order from the proposal: prerequisites #34, #35, and #23 are closed. S
 - Before issue closure/release, still run full pytest + Node UI + package build. `README.md` documents both loops.
 
 - Continue on `main` in small, reversible, issue-linked commits; push each green slice and verify local/remote SHA.
-- Do not deploy/restart the active service or migrate live `DAGI_HOME` as part of these code slices. Preserve cookie-session auth and verify logged-out API rejection.
+- Live deployment is allowed only when the user explicitly requests it. For #43, the existing authenticated HTTPS `/dagi/` route and loopback listener were reused; no Nginx, DNS, firewall, or other service was changed. Unauthenticated game-session creation returns `401`.
+- Before that rollout, active runs/tools were checked, the additive `game_worlds` migration and restore were rehearsed on a protected copy, and a verified rollback snapshot was retained at `/home/dagi/.dagi/backups/state-pre-game-79ebeb5-20261018T063637-0400.sqlite3`.
 - Treat command checks as service-user commands, not an OS sandbox; they stay operator-disabled unless explicitly enabled.
 - Keep the async-child stash separate until iteration 6: `stash@{0}` (`WIP async child before sandbox iteration 6`).
