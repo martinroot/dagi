@@ -84,8 +84,15 @@ primitives; arbitrary JS computation/state transitions are yours. Declare events
 with id,label and optional target; buttons reference event_id. Code runs in a
 time-limited browser worker in an opaque sandbox frame, without DOM/network/host
 access. Only validated draw commands and declared actions reach the live app.
-Inspect component-host.js for the exact API. Source is persisted, re-inspectable
-and rebuilt on release. Browser animation state resets on reload/release.
+Use game_inspect view=catalog first; it includes a working component example and schemas.
+When code details are needed, the canonical component runtime path is
+`game/static/component-host.js` (a unique basename also resolves). Source pages
+allow up to 6000 characters; follow next_offset only for the relevant section.
+Do not scan the full source tree or page through all of game.js/studio.py for a
+simple visual improvement. Use at most two source inspection calls per run unless
+a concrete test error requires a targeted read, and reserve the call budget for
+begin/edit/test/review/commit. Source is persisted, re-inspectable and rebuilt on
+release. Browser animation state resets on reload/release.
 
 Before testing/releasing authored code, use game_review and wait for a current
 browser execution report with component_execution status=passed. If pending,
@@ -146,6 +153,21 @@ def compact_observation(scene):
     return scene
 
 
+def resolve_source_path(path):
+    """Resolve exact allowlist keys or a unique filename; never accept host paths."""
+    if not isinstance(path, str) or not path:
+        raise ValueError("path must be a canonical source_files path or a unique filename")
+    if path in SOURCE_FILES:
+        return path
+    if "/" not in path:
+        matches = [candidate for candidate in SOURCE_FILES if candidate.rsplit("/", 1)[-1] == path]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ValueError("ambiguous source filename; use one of: " + ", ".join(matches))
+    raise ValueError("path must match an allowlisted source_files path; use game_inspect to list canonical paths")
+
+
 CATALOG = {
     "authored_component": {"operation": "component", "component": {"id": "my-instrument", "title": "Invented instrument", "x": 350, "y": 65,
         "width": 280, "height": 150, "layer": "foreground", "events": [{"id": "refresh", "label": "Refresh my instrument"}],
@@ -186,9 +208,7 @@ def register_game(tools):
                     "enabled_tools": [t.get("function", {}).get("name") for t in request.get("tools", [])][:32] if request else [],
                     "scope": "Actual saved request shape; exact JSON is available in the human run inspector. No hidden reasoning is exposed."}
         if view == "source":
-            path = args.get("path")
-            if not isinstance(path, str) or path not in SOURCE_FILES:
-                raise ValueError("path must be one of the source_files returned by game_inspect")
+            path = resolve_source_path(args.get("path"))
             offset, limit = args.get("offset", 0), args.get("limit", 6000)
             if type(offset) is not int or type(limit) is not int or offset < 0 or not 1 <= limit <= 6000:
                 raise ValueError("offset must be a nonnegative integer; limit must be 1..6000")
@@ -283,7 +303,7 @@ def register_game(tools):
         return call
 
     specs = [
-        ("game_inspect", "Observe identity, body, physics, measured pose, goals and viewer. view=objects/behaviors/widgets/components is paged; view=catalog gives schemas; view=draft shows a self-improvement candidate; view=brain summarizes the actual request shape; source paths are allowlisted.",
+        ("game_inspect", "Observe identity, body, physics, measured pose, goals and viewer. view=objects/behaviors/widgets/components is paged; view=catalog gives schemas; view=draft shows a self-improvement candidate; view=brain summarizes the actual request shape. For source reads use a canonical path from self.code.source_files; a unique basename is also accepted, while ambiguous names require the canonical path.",
          {"view": {"type": "string", "enum": ["state", "objects", "behaviors", "widgets", "components", "component_source", "source", "draft", "catalog", "brain"]}, "path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, [], lambda a, c: inspect(a), True),
         ("game_act", "Advance your body. Simple actions left/right/idle/jump/climb_up/climb_down use frames and omit name. For behavior, provide name only; saved steps define duration. A bounded frames hint on behavior and an empty name on a simple action are ignored and reported. Returns measured effects; a tool success is not a goal success.",
          {"action": {"type": "string", "enum": ["left", "right", "idle", "jump", "climb_up", "climb_down", "behavior"]}, "frames": {"type": "integer", "minimum": 1, "maximum": 240, "description": "Used for simple actions; ignored for behavior."}, "name": {"type": "string", "description": "Required for behavior; omit or leave empty for simple actions."}}, ["action"], lambda a, c: mutate(act, a, c), False),

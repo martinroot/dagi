@@ -11,7 +11,7 @@ from dagi_core.provider import StreamEvent
 from dagi_core.state import StateStore
 from dagi_core.tools import ToolExecutionContext, ToolRegistry
 from dagi_core.web import WebApp
-from game.bridge import register_game
+from game.bridge import GAME_PROMPT, register_game
 from game.store import GameStore
 from game.world import LINKS, act, evolve, fresh_world, observation, reflect, set_goal
 from test_core_web import _config, _request, _start, _stop, _wait_for_status
@@ -173,6 +173,35 @@ def test_tools_are_scoped_correctable_and_do_not_claim_retryable_actions(stored_
     assert '"source":' in tools.call("game_inspect", {"view": "source", "path": "game/world.py"}).content
     with GameStore(state.path) as store:
         assert store.get(session)["tick"] == 0
+
+
+def test_game_inspect_accepts_unique_source_basename_and_rejects_ambiguous_or_unsafe_paths(stored_world, tmp_path, monkeypatch):
+    from game import bridge
+
+    state, session = stored_world
+    monkeypatch.setitem(bridge.SOURCE_FILES, "other/index.html", bridge.SOURCE_FILES["game/static/index.html"])
+    tools = ToolRegistry(tmp_path / "source-inspection", state, session)
+    register_game(tools)
+    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
+
+    component = tools.call("game_inspect", {"view": "source", "path": "component-host.js"})
+    assert component.is_error is False
+    result = json.loads(component.content)
+    assert result["path"] == "game/static/component-host.js"
+    assert "workerBootstrap" in result["source"]
+
+    ambiguous = tools.call("game_inspect", {"view": "source", "path": "index.html"})
+    assert ambiguous.is_error is True
+    assert "game/static/index.html" in ambiguous.content
+    assert "other/index.html" in ambiguous.content
+    assert tools.call("game_inspect", {"view": "source", "path": "../../.env"}).is_error is True
+
+
+def test_studio_prompt_uses_canonical_source_paths_and_limits_source_scanning():
+    assert "game/static/component-host.js" in GAME_PROMPT
+    assert "Do not scan the full source tree" in GAME_PROMPT
+    assert "Use at most two source inspection calls" in GAME_PROMPT
+    assert "6000 characters" in GAME_PROMPT
 
 
 class EmbodiedProvider:
