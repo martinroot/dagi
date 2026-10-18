@@ -89,6 +89,32 @@ test("character animates a focused cue during motion and the measured status aft
   assert.ok(drawnText.includes("✓"));
 });
 
+test("game UI renders ladder contact, climbing pose and measured activity from the scene",async()=>{
+  const active=world(12,6);
+  active.scene.activity="climbing";
+  active.scene.contact={object_id:"wind-ladder",kind:"ladder",x:270,y:260,height:280};
+  active.scene.objects=[{id:"wind-ladder",kind:"ladder",x:270,y:260,width:35,height:280}];
+  active.scene.autonomy_execution={program:"wind_ladder_mount",program_version:"a5fb9711b93f",complexity_score:12,
+    verified_complexity:30,climbed_y:24.5,status:"running",cycles_completed:1,cycles_requested:2,
+    frames_executed:120,start_x:256,current_x:270};
+  active.frame.nodes={head:[270,330],hip:[270,400],neck:[270,345],left_hand:[250,330],right_hand:[292,330],
+    left_elbow:[252,350],right_elbow:[288,350],left_knee:[262,442],right_knee:[278,442],left_foot:[258,484],right_foot:[282,484]};
+  const {context,elements,drawnText}=ui(async(url)=>{
+    const path=url.pathname.slice("/dagi/api/".length);
+    if(path==="auth/session")return response({authenticated:true});
+    if(path==="game/sessions")return response({sessions:[]});
+    if(path==="sessions/12")return response(snapshot(12));
+    if(path==="game/sessions/12")return response(active);
+    throw new Error(path);
+  });
+  await tick();await context.selectSession(12,"ladder contact");await context.refreshWorld();context.draw(10);
+  assert.match(elements.get("observation").textContent,/Активность: climbing/);
+  assert.match(elements.get("observation").textContent,/Контакт: wind-ladder/);
+  assert.match(elements.get("autonomy-status").textContent,/→V30/);
+  assert.match(elements.get("autonomy-status").textContent,/подъём 24\.50/);
+  assert.ok(drawnText.some((text)=>text.includes("CONTACT")));
+});
+
 test("download button saves the selected session's log as JSON",async()=>{
   assert.match(fs.readFileSync(new URL("../game/static/index.html",import.meta.url),"utf8"),/id="download-log"/);
   const requested=[];

@@ -140,9 +140,11 @@ async function refreshWorld(token = generation) {
     autonomyBadge.className = `autonomy-status ${autonomy.status || ""}`;
     const dx = (Number(autonomy.current_x) - Number(autonomy.start_x)).toFixed(2);
     const goalDelta = typeof autonomy.goal_distance_change === "number" ? ` · goal Δ ${autonomy.goal_distance_change > 0 ? "+" : ""}${autonomy.goal_distance_change.toFixed(2)}` : "";
-    autonomyBadge.textContent = `SELF PROGRAM ${autonomy.program}@${autonomy.program_version} C${autonomy.complexity_score} · ${(autonomy.status || "").toUpperCase()} · ${autonomy.cycles_completed}/${autonomy.cycles_requested} циклов · ${autonomy.frames_executed} кадров · Δx ${dx}${goalDelta}`;
+    const verified = typeof autonomy.verified_complexity === "number" ? `→V${autonomy.verified_complexity}` : "";
+    const climbed = typeof autonomy.climbed_y === "number" && autonomy.climbed_y > 0 ? ` · подъём ${autonomy.climbed_y.toFixed(2)}` : "";
+    autonomyBadge.textContent = `SELF PROGRAM ${autonomy.program}@${autonomy.program_version} C${autonomy.complexity_score}${verified} · ${(autonomy.status || "").toUpperCase()} · ${autonomy.cycles_completed}/${autonomy.cycles_requested} циклов · ${autonomy.frames_executed} кадров · Δx ${dx}${climbed}${goalDelta}`;
   }
-  $("observation").textContent = `Позиция: x=${s.position.x}, y=${s.position.y}\nСтоит: ${s.upright ? "да" : "нет"} · Опора: ${s.grounded ? "да" : "нет"}\nРевизия: ${s.revision} · Кадр: ${s.tick}\n\n${s.goal ? `${s.goal.label}\nЦель x=${s.goal.x} ±${s.goal.tolerance}\nРасстояние: ${s.goal.distance} · signed_error: ${s.goal.signed_error} · курс: ${s.goal.direction_to_goal}\nПроверка позы: ${s.goal.passed ? "ПРОЙДЕНА" : "НЕ ПРОЙДЕНА"}` : "Цель ещё не задана"}`;
+  $("observation").textContent = `Позиция: x=${s.position.x}, y=${s.position.y}\nСтоит: ${s.upright ? "да" : "нет"} · Опора: ${s.grounded ? "да" : "нет"}\nРевизия: ${s.revision} · Кадр: ${s.tick}\nАктивность: ${s.activity || "idle"}${s.contact ? ` · Контакт: ${s.contact.object_id}` : ""}\n\n${s.goal ? `${s.goal.label}\nЦель x=${s.goal.x} ±${s.goal.tolerance}\nРасстояние: ${s.goal.distance} · signed_error: ${s.goal.signed_error} · курс: ${s.goal.direction_to_goal}\nПроверка позы: ${s.goal.passed ? "ПРОЙДЕНА" : "НЕ ПРОЙДЕНА"}` : "Цель ещё не задана"}`;
   $("reflection").textContent = pretty(s.latest_reflection || s.last_action || {status:"Готов к первому эксперименту"});
   $("scene").textContent = pretty({physics:s.physics, controller:s.controller, objects:s.objects, behaviors:s.behaviors, goal:s.goal});
   $("history").textContent = pretty(data.history);
@@ -253,6 +255,13 @@ function draw(now) {
       else {ctx.fillStyle="#e6703a";ctx.beginPath();ctx.arc(o.x,o.y,6,0,Math.PI*2);ctx.fill();}
       if(o.label){ctx.font="12px monospace";ctx.fillStyle="#69715c";ctx.fillText(o.label,o.x,o.y-12);}
     }
+    const contact=sceneData.scene.contact;
+    if(contact){
+      ctx.save();ctx.strokeStyle="#e6703a";ctx.setLineDash([4,4]);
+      ctx.beginPath();ctx.moveTo(contact.x,Math.max(0,contact.y-24));ctx.lineTo(contact.x,contact.y+(contact.height||0)+24);ctx.stroke();ctx.setLineDash([]);
+      ctx.font="11px monospace";ctx.fillStyle="#e6703a";ctx.fillText("CONTACT",contact.x+8,Math.max(12,contact.y-28));
+      ctx.restore();
+    }
     const goal=sceneData.scene.goal;
     if(goal){ctx.fillStyle=goal.passed?"#73995322":"#e6703a18";ctx.fillRect(goal.x-goal.tolerance,75,goal.tolerance*2,465);ctx.strokeStyle="#e6703a";ctx.setLineDash([5,6]);ctx.beginPath();ctx.moveTo(goal.x,100);ctx.lineTo(goal.x,540);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle="#c16a3d";ctx.font="12px monospace";ctx.fillText(`TARGET x=${goal.x}`,Math.min(goal.x+12,850),90);}
   }
@@ -261,6 +270,11 @@ function draw(now) {
     for(const [a,b] of sceneData.links){ctx.beginPath();ctx.moveTo(...n[a]);ctx.lineTo(...n[b]);ctx.stroke();}
     ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(...n.head,12,0,Math.PI*2);ctx.fill();ctx.stroke();
     drawAvatarExpression(ctx,n.head,animation?"focused":sceneData.scene.avatar_state,now);
+    if(sceneData.scene.activity==="climbing"&&sceneData.scene.contact&&n.left_hand&&n.right_hand){
+      ctx.save();ctx.strokeStyle="#282d23";ctx.lineWidth=3;
+      for(const hand of [n.left_hand,n.right_hand]){ctx.beginPath();ctx.moveTo(...hand);ctx.lineTo(sceneData.scene.contact.x,hand[1]-8);ctx.stroke();}
+      ctx.restore();
+    }
     ctx.fillStyle=sceneData.theme?.accent||"#e6703a";for(const [name,p] of Object.entries(n)){if(name==="head")continue;ctx.beginPath();ctx.arc(...p,3.5,0,Math.PI*2);ctx.fill();}
     ctx.font="11px monospace";ctx.fillStyle="#e6703a";ctx.fillText("SELF",n.head[0]+22,n.head[1]-8);
     $("clock").textContent=`t = ${(displayed.tick/60).toFixed(2)} s · 60 Hz`;
