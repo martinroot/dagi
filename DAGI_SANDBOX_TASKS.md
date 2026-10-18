@@ -5,9 +5,9 @@ This is the single repository-level status map for the sandbox roadmap and cross
 - Umbrella: [#16 — sandbox UI integration](https://github.com/martinroot/dagi/issues/16) (open until all remaining acceptance criteria are complete).
 - Integration umbrella: [#20 — incremental 0.3.0 integration](https://github.com/martinroot/dagi/issues/20).
 - Current branch: `main`.
-- Latest full-gate code commit: `892c2032d43d73755335bea984b5d32b2261d9c3`; remote `main` was verified at this SHA after push.
-- Verification at this checkpoint: `pytest -q` — **224 passed**; Node UI — **35 passed**; JS syntax, Python compile, `bash -n scripts/test-focused.sh`, `git diff --check`, and `uv build` wheel+sdist passed.
-- Live `dagi-web` has **not** been restarted for #47/#48; the currently loaded app is still the earlier deployed release. Public route/auth were not changed. New autonomous-skill controls and JSON export are in remote `main` but not yet deployed.
+- Latest full-gate code commit: `cf993cb10b014e71a763615a11c0677e1bf0afad`; remote `main` was verified at this SHA after push.
+- Verification at this checkpoint: `pytest -q` — **225 passed**; Node UI — **35 passed**; JS syntax, Python compile, `bash -n scripts/test-focused.sh`, `git diff --check`, and `uv build` wheel+sdist passed.
+- Live `dagi-web` has **not** been restarted for #47/#48; the currently loaded app is still the earlier deployed release. Public route/auth were not changed. New autonomous-skill controls, self-improvement guard, animated status cues, and JSON export are in remote `main` but not yet deployed.
 - No production provider call or world/session mutation was made during diagnosis/tests. World 12 remains at its recorded state; deployment needs a fresh active-run check and current protected backup after approval. The previous #46 rollback copy is retained but predates later world-12 activity and must not be reused as the current release backup.
 
 ## Ten implementation iterations
@@ -57,7 +57,7 @@ This is the single repository-level status map for the sandbox roadmap and cross
 - Studio v2.1 and agent-authored visual components: [#45 closed](https://github.com/martinroot/dagi/issues/45), code `5a86a0d`; authored JS runs in an opaque browser worker/iframe with validated output, not in the Python service or on the host.
 - Session-8 source-path and self-improvement budget guidance: [#46 closed](https://github.com/martinroot/dagi/issues/46), code `b28c4b4`; unique allowlisted basenames resolve canonically, ambiguous names remain rejected, traversal stays blocked.
 - World-12 loop/goal reliability: [#47 open](https://github.com/martinroot/dagi/issues/47), code `1f1f268`; configured provider budget now sets a compatible tool-round ceiling and goal feedback carries signed direction/progress.
-- Embodied self-improvement and session audit export: [#48 open](https://github.com/martinroot/dagi/issues/48), code `892c203`; saved behaviors run bounded local cycles, program versions/complexity and avatar state are visible, “Улучши себя” prioritizes physical skill, and the selected-session JSON export covers persisted visible dialogue/tool/world state. Live reload is pending explicit approval.
+- Embodied self-improvement and session audit export: [#48 open](https://github.com/martinroot/dagi/issues/48), code `cf993cb`; saved behaviors run bounded local cycles, and self-improve mode rejects dashboard-only commits/simple live actions unless a new best physical skill is authored and tested; a passing release executes two local cycles with a replayable motion trace and animated avatar cue. The selected-session JSON export covers persisted visible dialogue/tool/world state. Live reload is pending explicit approval.
 
 ## Runtime awareness proposal (SELF)
 
