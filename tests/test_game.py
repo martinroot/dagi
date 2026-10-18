@@ -86,6 +86,10 @@ def test_saved_skill_complexity_is_measurable_and_versioned():
     assert program["steps"] == 3
     assert program["unique_actions"] == 3
     assert program["complexity_score"] > program["steps"]
+    single = [{"action": "right", "frames": 12}]
+    padded = single * 3
+    assert program_identity({"behaviors": {"single": single}})[0]["complexity_score"] == \
+        program_identity({"behaviors": {"padded": padded}})[0]["complexity_score"]
 
 
 def test_jump_has_measured_airtime_and_wall_blocks_horizontal_progress():
@@ -281,6 +285,34 @@ def test_game_act_runs_saved_behavior_cycles_without_provider_calls(stored_world
     assert saved["tick"] == 24
     assert saved["autonomy_execution"]["program"] == "pace"
     assert any(item.get("kind") == "autonomy_execution" for item in saved["history"])
+
+
+def test_self_improve_draft_rejects_dashboard_only_commit(stored_world, tmp_path):
+    state, session = stored_world
+    state.append_message(session, {"role": "user", "content": "Улучши себя как физического персонажа"})
+    tools = ToolRegistry(tmp_path / "self-improve-guard", state, session)
+    register_game(tools)
+    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
+
+    simple_move = tools.call("game_act", {"action": "right", "frames": 30})
+    assert simple_move.is_error is True
+    assert "saved behavior" in simple_move.content
+    assert tools.call("game_build", {"operation": "begin", "objective": "Add a dashboard"}).is_error is False
+    visual = {"operation": "widget", "widget": {
+        "id": "only-panel", "kind": "panel", "x": 20, "y": 60,
+        "width": 180, "height": 80, "title": "Telemetry", "body": "Chart only",
+    }}
+    assert tools.call("game_build", {"operation": "edit", "changes": [visual]}).is_error is False
+    assert tools.call("game_build", {"operation": "test"}).is_error is False
+
+    rejected = tools.call("game_build", {"operation": "commit"})
+    assert rejected.is_error is True
+    assert "physical skill complexity" in rejected.content
+    with GameStore(state.path) as store:
+        saved = store.get(session)
+    assert saved["version"] == 0
+    assert saved["widgets"] == []
+    assert saved["draft"]["state"] == "tested"
 
 
 def test_autonomous_behavior_stops_inside_goal_tolerance_before_overshooting(stored_world, tmp_path):

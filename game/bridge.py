@@ -48,7 +48,7 @@ Only your session's world/body is available; do not claim unmeasured success.
 
 The self-passport refreshes before each request. MLL selects/refines programs;
 physics executes saved steps locally. Named behaviors are versioned parts of this
-character's identity. complexity_score = steps + 2*unique_actions + transitions.
+character's identity. complexity_score = 2*unique_actions + non-repeated_transitions; repeating an action cannot inflate it.
 `game_act` behavior cycles=1..10 runs without an MLL call per action step, max
 2400 frames, persists progress and stops on goal/cancel by default. Set
 stop_on_goal=false for non-goal skills such as dance. Use cycles, not a separate
@@ -102,8 +102,9 @@ def program_complexity(steps):
     actions = [step["action"] for step in steps]
     unique_actions = set(actions)
     transitions = set(zip(actions, actions[1:]))
-    return {"unique_actions": len(unique_actions), "unique_transitions": len(transitions),
-            "complexity_score": len(steps) + 2 * len(unique_actions) + len(transitions)}
+    meaningful_transitions = {(before, after) for before, after in transitions if before != after}
+    return {"unique_actions": len(unique_actions), "unique_transitions": len(meaningful_transitions),
+            "complexity_score": 2 * len(unique_actions) + len(meaningful_transitions)}
 
 
 def program_identity(world):
@@ -116,6 +117,9 @@ def render_game_context(database, session_id, workspace, model):
     with GameStore(database) as store:
         world = store.get(session_id)
     draft = build_summary(world)
+    draft_context = None
+    if draft:
+        draft_context = {k: draft[k] for k in ("state", "objective", "edits", "test_count", "improvement_mode", "baseline_complexity_score") if k in draft}
     passport = {
         "self": {"body_id": world["body_id"], "session_id": session_id, "workspace": str(workspace), "version": world["version"],
                  "programs": program_identity(world), "autonomy_execution": world.get("autonomy_execution")},
@@ -127,7 +131,7 @@ def render_game_context(database, session_id, workspace, model):
                     "behaviors": list(world["behaviors"]), "programs": program_identity(world),
                     "autonomy_execution": world.get("autonomy_execution"),
                     "components": [{"id": c["id"], "code_hash": c["code_hash"][:12]} for c in world["components"]],
-                    "goal": world["goal"], "draft": {k: draft[k] for k in ("state", "objective", "edits", "test_count") if draft and k in draft} if draft else None},
+                    "goal": world["goal"], "draft": draft_context},
         "experience": [{"hypothesis": r["hypothesis"][:160], "next_test": r["next_test"][:160], "evidence_tick": r["evidence_tick"]} for r in world["reflections"][-2:]],
         "last_release_checks": world["last_release"]["checks"] if world["last_release"] else None,
         "tested_programs": [{k: item[k] for k in ("behavior", "displacement_x", "finite", "scope")} for item in world["last_release"].get("report", {}).get("skill_tests", [])[:3]] if world["last_release"] else [],
@@ -234,7 +238,7 @@ def register_game(tools):
                     "next_offset": offset + limit if offset + limit < len(source) else None,
                     "authority": "installed application source; read-only through this tool"}
         with GameStore(tools.state.path) as store:
-            world = store.get(tools.session_id)
+            world = current_world(store)
         if view == "component_source":
             components = world["draft"]["candidate"]["components"] if world["draft"] else world["components"]
             component = next((c for c in components if c["id"] == args.get("path")), None)
@@ -275,7 +279,7 @@ def register_game(tools):
         cycles = args.get("cycles", 1)
         if type(cycles) is not int or not 1 <= cycles <= MAX_AUTONOMOUS_CYCLES:
             raise ValueError(f"cycles must be an integer in 1..{MAX_AUTONOMOUS_CYCLES}")
-        world = store.get(tools.session_id)
+        world = current_world(store)
         stop_on_goal = args.get("stop_on_goal", bool(world.get("goal")))
         if type(stop_on_goal) is not bool:
             raise ValueError("stop_on_goal must be boolean")
@@ -367,9 +371,27 @@ def register_game(tools):
             }
         return result
 
+    def is_self_improvement_request(context):
+        for message in reversed(tools.state.messages(context.session_id)):
+            if message.get("role") != "user":
+                continue
+            text = message.get("content")
+            if not isinstance(text, str):
+                return False
+            normalized = text.strip().casefold()
+            return normalized.startswith(("улучши себя", "improve yourself"))
+        return False
+
     def mutate(operation, args, context):
         with GameStore(tools.state.path) as store:
-            world = store.get(tools.session_id)
+            world = current_world(store)
+            self_improvement = is_self_improvement_request(context)
+            if self_improvement and operation is act:
+                allowed_run = (world.get("autonomy_execution") or {}).get("self_improvement_run_id") == context.run_id
+                if args.get("action") != "behavior" or not allowed_run:
+                    raise ValueError("self-improvement requires a tested, more-complex saved behavior; simple live actions are not an iteration")
+            if self_improvement and operation in (evolve, visual_edit, set_goal) and not world["draft"]:
+                raise ValueError("self-improvement changes must use a tested game_build draft")
             if world["draft"]:
                 if operation in (evolve, visual_edit):
                     store.apply(tools.session_id, build, {"operation": "edit", "changes": [args]})
@@ -397,12 +419,46 @@ def register_game(tools):
                 }
             return result
 
+    def current_world(store):
+        world = store.get(tools.session_id)
+        if world is None:
+            raise ValueError("game world not found")
+        return world
+
     def construction(args, context):
         cancelled = context.cancel_event.is_set if context.cancel_event else lambda: False
+        operation_name = args.get("operation")
+        self_improvement = is_self_improvement_request(context)
+        release_program = None
+        execution_result = None
         with GameStore(tools.state.path) as store:
-            store.apply(tools.session_id, build, args, cancelled=cancelled)
-            world = store.get(tools.session_id)
-            if args.get("operation") == "commit":
+            if operation_name == "begin":
+                store.apply(tools.session_id, build, args, cancelled=cancelled)
+                if self_improvement:
+                    world = current_world(store)
+                    baseline = max((item["complexity_score"] for item in program_identity(world)), default=0)
+                    with store.mutation(tools.session_id) as marked_world:
+                        marked_world["draft"]["improvement_mode"] = "embodied_skill"
+                        marked_world["draft"]["baseline_complexity_score"] = baseline
+            else:
+                world = current_world(store)
+                draft = world.get("draft")
+                if operation_name == "commit" and draft and draft.get("improvement_mode") == "embodied_skill":
+                    baseline = int(draft.get("baseline_complexity_score", 0))
+                    candidate = draft.get("candidate") or {}
+                    movement = {"left", "right", "jump", "climb_up", "climb_down"}
+                    eligible = []
+                    for item in program_identity(candidate):
+                        steps = candidate.get("behaviors", {}).get(item["name"], [])
+                        actions = {step["action"] for step in steps}
+                        if item["complexity_score"] > baseline and len(actions) >= 2 and actions & movement:
+                            eligible.append(item)
+                    if not eligible:
+                        raise ValueError("self-improvement commit blocked: physical skill complexity must exceed the previous best with at least two action types including movement; chart-only edits do not count")
+                    release_program = max(eligible, key=lambda item: item["complexity_score"])["name"]
+                store.apply(tools.session_id, build, args, cancelled=cancelled)
+            world = current_world(store)
+            if operation_name == "commit":
                 release = world["draft"]
                 deadline = time.monotonic() + max(0, release["activate_at"] - time.time())
                 while time.monotonic() < deadline:
@@ -414,16 +470,34 @@ def register_game(tools):
                     store.apply(tools.session_id, abort_release, {"id": release["id"]})
                     raise ValueError("release cancelled; live world unchanged")
                 store.apply(tools.session_id, activate, {"id": release["id"]})
-                world = store.get(tools.session_id)
+                world = current_world(store)
+                if release_program:
+                    run_result = execute_behavior_program(
+                        store,
+                        {"action": "behavior", "name": release_program, "cycles": 2, "stop_on_goal": False},
+                        context,
+                    )
+                    execution_result = run_result
+                    with store.mutation(tools.session_id) as executed_world:
+                        report = executed_world.get("autonomy_execution") or {}
+                        report["self_improvement_run_id"] = context.run_id
+                        report["trigger"] = "self_improvement"
+                        executed_world["autonomy_execution"] = report
+                    world = current_world(store)
+                    run_result["program_execution"] = world["autonomy_execution"]
             summary = build_summary(world)
             if summary and summary.get("report"):
                 summary["report"] = {k: summary["report"][k] for k in ("passed", "checks", "scope")}
-            return {"version": world["version"], "build": summary, "last_release": world["last_release"]}
+            result = {"version": world["version"], "build": summary, "last_release": world["last_release"]}
+            if execution_result:
+                result["program_execution"] = execution_result["program_execution"]
+                result["observed_after_execution"] = {k: execution_result.get(k) for k in ("tick", "position", "avatar_state", "goal")}
+            return result
 
     def quality(args, context):
         keys(args, ())
         with GameStore(tools.state.path) as store:
-            world = store.get(tools.session_id)
+            world = current_world(store)
         result = {"live": review(world)}
         if world["draft"]:
             world.update(world["draft"]["candidate"])
@@ -453,7 +527,7 @@ def register_game(tools):
          {"x": {"type": "number"}, "tolerance": {"type": "number"}, "label": {"type": "string"}}, ["x"], lambda a, c: mutate(set_goal, a, c), False),
         ("game_reflect", "Save a short operational experiment note: expected, hypothesis, next_test. Observed state and evidence revision are attached by the runtime. A note is a hypothesis, not a verified lesson.",
          {name: {"type": "string"} for name in ("expected", "hypothesis", "next_test")}, ["expected", "hypothesis", "next_test"], lambda a, c: mutate(reflect, a, c), False),
-        ("game_build", "Bounded self-improvement. Send fields at the top level, e.g. {operation:begin, objective:text} or {operation:edit, changes:[...]}; do not wrap in parameters. Edits are game_evolve/game_visual operations (1..8 per call,24 total); test cloned physics/layout (3 tests max); commit exact passing candidate with 3-2-1 activation or discard. Live world remains unchanged before commit. Inspect view=draft for report/findings.",
+        ("game_build", "Bounded self-improvement. Send fields at the top level; no parameters wrapper. Edit 1..8 changes/call,24 total; test cloned physics/layout (3 max); commit the exact passing candidate or discard. Live world stays unchanged before commit. For requests starting 'Улучши себя'/'Improve yourself', commit is blocked unless a physical behavior has a higher best complexity_score and includes movement; release automatically runs it for two local cycles. Inspect view=draft for baseline and findings.",
          {"operation": {"type": "string", "enum": ["begin", "edit", "test", "commit", "discard"]}, "objective": {"type": "string"}, "changes": {"type": "array", "items": {"type": "object"}}}, ["operation"], construction, False),
         ("game_visual", "Invent a visual tool by writing code: operation=component uses component {id,title,x,y,width,height,code,events:[{id,label,target?}],layer:foreground|background}. Code runs in the isolated browser component sandbox; only validated draw commands and declared events are returned. Remove it with remove_component. Widget operations edit panel/skill/todo/button, todo state and theme within a draft.",
          {"operation": {"type": "string"}, "widget": {"type": "object"}, "component": {"type": "object"}, "id": {"type": "string"}, "item_id": {"type": "string"}, "done": {"type": "boolean"}, "values": {"type": "object"}}, ["operation"], lambda a, c: mutate(visual_edit, a, c), False),

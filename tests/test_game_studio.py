@@ -205,18 +205,15 @@ def test_cancelling_release_during_countdown_never_installs_the_candidate(tmp_pa
 def upgrade_commands():
     return [
         ("game_inspect", {"view": "catalog"}),
-        ("game_build", {"operation": "begin", "objective": "Build tools around my body"}),
+        ("game_build", {"operation": "begin", "objective": "Progress my physical walking skill"}),
         ("game_build", {"operation": "edit", "changes": [
-            {"operation": "behavior", "name": "walk", "steps": [{"action": "right", "frames": 60}, {"action": "idle", "frames": 15}]},
+            {"operation": "behavior", "name": "walk", "steps": [
+                {"action": "right", "frames": 60}, {"action": "idle", "frames": 15},
+            ]},
             {"operation": "widget", "widget": {"id": "walk-skill", "kind": "skill", "x": 30, "y": 65, "width": 250, "height": 100,
-             "title": "Walking skill", "body": "Measured action program", "target": {"type": "behavior", "name": "walk"}}},
-            {"operation": "widget", "widget": {"id": "plan", "kind": "todo", "x": 350, "y": 65, "width": 250, "height": 140,
-             "title": "My experiments", "items": [{"id": "move", "text": "Test movement", "done": False}, {"id": "review", "text": "Review readability", "done": True}]}},
-            {"operation": "widget", "widget": {"id": "walk-button", "kind": "button", "x": 670, "y": 65, "width": 220, "height": 80,
-             "title": "Walk right", "target": {"type": "action", "action": "right", "frames": 60}}},
-            {"operation": "add", "object": {"id": "ladder", "kind": "ladder", "x": 280, "y": 270, "width": 35, "height": 270}},
-            {"operation": "add", "object": {"id": "fan", "kind": "fan", "x": 80, "y": 450, "force": 400, "range": 200, "angle": 0}},
-            {"operation": "widget", "widget": {**panel("mechanism", 650)["widget"], "y": 235}},
+             "title": "Walking skill", "body": "Saved physical program", "target": {"type": "behavior", "name": "walk"}}},
+            {"operation": "widget", "widget": {"id": "walk-button", "kind": "button", "x": 320, "y": 65, "width": 220, "height": 80,
+             "title": "Perform walk", "target": {"type": "behavior", "name": "walk"}}},
         ]}),
         ("game_review", {}), ("game_build", {"operation": "test"}), ("game_build", {"operation": "commit"}),
     ]
@@ -282,19 +279,18 @@ def test_web_self_improvement_injects_passport_before_first_call_and_releases_ve
         _, _, body = _request(f"{base}/api/game/sessions/{session}")
         data = json.loads(body)
         assert data["scene"]["version"] == 1 and data["build"] is None
-        assert data["scene"]["tick"] == 0  # Tests ran on a clone.
-        assert {w["kind"] for w in data["widgets"]} == {"todo", "skill", "button", "panel"}
-        assert {o["kind"] for o in data["scene"]["objects"]} == {"fan", "ladder"}
+        assert data["scene"]["tick"] == 150  # The released physical skill ran for two autonomous cycles.
+        assert len(data["motion"]) > 1  # The viewer can replay measured physical frames.
+        execution = data["scene"]["autonomy_execution"]
+        assert execution["program"] == "walk" and execution["status"] == "completed"
+        assert execution["cycles_completed"] == 2 and execution["frames_executed"] == 150
+        assert {w["kind"] for w in data["widgets"]} == {"skill", "button"}
+        assert data["scene"]["objects"] == []
         assert all(data["last_release"]["checks"].values())
         _, _, body = _request(f"{base}/api/game/sessions/{session}/interact", "POST", {"widget_id": "walk-button", "version": 1})
         clicked = json.loads(body)["run_id"]
         _wait_for_status(base, clicked, "completed")
         _, _, body = _request(f"{base}/api/game/sessions/{session}")
-        assert json.loads(body)["scene"]["tick"] == 60
-        _, _, body = _request(f"{base}/api/game/sessions/{session}/interact", "POST", {"widget_id": "plan", "item_id": "move", "version": 1})
-        _wait_for_status(base, json.loads(body)["run_id"], "completed")
-        _, _, body = _request(f"{base}/api/game/sessions/{session}")
-        todo = next(w for w in json.loads(body)["widgets"] if w["id"] == "plan")
-        assert todo["items"][0]["done"] is True
+        assert json.loads(body)["scene"]["tick"] == 225
     finally:
         _stop(server, thread)

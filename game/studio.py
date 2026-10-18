@@ -344,7 +344,7 @@ def build_summary(world):
     draft = world["draft"]
     if not draft:
         return None
-    return {k: copy.deepcopy(draft[k]) for k in ("id", "state", "objective", "edits", "test_count", "report", "activate_at", "release_error") if k in draft}
+    return {k: copy.deepcopy(draft[k]) for k in ("id", "state", "objective", "edits", "test_count", "report", "activate_at", "release_error", "improvement_mode", "baseline_complexity_score") if k in draft}
 
 
 def human_prompt(world, args):

@@ -260,7 +260,7 @@ function draw(now) {
     const n=displayed.nodes;ctx.lineWidth=5;ctx.lineCap="round";ctx.strokeStyle="#282d23";
     for(const [a,b] of sceneData.links){ctx.beginPath();ctx.moveTo(...n[a]);ctx.lineTo(...n[b]);ctx.stroke();}
     ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(...n.head,12,0,Math.PI*2);ctx.fill();ctx.stroke();
-    drawAvatarExpression(ctx,n.head,sceneData.scene.avatar_state,now);
+    drawAvatarExpression(ctx,n.head,animation?"focused":sceneData.scene.avatar_state,now);
     ctx.fillStyle=sceneData.theme?.accent||"#e6703a";for(const [name,p] of Object.entries(n)){if(name==="head")continue;ctx.beginPath();ctx.arc(...p,3.5,0,Math.PI*2);ctx.fill();}
     ctx.font="11px monospace";ctx.fillStyle="#e6703a";ctx.fillText("SELF",n.head[0]+22,n.head[1]-8);
     $("clock").textContent=`t = ${(displayed.tick/60).toFixed(2)} s · 60 Hz`;

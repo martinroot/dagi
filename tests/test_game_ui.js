@@ -68,17 +68,24 @@ test("game UI identifies saved skill versions and displays autonomous execution 
   assert.match(elements.get("autonomy-status").textContent,/goal Δ -1.50/);
 });
 
-test("character avatar draws a state expression derived from its simulation status",async()=>{
-  const active=world(12,5);active.scene.avatar_state="satisfied";active.frame.nodes={head:[500,300]};
+test("character animates a focused cue during motion and the measured status afterward",async()=>{
+  const initial=world(12,5);initial.scene.avatar_state="satisfied";initial.frame.nodes={head:[500,300]};
+  const active={...initial,scene:{...initial.scene,revision:6,tick:320},frame:{tick:320,nodes:{head:[510,300]}},motion:[
+    {tick:300,nodes:{head:[500,300]}},{tick:320,nodes:{head:[510,300]}}
+  ]};
+  let reads=0;
   const {context,drawnText}=ui(async(url)=>{
     const path=url.pathname.slice("/dagi/api/".length);
     if(path==="auth/session")return response({authenticated:true});
     if(path==="game/sessions")return response({sessions:[]});
     if(path==="sessions/12")return response(snapshot(12));
-    if(path==="game/sessions/12")return response(active);
+    if(path==="game/sessions/12")return response(++reads===1?initial:active);
     throw new Error(path);
   });
-  await tick();await context.selectSession(12,"embodied expression");context.draw(1000);
+  await tick();await context.selectSession(12,"embodied expression");
+  await context.refreshWorld();context.draw(10);
+  assert.ok(drawnText.includes("•"));
+  context.draw(1000);
   assert.ok(drawnText.includes("✓"));
 });
 
