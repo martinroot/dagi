@@ -324,12 +324,12 @@ def evolve(world, args):
         if len(world["objects"]) >= 32:
             raise ValueError("world is limited to 32 objects")
         obj = copy.deepcopy(args.get("object"))
+        if not isinstance(obj.get("kind"), str) or obj["kind"] not in {"block", "marker", "ladder", "fan"}:
+            raise ValueError("object kind must be block, marker, ladder, or fan; dynamic rect/circle bodies with mass are created with game_design operation=body")
         keys(obj, ("id", "kind", "x", "y", "width", "height", "label", "force", "range", "angle", "enabled"))
         text(obj.get("id"), 40, "object id")
         if any(o["id"] == obj["id"] for o in world["objects"]):
             raise ValueError("object id already exists")
-        if not isinstance(obj.get("kind"), str) or obj["kind"] not in {"block", "marker", "ladder", "fan"}:
-            raise ValueError("object kind must be block, marker, ladder, or fan")
         number(obj.get("x"), 0, WIDTH, "x")
         number(obj.get("y"), 0, FLOOR, "y")
         if "label" in obj:

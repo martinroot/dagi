@@ -50,6 +50,19 @@ POLICY_HELP = {
     "limits": "12 named policies; 8000 chars/code, 600 AST nodes; physical engine is assisted 2D, not biomechanical simulation; no pixel aesthetic judgement",
 }
 
+GAME_DESIGN_DESCRIPTION = (
+    "General self-modification; every edit needs an open game_build draft. Exact fields are listed here; unlisted fields are rejected. "
+    "operation=inspect returns sensors, your policies, appearance, material and the exact language. "
+    "policy {name,code,description,activate?}: code is one Python expression (no eval/exec/imports/attributes/loops/comprehensions) returning a dict with keys "
+    "drive (-1..1), jump (bool; impulse only when grounded), pose ({joint:[x,y]} offsets from hip, each -160..160), forces ({joint:[ax,ay]}, -2000..2000), "
+    "object_forces ({body_id:[fx,fy]}, -2000..2000), memory (JSON <=2048 chars, persisted), intent (public text <=100 chars). "
+    "Inputs: s{t,dt,x,y,vx,vy,grounded,upright,goal,objects,joints{name:[x,y]},contacts{name:bool}} and m (your memory). "
+    "appearance {values:{stroke,accent,fill '#RRGGBB', line_width 2..9, head_radius 8..17, joint_radius 0..5, trail 0..12}}. "
+    "material {values:{damping .9...999, vertical_damping .9...999, friction 0..1, pose_strength .01..2, stiffness .3..1, iterations 4..16}}. "
+    "body {body:{id,shape 'rect'|'circle',x,y (centers),mass .2..50,restitution 0...85,color '#RRGGBB',label?; rect also width,height; circle also radius}}; "
+    "dynamic bodies fall, collide and exchange two-way impulses with your skeleton."
+)
+
 GAME_PROMPT = SYSTEM_PROMPT + """
 
 You are the stickman in this session. The human sees your actual body and world.
@@ -396,13 +409,19 @@ def register_game(tools):
                     return {"live_world_changed": False, "build": build_summary(store.get(tools.session_id))}
                 if operation in (act, set_goal):
                     raise ValueError("a draft is open; test its candidate with game_build test or discard it before live actions/goals")
-            if operation is act and ("cycles" in args or "stop_on_goal" in args) and args.get("action") != "behavior":
-                raise ValueError("cycles and stop_on_goal are only valid for action=behavior")
+            ignored_action_args = []
+            if operation is act and args.get("action") != "behavior":
+                ignored_action_args = [name for name in ("cycles", "stop_on_goal") if name in args]
+                if ignored_action_args:
+                    # Simple actions execute once; extra control fields are reported, not a hard failure.
+                    args = {key: value for key, value in args.items() if key not in ignored_action_args}
             if operation is act and args.get("action") == "behavior":
                 return execute_behavior_program(store, args, context)
             before_goal = observation(world).get("goal") if operation is act else None
             kwargs = {"cancelled": context.cancel_event.is_set} if operation is act and context.cancel_event else {}
             result = compact_observation(store.apply(tools.session_id, operation, args, **kwargs))
+            if ignored_action_args:
+                result["ignored_arguments"] = ignored_action_args
             after_goal = result.get("goal") if operation is act else None
             if before_goal and after_goal:
                 distance_change = round(after_goal["distance"] - before_goal["distance"], 2)
@@ -482,7 +501,7 @@ def register_game(tools):
         return call
 
     specs = [
-        ("game_design", "General self-modification: inspect feedback language/source/sensors; author a continuous feedback policy; tune appearance or physical material; create a dynamic physical body. All edits require a game_build draft. Policy is a Python expression returning controls, evaluated locally each tick without model calls. Inspect first for the exact schema.",
+        ("game_design", GAME_DESIGN_DESCRIPTION,
          {"operation": {"type": "string", "enum": ["inspect", "policy", "appearance", "material", "body"]}, "name": {"type": "string"}, "code": {"type": "string"}, "description": {"type": "string"}, "activate": {"type": "boolean"}, "values": {"type": "object"}, "body": {"type": "object"}}, ["operation"], designing, False),
         ("game_inspect", "Observe identity, body, physics, measured pose, goals and viewer. view=objects/behaviors/widgets/components is paged; view=catalog gives schemas; view=draft shows a self-improvement candidate; view=brain summarizes the actual request shape. For source reads use a canonical path from self.code.source_files; a unique basename is also accepted, while ambiguous names require the canonical path.",
          {"view": {"type": "string", "enum": ["state", "objects", "behaviors", "widgets", "components", "component_source", "source", "draft", "catalog", "brain"]}, "path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, [], lambda a, c: inspect(a), True),

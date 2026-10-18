@@ -370,6 +370,39 @@ def test_studio_prompt_describes_executable_feedback_and_honest_evidence():
     assert "Fix actual compilation/runtime" in GAME_PROMPT
 
 
+def test_simple_action_ignores_cycles_arguments_with_a_measured_note(stored_world, tmp_path):
+    state, session = stored_world
+    tools = ToolRegistry(tmp_path / "cycles-normalized", state, session)
+    register_game(tools)
+    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
+
+    result = tools.call("game_act", {"action": "idle", "frames": 60, "name": "", "cycles": 1, "stop_on_goal": False})
+    assert result.is_error is False
+    payload = json.loads(result.content)
+    assert payload["tick"] == 60
+    assert payload["ignored_arguments"] == ["cycles", "stop_on_goal"]
+    with GameStore(state.path) as store:
+        assert store.get(session)["tick"] == 60
+
+
+def test_game_evolve_add_steers_dynamic_bodies_to_game_design(stored_world, tmp_path):
+    state, session = stored_world
+    tools = ToolRegistry(tmp_path / "dynamic-body-hint", state, session)
+    register_game(tools)
+    tools.set_execution_context(ToolExecutionContext(session, "run", 0, "fake"))
+
+    result = tools.call("game_evolve", {"operation": "add", "object": {"id": "ball", "kind": "ball", "x": 250, "y": 510, "radius": 14}})
+    assert result.is_error is True
+    assert "game_design" in result.content
+    assert "body" in result.content
+
+
+def test_game_design_description_lists_exact_operation_schemas():
+    from game.bridge import GAME_DESIGN_DESCRIPTION
+    for needle in ("policy", "appearance", "material", "body", "shape", "restitution", "drive", "object_forces", "operation=inspect"):
+        assert needle in GAME_DESIGN_DESCRIPTION, needle
+
+
 class EmbodiedProvider:
     model = "main-model"
 
