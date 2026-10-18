@@ -468,3 +468,39 @@ def test_web_agent_chat_moves_its_own_body_persists_evidence_and_new_session_is_
         assert json.loads(again)["frame"] == body["frame"]
     finally:
         _stop(server, thread)
+
+
+def test_climb_actions_require_ladder_contact_and_are_refused_without_it():
+    world = fresh_world(1)
+    with pytest.raises(ValueError, match="contact"):
+        act(world, {"action": "climb_up", "frames": 10})
+    assert world["tick"] == 0
+    evolve(world, {"operation": "add", "object": {"id": "far-ladder", "kind": "ladder", "x": 900, "y": 260, "width": 35, "height": 280}})
+    with pytest.raises(ValueError, match="contact"):
+        act(world, {"action": "climb_down", "frames": 10})
+    assert world["tick"] == 0
+
+
+def test_approach_then_climb_grips_the_ladder_and_advances_height():
+    world = fresh_world(1)
+    evolve(world, {"operation": "add", "object": {"id": "wind-ladder", "kind": "ladder", "x": 250, "y": 260, "width": 35, "height": 280}})
+    act(world, {"action": "right", "frames": 90})
+    approaching = observation(world)
+    assert approaching["contact"]["object_id"] == "wind-ladder"
+    before = observation(world)
+    act(world, {"action": "climb_up", "frames": 30})
+    after = observation(world)
+    assert after["position"]["y"] < before["position"]["y"] - 20
+    assert abs(after["position"]["x"] - 250) <= 30
+    assert after["contact"]["object_id"] == "wind-ladder"
+    assert after["activity"] == "climbing"
+    assert after["grounded"] is False
+
+
+def test_climb_refusal_rolls_back_the_stored_world(stored_world):
+    state, session = stored_world
+    with GameStore(state.path) as store:
+        before = store.get(session)
+        with pytest.raises(ValueError, match="contact"):
+            store.apply(session, act, {"action": "climb_up", "frames": 10})
+        assert store.get(session) == before

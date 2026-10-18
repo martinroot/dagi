@@ -30,9 +30,13 @@ def begin_with_panel(world):
 def test_ladder_assists_real_climbing_and_fan_changes_measured_motion():
     empty, ladder = fresh_world(1), fresh_world(1)
     evolve(ladder, {"operation": "add", "object": {"id": "ladder", "kind": "ladder", "x": 180, "y": 200, "width": 35, "height": 340}})
-    act(empty, {"action": "climb_up", "frames": 60})
+    with pytest.raises(ValueError, match="contact"):
+        act(empty, {"action": "climb_up", "frames": 60})
+    assert empty["tick"] == 0
     act(ladder, {"action": "climb_up", "frames": 60})
     assert observation(ladder)["position"]["y"] < observation(empty)["position"]["y"] - 40
+    assert observation(ladder)["activity"] == "climbing"
+    assert observation(ladder)["contact"]["object_id"] == "ladder"
     off, on = fresh_world(1), fresh_world(1)
     for world, enabled in ((off, False), (on, True)):
         evolve(world, {"operation": "add", "object": {"id": "fan", "kind": "fan", "x": 80, "y": 440, "range": 300, "force": 1000, "angle": 0, "enabled": enabled}})

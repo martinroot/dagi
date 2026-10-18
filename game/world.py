@@ -51,7 +51,7 @@ def fresh_world(session_id):
         "revision": 0, "tick": 0, "gravity": 900,
         "nodes": {name: {"x": 180.0 + x, "y": 450.0 + y, "px": 180.0 + x, "py": 450.0 + y} for name, (x, y) in OFFSETS.items()},
         "controller": {"speed": 95, "balance": 0.85, "stride": 12, "jump": 310},
-        "objects": [], "behaviors": {}, "goal": None, "reflections": [], "history": [], "motion": [],
+        "objects": [], "behaviors": {}, "goal": None, "reflections": [], "history": [], "motion": [], "activity": "idle",
         "widgets": [], "components": [], "theme": {"background": "#ffffff", "accent": "#e6703a"},
         "version": 0, "draft": None, "last_release": None, "previous": None, "browser_report": None,
     }
@@ -60,7 +60,8 @@ def fresh_world(session_id):
 def upgrade(world):
     """Additive migration of v1 saved worlds; reading never resets a learned body."""
     for name, value in {"widgets": [], "components": [], "theme": {"background": "#ffffff", "accent": "#e6703a"},
-                        "version": 0, "draft": None, "last_release": None, "previous": None, "browser_report": None}.items():
+                        "version": 0, "draft": None, "last_release": None, "previous": None, "browser_report": None,
+                        "activity": "idle"}.items():
         world.setdefault(name, copy.deepcopy(value))
     world["schema_version"] = 2
     return world
@@ -107,6 +108,8 @@ def observation(world):
         "avatar_state": avatar_state(world),
         "tick": world["tick"], "seconds": round(world["tick"] * DT, 2),
         "position": {"x": round(hip["x"], 2), "y": round(hip["y"], 2)},
+        "activity": world.get("activity", "idle"),
+        "contact": _contact_view(world),
         "upright": upright, "grounded": grounded,
         "physics": {"gravity": world["gravity"], "step_hz": 60, "floor_y": FLOOR, "width": WIDTH,
                     "clock": "action-driven", "solver": "Verlet + distance constraints + circle/AABB contacts; assisted posture motor"},
@@ -117,6 +120,25 @@ def observation(world):
         "autonomy_execution": copy.deepcopy(world.get("autonomy_execution")),
         "version": world.get("version", 0), "widget_count": len(world.get("widgets", [])),
     }
+
+
+def _ladder_contact(world):
+    """Nearest climbable ladder the body is beside; proximity evidence, not proof of grip."""
+    hip = world["nodes"]["hip"]
+    for obj in world["objects"]:
+        if obj["kind"] != "ladder":
+            continue
+        if abs(hip["x"] - obj["x"]) <= obj["width"] / 2 + 24 and obj["y"] - 20 <= hip["y"] <= obj["y"] + obj["height"] + 20:
+            return obj
+    return None
+
+
+def _contact_view(world):
+    contact = _ladder_contact(world)
+    if contact is None:
+        return None
+    return {"object_id": contact["id"], "kind": contact["kind"], "x": contact["x"], "y": contact["y"],
+            "height": contact["height"], "scope": "body is beside a climbable ladder; proximity evidence only, not proof of a grip"}
 
 
 def _on_surface(world, p, tolerance):
@@ -174,13 +196,16 @@ def _step(world, direction, climbing=0):
             strength = motor["balance"] * 0.08
             p["x"] += (base_x + ox - p["x"]) * strength
             p["y"] += (base_y + oy - p["y"]) * strength
+    world["activity"] = "walking" if direction else ("airborne" if not grounded else "idle")
     if climbing:
-        ladder = next((o for o in world["objects"] if o["kind"] == "ladder"
-                       and abs(hip["x"] - o["x"]) <= o["width"] / 2 + 30
-                       and o["y"] - 10 <= hip["y"] <= o["y"] + o["height"] + 10), None)
+        ladder = _ladder_contact(world)
         if ladder:
+            # Grabbing the ladder pulls the body onto its rail, then rungs advance y.
+            shift = (ladder["x"] - hip["x"]) * 0.4
             for p in nodes.values():
+                p["x"] += shift
                 p["y"] += climbing * motor["speed"] * DT - (p["y"] - p["py"]) * 0.9
+            world["activity"] = "climbing"
     # Assisted stance reacts to actual nearby support; no support -> no levitation.
     supports = [FLOOR] + [o["y"] for o in world["objects"] if o["kind"] == "block"
                           and o["x"] <= hip["x"] <= o["x"] + o["width"] and o["y"] >= hip["y"]]
@@ -246,6 +271,8 @@ def act(world, args, cancelled=lambda: False, stop_on_goal=False):
     motion = [frame(world)]
     for step in steps:
         action, frames, _ignored = validate_action(step)
+        if action in {"climb_up", "climb_down"} and _ladder_contact(world) is None:
+            raise ValueError("climb requires contact with a ladder; approach the ladder first")
         if action == "jump" and observation(world)["grounded"]:
             for p in world["nodes"].values():
                 p["py"] = p["y"] + world["controller"]["jump"] * DT

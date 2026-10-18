@@ -42,7 +42,10 @@ means right, negative left. Follow direction_to_goal; positive goal_progress.dis
 means moving away. Near the target use 1-5 frame pulses, reverse if error changes
 sign or distance grows, and stop when goal.passed. A pose check is not the whole task.
 Physics advances only through game_act. A draft blocks game_act/game_goal until tested
-and committed or discarded. Saved game_evolve behaviors are your editable programs;
+and committed or discarded. climb_up/climb_down move the body only while it is beside a
+ladder (scene contact evidence); without contact game_act refuses and the world does not
+drift, so approach with left/right first. While climbing the body snaps to the ladder rail,
+activity=climbing and contact are measurable, and grounded is false. Saved game_evolve behaviors are your editable programs;
 workspace files do not hot-load into the Python engine, and no host code is executed.
 Only your session's world/body is available; do not claim unmeasured success.
 
