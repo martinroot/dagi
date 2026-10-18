@@ -116,9 +116,15 @@ def program_complexity(steps):
 
 
 def program_identity(world):
-    return [{"name": name, "version": digest(steps)[:12], "steps": len(steps),
-             "frames_per_cycle": sum(step["frames"] for step in steps), **program_complexity(steps)}
-            for name, steps in sorted(world.get("behaviors", {}).items())]
+    identities = []
+    for name, steps in sorted(world.get("behaviors", {}).items()):
+        phases = sorted({step["phase"] for step in steps if step.get("phase")})
+        identity = {"name": name, "version": digest(steps)[:12], "steps": len(steps),
+                    "frames_per_cycle": sum(step["frames"] for step in steps), **program_complexity(steps)}
+        if phases:
+            identity["phases"] = phases
+        identities.append(identity)
+    return identities
 
 
 def render_game_context(database, session_id, workspace, model):
@@ -548,7 +554,7 @@ def register_game(tools):
          {"view": {"type": "string", "enum": ["state", "objects", "behaviors", "widgets", "components", "component_source", "source", "draft", "catalog", "brain"]}, "path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, [], lambda a, c: inspect(a), True),
         ("game_act", "Advance your body. Simple actions use frames and omit name. Behavior programs are persistent, versioned self-skills: provide name and cycles=1..10 (<=2400 total frames) to execute locally without an MLL call per step. Execution progress is persisted and shown in the world; stop_on_goal defaults true when a goal exists, set false for non-goal skills such as dance. While a draft is open, live actions are blocked; test/commit or discard first. Returns signed goal direction and distance progress; a tool success is not goal success.",
          {"action": {"type": "string", "enum": ["left", "right", "idle", "jump", "climb_up", "climb_down", "behavior"]}, "frames": {"type": "integer", "minimum": 1, "maximum": 240, "description": "Used for simple actions; ignored for behavior."}, "name": {"type": "string", "description": "Required for behavior; omit or leave empty for simple actions."}, "cycles": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Repeat saved behavior program locally; total execution capped at 2400 frames."}, "stop_on_goal": {"type": "boolean", "description": "For behavior programs, stop immediately when the configured goal passes; defaults true when a goal exists."}}, ["action"], lambda a, c: mutate(act, a, c), False),
-        ("game_evolve", "Change your own world/behavior. add object {id,kind:block|marker|ladder|fan,x,y,...}; see game_inspect catalog for fields. remove uses id; controller values {speed:0..180,balance:0..1,stride:0..24,jump:0..450}; physics values {gravity:100..1600}; behavior name,steps:[{action,frames}] (<=8 steps, <=960 frames). Edits go into an open draft when present; configuration success needs testing.",
+        ("game_evolve", "Change your own world/behavior. add object {id,kind:block|marker|ladder|fan,x,y,...}; see game_inspect catalog for fields. remove uses id; controller values {speed:0..180,balance:0..1,stride:0..24,jump:0..450}; physics values {gravity:100..1600}; behavior name,steps:[{action,frames,phase?}] (<=16 steps, <=960 frames, optional phase labels, a step may reference another behavior up to depth 2). Edits go into an open draft when present; configuration success needs testing.",
          {"operation": {"type": "string", "enum": ["add", "remove", "controller", "physics", "behavior"]}, "object": {"type": "object"}, "id": {"type": "string"}, "values": {"type": "object"}, "name": {"type": "string"}, "steps": {"type": "array", "items": {"type": "object"}}}, ["operation"], lambda a, c: mutate(evolve, a, c), False),
         ("game_goal", "Configure a reach-x check from the human request: upright and grounded within tolerance of x. This check verifies only that pose; it is distinct from completing the user's overall task.",
          {"x": {"type": "number"}, "tolerance": {"type": "number"}, "label": {"type": "string"}}, ["x"], lambda a, c: mutate(set_goal, a, c), False),

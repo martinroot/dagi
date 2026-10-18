@@ -158,7 +158,7 @@ def stored_world(tmp_path):
     (evolve, {"operation": "controller", "values": {"speed": float("nan")}}),
     (evolve, {"operation": "controller", "values": {"speed": 100, "balance": 2}}),
     (evolve, {"operation": "add", "object": {"id": "bad", "kind": "block", "x": 170, "y": 400, "width": 50, "height": 100}}),
-    (evolve, {"operation": "behavior", "name": "loop", "steps": [{"action": "behavior", "name": "loop"}]}),
+    (evolve, {"operation": "behavior", "name": "bad-phase", "steps": [{"action": "idle", "frames": 8, "phase": 123}]}),
     (evolve, {"operation": "add", "object": {"id": "marker", "kind": "marker", "x": 10, "y": 10, "width": {"unused": "payload"}}}),
     (evolve, {"operation": "behavior", "name": "payload", "steps": [{"action": "idle", "name": {"unused": "payload"}}]}),
 ])
@@ -510,6 +510,43 @@ def test_web_agent_chat_moves_its_own_body_persists_evidence_and_new_session_is_
         assert json.loads(again)["frame"] == body["frame"]
     finally:
         _stop(server, thread)
+
+
+def test_long_phased_behavior_program_is_accepted_and_executes():
+    world = fresh_world(1)
+    steps = [{"action": "right", "frames": 8, "phase": "approach"},
+             {"action": "climb_up", "frames": 8, "phase": "rise"},
+             {"action": "climb_down", "frames": 8, "phase": "return"},
+             {"action": "left", "frames": 8, "phase": "recover"}]
+    evolve(world, {"operation": "add", "object": {"id": "ladder", "kind": "ladder", "x": 200, "y": 260, "width": 35, "height": 280}})
+    long_steps = steps + [{"action": "idle", "frames": 8, "phase": f"hold{i}"} for i in range(8)]
+    evolve(world, {"operation": "behavior", "name": "phased", "steps": long_steps})
+    program = program_identity({"behaviors": {"phased": long_steps}})[0]
+    assert program["steps"] == 12
+    assert set(program["phases"]) >= {"approach", "rise", "return", "recover"}
+    act(world, {"action": "behavior", "name": "phased"})
+    assert world["tick"] == 96
+    with pytest.raises(ValueError, match="1..16 steps"):
+        evolve(world, {"operation": "behavior", "name": "too-long", "steps": [{"action": "idle", "frames": 8}] * 17})
+
+
+def test_behavior_chaining_expands_referenced_programs_and_rejects_cycles():
+    world = fresh_world(1)
+    evolve(world, {"operation": "behavior", "name": "base", "steps": [{"action": "right", "frames": 10}]})
+    evolve(world, {"operation": "behavior", "name": "combo", "steps": [
+        {"action": "behavior", "name": "base"}, {"action": "jump", "frames": 10}]})
+    act(world, {"action": "behavior", "name": "combo"})
+    assert world["tick"] == 20
+    evolve(world, {"operation": "behavior", "name": "loop-a", "steps": [{"action": "behavior", "name": "loop-b"}]})
+    evolve(world, {"operation": "behavior", "name": "loop-b", "steps": [{"action": "behavior", "name": "loop-a"}]})
+    with pytest.raises(ValueError, match="cycle"):
+        act(world, {"action": "behavior", "name": "loop-a"})
+    evolve(world, {"operation": "behavior", "name": "deep-1", "steps": [{"action": "behavior", "name": "deep-2"}]})
+    evolve(world, {"operation": "behavior", "name": "deep-2", "steps": [{"action": "behavior", "name": "deep-3"}]})
+    evolve(world, {"operation": "behavior", "name": "deep-3", "steps": [{"action": "behavior", "name": "deep-4"}]})
+    evolve(world, {"operation": "behavior", "name": "deep-4", "steps": [{"action": "idle", "frames": 4}]})
+    with pytest.raises(ValueError, match="depth"):
+        act(world, {"action": "behavior", "name": "deep-1"})
 
 
 def test_climb_actions_require_ladder_contact_and_are_refused_without_it():

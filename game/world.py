@@ -228,8 +228,12 @@ def _step(world, direction, climbing=0):
     world["tick"] += 1
 
 
+MAX_BEHAVIOR_STEPS = 16
+MAX_CHAIN_DEPTH = 2
+
+
 def validate_action(args):
-    keys(args, ("action", "frames", "name"))
+    keys(args, ("action", "frames", "name", "phase"))
     action = args.get("action")
     if not isinstance(action, str) or action not in {"left", "right", "idle", "jump", "climb_up", "climb_down", "behavior"}:
         raise ValueError("action must be left, right, idle, jump, climb_up, climb_down, or behavior")
@@ -243,15 +247,44 @@ def validate_action(args):
                 raise ValueError("frames must be an integer")
             ignored.append("frames")
         return action, None, ignored
+    if args.get("phase") not in (None, ""):
+        text(args["phase"], 40, "phase")
     if "name" in args:
         if args["name"] != "":
             raise ValueError("name is only valid for action=behavior")
         ignored.append("name")
+    if args.get("phase") is not None:
+        ignored.append("phase")
     frames = args.get("frames", 60)
     number(frames, 1, 240, "frames")
     if not isinstance(frames, int):
         raise ValueError("frames must be an integer")
     return action, frames, ignored
+
+
+def _expand_steps(world, steps, depth=0, seen=()):
+    """Expand chained behavior references with cycle and depth guards."""
+    expanded = []
+    for step in steps:
+        action, frames, _ignored = validate_action(step)
+        if action == "behavior":
+            name = step.get("name")
+            if name in seen:
+                raise ValueError("behavior chaining cycle: " + str(name))
+            if depth >= MAX_CHAIN_DEPTH:
+                raise ValueError("behavior chaining exceeds the supported depth")
+            nested = world["behaviors"].get(name)
+            if nested is None:
+                raise ValueError("unknown behavior")
+            expanded.extend(_expand_steps(world, nested, depth + 1, seen + (name,)))
+        else:
+            entry = {"action": action, "frames": frames}
+            if step.get("phase"):
+                entry["phase"] = step["phase"]
+            expanded.append(entry)
+    if sum(step["frames"] for step in expanded) > 960:
+        raise ValueError("expanded behavior exceeds 960 frames")
+    return expanded
 
 
 def act(world, args, cancelled=lambda: False, stop_on_goal=False):
@@ -263,6 +296,7 @@ def act(world, args, cancelled=lambda: False, stop_on_goal=False):
         steps = world["behaviors"].get(args["name"])
         if steps is None:
             raise ValueError("unknown behavior")
+        steps = _expand_steps(world, steps)
     else:
         steps = [{"action": action, "frames": frames}]
     frames_requested = sum(step["frames"] for step in steps)
@@ -369,14 +403,13 @@ def evolve(world, args):
     elif operation == "behavior":
         name = text(args.get("name"), 40, "name")
         steps = args.get("steps")
-        if not isinstance(steps, list) or not 1 <= len(steps) <= 8:
-            raise ValueError("behavior requires 1..8 steps")
+        if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_BEHAVIOR_STEPS:
+            raise ValueError(f"behavior requires 1..{MAX_BEHAVIOR_STEPS} steps")
         total = 0
         for step in steps:
             action, frames, _ignored = validate_action(step)
-            if action == "behavior":
-                raise ValueError("nested behaviors are not supported")
-            total += frames
+            if frames:
+                total += frames
         if total > 960 or (name not in world["behaviors"] and len(world["behaviors"]) >= 12):
             raise ValueError("behavior limit: 960 frames, 12 named behaviors")
         world["behaviors"][name] = copy.deepcopy(steps)
