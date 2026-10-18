@@ -6,6 +6,7 @@ from dagi_core.agent import Agent, AgentEvent
 from dagi_core.provider import StreamEvent
 from dagi_core.state import StateStore
 from dagi_core.tools import Tool, ToolRegistry, ToolResult
+from dagi_core.usage import UsagePolicy
 
 
 class FakeProvider:
@@ -294,7 +295,7 @@ def test_structured_tool_presentation_is_persisted_without_replacing_text_result
     state.close()
 
 
-def test_provider_error_and_tool_round_limit_have_distinct_run_statuses(tmp_path, monkeypatch):
+def test_provider_error_and_provider_call_limit_have_distinct_run_statuses(tmp_path):
     class FailingProvider:
         def stream(self, *_args):
             raise RuntimeError("network failed")
@@ -308,7 +309,6 @@ def test_provider_error_and_tool_round_limit_have_distinct_run_statuses(tmp_path
     assert "network failed" in next(event for event in error_events if event.kind == "error").text
     error_state.close()
 
-    monkeypatch.setattr("dagi_core.agent.MAX_TOOL_ROUNDS", 1)
     limit_state = StateStore(tmp_path / "limit.sqlite3")
     limit_session = limit_state.create_session()
     limit_tools = ToolRegistry(tmp_path / "limit-workspace", limit_state, limit_session)
@@ -316,11 +316,40 @@ def test_provider_error_and_tool_round_limit_have_distinct_run_statuses(tmp_path
         StreamEvent(kind="tool_call", tool_call={"id": "call-limit", "name": "unknown", "arguments": {}}),
         StreamEvent(kind="finish", finish_reason="tool_calls"),
     ]])
-    limit_events = list(Agent(provider, limit_tools, limit_state, limit_session).run_turn("loop"))
+    limit_events = list(Agent(provider, limit_tools, limit_state, limit_session,
+                              usage_policy=UsagePolicy(max_calls_per_run=1)).run_turn("loop"))
     limit_run = limit_state.get_run(limit_events[0].run_id)
     assert limit_run["status"] == "limit"
     assert limit_run["status"] != error_run["status"]
     limit_state.close()
+
+
+def test_configured_provider_budget_can_exceed_default_tool_round_cap(tmp_path):
+    state = StateStore(tmp_path / "round-budget.sqlite3")
+    session = state.create_session()
+    tools = ToolRegistry(tmp_path / "round-budget-workspace", state, session)
+    tools.register(Tool("noop", "Return a deterministic no-op result.",
+                        {"type": "object", "properties": {}},
+                        lambda _arguments: ToolResult("ok")))
+    responses = [
+        [StreamEvent(kind="tool_call", tool_call={
+            "id": f"call-round-{index}", "name": "noop", "arguments": {},
+        }), StreamEvent(kind="finish", finish_reason="tool_calls")]
+        for index in range(17)
+    ]
+    responses.append([StreamEvent(kind="text", text="Finished all 17 steps."),
+                      StreamEvent(kind="finish", finish_reason="stop")])
+    provider = FakeProvider(responses)
+    agent = Agent(provider, tools, state, session, usage_policy=UsagePolicy(max_calls_per_run=25))
+
+    events = list(agent.run_turn("perform 17 deterministic steps"))
+
+    run = state.get_run(events[-1].run_id)
+    assert run["status"] == "completed"
+    assert len(provider.requests) == 18
+    assert state.usage_summary_for_budget(events[-1].run_id)["provider_calls"] == 18
+    assert sum(call["status"] == "succeeded" for call in state.list_tool_calls(session)) == 17
+    state.close()
 
 
 def test_agent_can_run_against_independent_sessions(tmp_path):

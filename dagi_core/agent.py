@@ -331,7 +331,8 @@ class Agent:
                     return
 
             user_message_id = self.state.append_message(session_id, {"role": "user", "content": user_text})
-            for _round in range(MAX_TOOL_ROUNDS):
+            tool_round_limit = max(MAX_TOOL_ROUNDS, self.usage_policy.max_calls_per_run)
+            for _round in range(tool_round_limit):
                 check_cancelled()
                 stop_reason = self.usage_policy.stop_reason(self.state.usage_summary_for_budget(run_id))
                 if stop_reason:
@@ -495,7 +496,7 @@ class Agent:
                     break
             else:
                 status = "limit"
-                error_text = f"stopped after {MAX_TOOL_ROUNDS} tool rounds"
+                error_text = f"stopped after {tool_round_limit} tool rounds"
                 yield event("error", text=error_text)
 
             yield event("done", status=status)
