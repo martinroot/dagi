@@ -125,6 +125,19 @@ live model) and states that boundary explicitly. The layout section gained the
 workshop modules (`game/rigid.py`, `game/embodiment.py`, `game/mechanics.py`,
 `game/workshop.py`, `game/director.py`) and `docs/examples/`.
 
+## Session 32 diagnosis and learning-turn fix (2026-10-19)
+
+**Diagnosis (persisted log, read-only).** Session «научись ходить» run had used all 12 tool calls of the turn: two `game_train plan` calls rejected on contract-expression grammar before the third succeeded, one `game_observe view=learning path=learning` failed on path misuse, then two `game_iteration` calls repaired the balance controller — and the run ended with «provider call limit reached». Nothing was published (version 0, no active policy), while the world kept ticking (tick 182123, no controller, body grounded). The learning plan and attempts persisted: `balance` 2 attempts, `walk_forward` 0.
+
+**Root causes and fixes** (commit `ee065f4`, issue #62):
+
+1. The 12-call game-turn cap cut legitimate learning work short: plan + schema reads + per-skill iteration+publish cannot fit in one turn. Cap raised 12 → 16 (`GAME_TURN_CALL_CAP`), still bounded by the operator's per-run limit; README headroom note updated.
+2. Contract expression errors were a bare grammar lecture; they now name the failing field (metric expression / fitness score / success predicate / guard).
+3. Unknown skill ids in `game_train` now list available skills; the `view=learning` path error that cost a call is covered by the planner contract.
+4. Flaky under full-suite CPU load: director invalid-channels assertion depended on *which phase* rejected (project vs command); now one expectation covers both phases.
+
+**Live evidence (continuation run after deploy, capped at 16).** `balance` attempts 2 → 9, every attempt measured: score 0.0 → 1.033 → 1.050 → 1.082 → 1.181 → 1.164, guards pass, `upright_ratio` 0.18 vs target 0.5 → every attempt honestly failed and none was published *as mastered*; three candidate revisions published under the publish≠mastery rule; a hypothesis lesson was recorded («Оценка не дошла до физики…»). `walk_forward` correctly blocked by its `depends:[balance]` dependency — the DAG gates progress upstream exactly as the contract claims. One confirmed remaining gap: the agent tried to read a failed candidate's source and got «unknown failed candidate source file» — candidate sources are stored by hash, and the read path needs an index by attempt (not yet fixed).
+
 ## Skill Fitness Lab v8 integration (2026-10-19)
 
 Operator archive `dagi_v8.zip` (0.7.0) supplied sources only — no patch, no START_HERE. Their snapshot already contained every prior integration through the README rewrite, so the change set (11 modified, 5 new: `game/learning.py`, `game/static/learning.js`, `game/LEARNING.md`, `game/WALKING_FITNESS.json`, learning tests) was reviewed file-by-file and applied. The snapshot's stale `cdabb01`-era task map was deliberately not copied.
