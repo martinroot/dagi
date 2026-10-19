@@ -65,6 +65,16 @@ GAME_DESIGN_DESCRIPTION = (
     "dynamic bodies fall, collide and exchange two-way impulses with your skeleton."
 )
 
+GAME_ITERATION_DESCRIPTION = (
+    "Submit one coherent self-modification: objective plus changes[] of design/visual edits; it runs real baseline/candidate "
+    "physics and publishes a passing result (play defaults true). Exact change fields: policy {name,code,description,activate?,params?}; "
+    "appearance {values:{stroke,accent,fill,line_width,head_radius,joint_radius,trail}}; material {values:{damping,vertical_damping,friction,pose_strength,stiffness,iterations}}; "
+    "body {body:{id,shape,rect:width,height|circle:radius,x,y,mass,restitution,color,label?}}; joint {joint:{...}}; component {component:{...}}; "
+    "widget {widget:{...}}; todo {id,item_id,done}; theme {values:{background,accent}}; remove_component/remove_widget {id}. "
+    "Legacy game_evolve shapes (add/remove/controller/physics/behavior) are NOT accepted here; call game_observe view=schema for exact current syntax. "
+    "Optional search {parameter,values:[numbers],score:expression over trial metrics r} evaluates <=8 alternatives locally, higher score wins; no model call per simulation step."
+)
+
 GAME_PROMPT = SYSTEM_PROMPT + """
 
 You are the visible stickman. Brain: LLM API; learned abilities: editable executable
@@ -509,7 +519,7 @@ def register_game(tools, life=None):
     specs = [
         ("game_observe","Read compact state, current code, schema, draft or an allowlisted source. Schema contains exact code/output syntax; use it once, not before every small edit.",
          {"view":{"type":"string","enum":["state","code","schema","draft","source"]},"path":{"type":"string"}},[],observing,True),
-        ("game_iteration","Submit one coherent self-modification: objective and changes[] (design/visual edits). Runs real baseline/candidate physics and publishes a passing result; play defaults true. Optional search {parameter,values:[numbers],score:expression using r metrics} evaluates <=8 alternatives locally, higher score wins. No model call per simulation step. Runtime stays alive while testing.",
+        ("game_iteration",GAME_ITERATION_DESCRIPTION,
          {"objective":{"type":"string"},"changes":{"type":"array","items":{"type":"object"}},"search":{"type":"object"},"play":{"type":"boolean"}},["objective","changes"],iteration,False),
         ("game_life","Control your live physical body directly without asking the human to click: play (no API calls for execution), pause, or discard an unfinished legacy draft.",
          {"action":{"type":"string","enum":["play","pause","discard"]}},["action"],life_tool,False),

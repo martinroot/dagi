@@ -5,6 +5,7 @@ import json
 import time
 from threading import Event, Lock, Thread
 
+from .turns import game_call_cap
 from .living import advance
 from .store import GameStore, clock_tick, enable_live, disable_live, live_slot
 from .world import keys, observation
@@ -105,7 +106,7 @@ class LifeRuntime:
             self._start_threads()
         if cancel_control is not None:
             self.app._cancel_control(cancel_control)
-        return {"life": result, "max_provider_calls_per_iteration": min(8,self.app.config.usage_policy.max_calls_per_run),
+        return {"life": result, "max_provider_calls_per_iteration": game_call_cap(self.app.config.usage_policy.max_calls_per_run),
                 "scope": "Start authorizes bounded model turns; play uses no model calls. Pause cancels the owned turn. No auto-resume after server restart."}
 
     def _start_threads(self):

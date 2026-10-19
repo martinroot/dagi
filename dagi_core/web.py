@@ -35,7 +35,7 @@ from .workspace import resolve_session_workspace
 from .goals import validate_checks, verify
 from .worker import load_workers
 from game.bridge import GAME_PROMPT, identity as game_identity, register_game, render_game_context
-from game.turns import GameContext
+from game.turns import GameContext, game_call_cap
 from game.life import LifeRuntime
 from game.store import GameStore, live_slot
 from game.world import PAIRS, frame as game_frame, observation as game_observation
@@ -1242,7 +1242,7 @@ class WebApp:
                 state,
                 session_id,
                 system_prompt=GAME_PROMPT if is_game else SYSTEM_PROMPT,
-                usage_policy=replace(self.config.usage_policy,max_calls_per_run=min(8,self.config.usage_policy.max_calls_per_run)) if is_game else self.config.usage_policy,
+                usage_policy=replace(self.config.usage_policy,max_calls_per_run=game_call_cap(self.config.usage_policy.max_calls_per_run)) if is_game else self.config.usage_policy,
                 context_builder=context,
                 agent_id=self.agent_id,
                 agent_name=self.config.model,

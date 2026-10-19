@@ -16,6 +16,21 @@ from .studio import build, activate, configuration, digest, snapshot
 from .store import GameStore, live_slot
 from .world import observation
 
+GAME_TURN_CALL_CAP = 12
+DESIGN_CHANGE_OPERATIONS = {"policy", "appearance", "material", "body", "joint",
+                            "component", "remove_component", "widget", "remove_widget", "todo", "theme"}
+CHANGE_SCHEMA_HINT = (
+    "each change must be a design/visual edit: policy {name,code,description,activate?,params?}; "
+    "appearance {values}; material {values}; body {body}; joint {joint}; "
+    "component {component}; widget {widget}; todo {id,item_id,done}; theme {values}; remove_component/remove_widget {id}. "
+    "Use game_observe view=schema for the exact current syntax."
+)
+
+
+def game_call_cap(operator_cap):
+    """Game turns keep a bounded model budget with discovery headroom."""
+    return min(GAME_TURN_CALL_CAP, operator_cap)
+
 
 class GameContext(ContextBuilder):
     def build(self, session_id, run_id, system_prompt, tools, *, runtime_context_factory=None):
@@ -89,6 +104,9 @@ def iterate(database, session_id, args, cancelled=lambda:False, on_publish=None)
     changes = args.get("changes")
     if not isinstance(changes,list) or not 1<=len(changes)<=8:
         raise ValueError("changes must contain 1..8 design/visual edits")
+    for change in changes:
+        if not isinstance(change,dict) or change.get("operation") not in DESIGN_CHANGE_OPERATIONS:
+            raise ValueError("unsupported change shape: " + CHANGE_SCHEMA_HINT)
     with GameStore(database) as store:
         original = store.get(session_id)
     if original is None:

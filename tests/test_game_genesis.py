@@ -182,6 +182,34 @@ def test_atomic_iteration_optimizes_locally_publishes_and_starts_without_human_b
     finally:_stop(server,thread)
 
 
+def test_iteration_rejects_legacy_change_shapes_with_the_design_schema(tmp_path):
+    with closing(StateStore(tmp_path/"state.db")) as state:
+        sid=state.create_session()
+        with GameStore(state.path) as store:store.create(sid)
+        for change in ({"operation":"add","object":{"id":"ball","kind":"ball","x":250,"y":510,"radius":14}},
+                       {"operation":"behavior","name":"pace","steps":[{"action":"right","frames":10}]}):
+            with pytest.raises(ValueError) as exc:
+                iterate(state.path,sid,{"objective":"Legacy shape","changes":[change]})
+            message=str(exc.value)
+            assert "game_observe view=schema" in message
+            assert "policy" in message and "body" in message
+            assert "id, kind, x, y, width, height, label" not in message
+
+
+def test_game_iteration_description_carries_exact_change_schema():
+    from game.bridge import GAME_ITERATION_DESCRIPTION
+    for needle in ("policy","appearance","material","body","joint","view=schema","objective","changes"):
+        assert needle in GAME_ITERATION_DESCRIPTION, needle
+
+
+def test_game_turn_cap_grants_discovery_headroom():
+    from game.turns import game_call_cap, GAME_TURN_CALL_CAP
+    assert GAME_TURN_CALL_CAP == 12
+    assert game_call_cap(25) == 12
+    assert game_call_cap(6) == 6
+    assert game_call_cap(100) == 12
+
+
 def test_failed_atomic_change_does_not_publish_or_replace_working_world(tmp_path):
     with closing(StateStore(tmp_path/"state.db")) as state:
         sid=state.create_session()
