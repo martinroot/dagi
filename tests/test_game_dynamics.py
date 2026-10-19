@@ -60,3 +60,43 @@ def test_authored_folded_actor_gets_to_foot_support_using_only_muscles():
     assert w['nodes']['head']['y']<410 and len(w['contacts']['support'])>=2
     assert supports(w)==0 and w['energy'].get('stage_work',0)==0
     assert w['dynamics']['mass']>10 and w['dynamics']['support_margin'] is not None
+
+
+def test_flight_brace_clamps_solver_overshoot_before_submitting_joint_targets():
+    from game.living import command
+    w=install(fresh_world(1));sim=RigidSimulator(w)
+    w['tick']=22.8*60;w['dynamics'].update(airborne=True,contacts=[],velocity=[0,-150])
+    w['project_state']={'jumpStart':21,'launch':22.5,'land':None,
+        'airPose':{name:j['max']+.002 for name,j in w['articulation'].items()}}
+    output=command(w)
+    from game.embodiment import validate
+    validate(w,output)
+    assert w['project_state']['launch']==22.5
+
+
+def test_authored_heel_extends_real_contact_geometry_not_only_appearance():
+    from game.character import edit
+    w=install(fresh_world(1))
+    edit(w,{'operation':'character','values':{'bones':{'right_toe':{'heel':9}}}})
+    sim=RigidSimulator(w);body,length,_,_=sim.segments['right_toe']
+    shape=next(s for s in body.shapes if hasattr(s,'a'))
+    assert shape.a.x==-length/2-9
+    assert body.moment>0 and w['character']['bones']['right_toe']['heel']==9
+
+
+def test_full_physical_film_lands_and_holds_support_without_external_assistance():
+    w=install(fresh_world(1));sim=RigidSimulator(w);peak=0;bad_contacts=set();stable=0;initial_y=None
+    while w['tick']/60<32:
+        advance(w,1,simulator=sim,diagnostics=False,time_scale=None)
+        d=w['dynamics'];t=w['tick']/60
+        if 20<t<21:initial_y=d['com'][1]
+        if t>21:
+            peak=max(peak,(initial_y or d['com'][1])-d['com'][1])
+            bad_contacts.update(set(d['contacts'])-{'left_foot','right_foot','left_toe','right_toe'})
+        if t>27:
+            steady=1.2<d['torso']['angle']<1.85 and abs(d['torso']['velocity'])<.6 and len(w['contacts']['support'])>=2
+            stable=stable+w['step_dt'] if steady else 0
+    assert not bad_contacts
+    assert peak>45 and stable>=4.5
+    assert w['project_state']['success'] and not w['project_state'].get('failed')
+    assert supports(w)==0 and w['energy'].get('stage_work',0)==0

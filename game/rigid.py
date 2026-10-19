@@ -49,7 +49,8 @@ class RigidSimulator:
             spec=character["bones"][b] if character else None
             radius=spec["radius"] if spec else 4
             mass = spec["mass"] if spec else 4.0 if b == "hip" else .8 if "knee" in b else .55
-            body = pymunk.Body(mass, pymunk.moment_for_segment(mass, (-length / 2, 0), (length / 2, 0), radius))
+            heel=spec.get("heel",0) if spec and b.endswith("toe") else 0
+            body = pymunk.Body(mass, pymunk.moment_for_segment(mass, (-length / 2-heel, 0), (length / 2, 0), radius))
             body.position = (pa + pb) / 2
             body.angle = (pb - pa).angle
             if self.physical:
@@ -64,7 +65,7 @@ class RigidSimulator:
             va=pymunk.Vec2d((nodes[a]["x"]-nodes[a]["px"])*60,(nodes[a]["y"]-nodes[a]["py"])*60)
             vb=pymunk.Vec2d((nodes[b]["x"]-nodes[b]["px"])*60,(nodes[b]["y"]-nodes[b]["py"])*60)
             body.angular_velocity=delta.cross(vb-va)/max(.01,length**2)
-            capsule = pymunk.Segment(body, (-length / 2, 0), (length / 2, 0), radius)
+            capsule = pymunk.Segment(body, (-length / 2-heel, 0), (length / 2, 0), radius)
             if character and b=="hip":
                 sw=max(radius*2,character["shoulder_width"]);hw=max(radius,character["hip_width"])
                 vertices=[(-length/2,-radius*.4),(-length/2+8,-sw/2),(length/2-3,-hw/2),(length/2+radius*.3,0),(length/2-3,hw/2),(-length/2+8,sw/2),(-length/2,radius*.4)]

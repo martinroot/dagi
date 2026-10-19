@@ -9,7 +9,7 @@ function distantPlane(ctx){
 function vectorLandscapeStatic(ctx,env,art){
  ctx.save();distantPlane(ctx);
  const data={art},at=art.atmosphere||{},depth=at.depth??.7,haze=at.haze??.3;
- const sky=ctx.createLinearGradient(0,-300,0,540);sky.addColorStop(0,artTone(artMix(env.sky_top,'#203f58',.2),data));sky.addColorStop(.63,artTone(env.sky_top,data));sky.addColorStop(1,artTone(env.sky_bottom,data));ctx.fillStyle=sky;ctx.fillRect(-2000,-2000,5000,4600);
+ const sky=ctx.createLinearGradient(0,-300,0,540);sky.addColorStop(0,artTone(artMix(env.sky_top,'#203f58',env.sky_top==='#ffffff'&&env.sky_bottom==='#ffffff'?0:.2),data));sky.addColorStop(.63,artTone(env.sky_top,data));sky.addColorStop(1,artTone(env.sky_bottom,data));ctx.fillStyle=sky;ctx.fillRect(-2000,-2000,5000,4600);
  const sun=env.sun,light=art.key;
  if(sun?.radius){
   const g=ctx.createRadialGradient(light.x,light.y,0,light.x,light.y,370);g.addColorStop(0,artTone(light.color,data)+'b0');g.addColorStop(.17,artTone(light.color,data)+'33');g.addColorStop(1,artTone(light.color,data)+'00');ctx.fillStyle=g;ctx.fillRect(light.x-370,light.y-370,740,740);
@@ -21,11 +21,13 @@ function vectorLandscapeStatic(ctx,env,art){
    const p=k/3,baseY=380+k*37,height=(95-k*15)*depth,color=artMix(env.sky_bottom,env.ground_bottom,.2+p*.23);
    ctx.save();const parallax=(1-p)*.45;if(typeof shot!=='undefined')ctx.translate((shot.x-500)*parallax,(shot.y-300)*parallax*.5);
    ctx.beginPath();ctx.moveTo(-100,540);ctx.lineTo(-100,baseY);
-   for(let x=-100;x<=1100;x+=24){const y=baseY-(Math.sin(x*.013+k*1.9)*.4+Math.sin(x*.027+k*.4)*.28+.4)*height;ctx.lineTo(x,y);}
+   const ridge=[];for(let x=-100;x<=1124;x+=24){const y=baseY-(Math.sin(x*.013+k*1.9)*.4+Math.sin(x*.027+k*.4)*.28+.4)*height;ridge.push([x,y]);}
+   for(let i=0;i<ridge.length-1;i++){const p=ridge[i],q=ridge[i+1];ctx.quadraticCurveTo(p[0],p[1],(p[0]+q[0])/2,(p[1]+q[1])/2);}
    ctx.lineTo(1100,540);ctx.closePath();const g=ctx.createLinearGradient(0,baseY-height,0,540);g.addColorStop(0,artTone(color,data));g.addColorStop(1,artTone(artMix(color,env.sky_bottom,haze*.6),data));ctx.fillStyle=g;ctx.fill();ctx.restore();
   }
  }
  for(const m of env.mountains||[]){const ys=m.points.map(p=>p[1]),g=ctx.createLinearGradient(0,Math.min(...ys),0,540);g.addColorStop(0,artTone(m.color,data));g.addColorStop(1,artTone(artMix(m.color,env.sky_bottom,haze*.7),data));ctx.beginPath();ctx.moveTo(...m.points[0]);for(const p of m.points.slice(1))ctx.lineTo(...p);ctx.closePath();ctx.fillStyle=g;ctx.fill();}
+ if(depth>.01){const mist=ctx.createLinearGradient(0,455,0,540);mist.addColorStop(0,env.sky_bottom+'00');mist.addColorStop(.65,env.sky_bottom+'25');mist.addColorStop(1,env.sky_bottom+'00');ctx.fillStyle=mist;ctx.fillRect(-100,455,1200,85);}
  const vegetation=at.vegetation??.5;
  if(vegetation>.01&&depth>.01){
   for(let i=0;i<Math.round(55*vegetation);i++){

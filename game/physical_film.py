@@ -28,12 +28,13 @@ def install(world):
     from .character import edit as character_edit
     from .director import define
     initialize_physical(world);world['physics_engine']='chipmunk';world['gravity']=981
-    edit(world,{'operation':'body_control','values':{'mode':'physical','stage_rig':False,'self_collision':False,'muscle_scale':6,'muscle_dynamics':False,'solver_substeps':4}})
-    character_edit(world,{'operation':'character','values':{'name':'Dagi / Matter','style':'sticks','head_radius':16,'head_mass':.7,'bones':{s+'_toe':{'length':24,'radius':5.5,'mass':.35} for s in ('left','right')},'surface':{'skin':'#c28b71','muscle':'#a35e58','bone':'#f1e8d3','accent':'#3e8f89','eye':'#203f45','roughness':.58,'metallic':0,'head_width':.93,'outline':.45,'muscles':.85,'markings':0},'features':{'hair':'swept','hair_length':.55,'hair_color':'#243942','iris':'#499e8d','detail':1,'eye_size':1.05,'freckles':.12}}})
+    edit(world,{'operation':'body_control','values':{'mode':'physical','stage_rig':False,'self_collision':False,'muscle_scale':6,'muscle_dynamics':False,'solver_substeps':8}})
+    character_edit(world,{'operation':'character','values':{'name':'Dagi / Matter','style':'sticks','head_radius':16,'head_mass':.7,'bones':{s+'_toe':{'length':24,'radius':5.5,'mass':.35,'heel':0} for s in ('left','right')},'surface':{'skin':'#c7a08a','muscle':'#a35e58','bone':'#f1e8d3','accent':'#3e8f89','eye':'#203f45','roughness':.72,'metallic':0,'head_width':.93,'outline':.3,'muscles':.85,'markings':0,'garment':1,'fabric':'#344650'},'features':{'hair':'swept','hair_length':.55,'hair_color':'#243942','iris':'#499e8d','detail':1,'eye_size':1.05,'freckles':.12}}})
+    world['material']['iterations']=16
     arrange(world)
     edit(world,{'operation':'environment','values':{'sky_top':'#ffffff','sky_bottom':'#ffffff','ground_top':'#ffffff','ground_bottom':'#ffffff','sun':{'x':740,'y':110,'radius':0,'color':'#ffffff'},'clouds':[],'mountains':[]}})
     character_edit(world,{'operation':'art','values':{'key':{'x':260,'y':60,'color':'#fff1d9','intensity':.85},'ambient':.7,'shadow':.22,'rim':.25,'exposure':1,'vignette':0,'grain':0,'atmosphere':{'depth':0,'haze':0,'vegetation':0,'wind':.2}}})
     files=Path(__file__).with_name('examples')
-    define(world,{'name':'Matter / Dagi','description':'Authored physical film: folded skeleton, internal muscles, free flight. No stage rig or model calls.','entry':'matter.js','files':{name:(files/name).read_text() for name in ('matter.js','body-controller.js','story-kit.js')}})
+    define(world,{'name':'Matter / Dagi','description':'Authored physical film: folded skeleton, internal muscles, free flight. No stage rig or model calls.','entry':'matter.js','params':{'j0': 1.16, 'j1': 0.9967723410571742, 'j2': 2.13479639427089, 'j3': 0.20306726802801317, 'j4': 1.1558373798547346, 'j5': -0.390936787335716, 'j6': -0.9150138752141662, 'j9': 3.967837082820602, 'j12': -2.1753356521883074},'files':{name:(files/name).read_text() for name in ('matter.js','body-controller.js','story-kit.js')}})
     world['life'].update(status='paused',intent='MATTER · внутренние мышцы · свободный полёт · без страховки')
     return world

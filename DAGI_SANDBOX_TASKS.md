@@ -125,6 +125,14 @@ live model) and states that boundary explicitly. The layout section gained the
 workshop modules (`game/rigid.py`, `game/embodiment.py`, `game/mechanics.py`,
 `game/workshop.py`, `game/director.py`) and `docs/examples/`.
 
+## Matter v11 integration (2026-10-19)
+
+Operator archive `dagi-matter-v11-20261019.zip`, patch from their v10 base `0b4e43c`, 0.10.0. Conflicts: `game/bridge.py` (SOURCE_FILES) — theirs + our unknown-skill listing; `uv.lock` — kept our locked file (their lock is the same malformed one that crash-looped the service under v10; pyproject changes only the version string). Focused gate: 80 pytest over dynamics/game/cinema/learning + 13 Node UI.
+
+What changed on top of v10: differentiated shoulder/forearm/thigh/shin shapes with muscle planes and tendons; palms, thumbs, four segmented fingers, nails and creases; reworked eyes, hair, face shadows, materials and joint transitions; optional garments (`surface.garment`, `fabric`); smoother terrain, haze and foot shadows keyed to height above ground; per-phase hand plans and face expressions in the episode; retuned push-off and landing and the joint-limit command clamp.
+
+Verified continuous run (operator + local slices): folded skeleton → lift → world/character development → face/greeting → hands → preparation → jump → slow motion → support recovery; final segment holds support > 5 physical seconds (≈5.02), external supports and stage-rig work 0; landing_passed=true, flight≈0.537 s, height≈30.32 px; COM lift above the pre-takeoff rise. Still honest: authored controller for a fixed body/floor/pose; change proportions, masses or timing and it must be re-verified; simplified 2D physics, cosmetic fingers/garment/face, no self-collision or activation delay; no learned locomotion claim.
+
 ## Dynamics v10 integration (2026-10-19, experimental)
 
 Operator archive `dagi-dynamics-v10-experimental-20261019.zip`, patch from their v9 `dbdf0c7`, 0.9.0. Only `game/bridge.py` conflicted (SOURCE_FILES for the new physics-film files vs mine); resolved to theirs plus my unknown-skill listing. Focused gate only (per operator): 77 pytest across dynamics/game/cinema/learning (3× stable), 13 Node UI. Full suite deferred.
@@ -261,3 +269,14 @@ stage assistance from the new film and adds substep feedback/physical evidence.
 Full continuous landing fails; the requested polished cartoon is not complete.
 376 Python and 52 Node UI checks pass; those checks do not certify landing or
 visual quality. Local ZIP handoff only; remote tracking/integration stays pending.
+
+## Matter v11 — local film preset (2026-10-19)
+
+User-directed next slice: improve vector anatomy/hands/joints/skin/hair/lighting,
+show detail shots, and make the continuous jump land under internal actuators.
+Frozen preset passes 32-second full-rollout regression, including >4.5 seconds
+final supported stance, no non-foot contact during the jump and no stage work.
+This does not certify generic locomotion, repeated manual jumps or autonomous
+learning. New sessions use the new preset; saved episodes retain their code.
+379 Python / 52 Node UI checks; Chromium frame review/recording without model
+calls. Source/ZIP handoff only; remote tracking and integration remain pending.

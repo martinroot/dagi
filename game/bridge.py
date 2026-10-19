@@ -16,6 +16,7 @@ from .studio import activate, abort_release, build, build_summary, digest, revie
 
 SOURCE_FILES = {
 
+    "game/DYNAMICS.md":Path(__file__).with_name("DYNAMICS.md"),
     "game/physical_film.py":Path(__file__).with_name("physical_film.py"),
     "game/dynamics.py":Path(__file__).with_name("dynamics.py"),
     "game/examples/body-controller.js":Path(__file__).parent/"examples"/"body-controller.js",

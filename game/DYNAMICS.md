@@ -1,52 +1,80 @@
-# Physical film v10 — experimental checkpoint
+# Matter v11 — physical film preset
 
-The new “Физический мультфильм” creates a dedicated Matter / Dagi session.
-It begins with a folded stick skeleton on white, not a loose pile of disconnected
-rods. An authored controller unfolds it, balances, develops the procedural vector
-world and face, then attempts a jump. Continuous landing is unstable and can end
-with head contact. Such contact is labelled as failure on screen. This is not a
-finished high-quality cartoon, learned walking or autonomous self-improvement.
+The “Физический мультфильм” button creates a dedicated Matter / Dagi session.
+The actor starts as a folded stick skeleton on white, unfolds under internal
+joint torques, develops its vector surfaces/world, shows face and hand details,
+then performs a jump with slow motion and settles into foot support.
 
-## Physical changes
+This is an authored demonstration, not a learned skill or an autonomous agent
+training result. It is a reusable starting project for future internal debugging.
+“Five times better” is an artistic target, not a measured quality certificate.
 
-- Relative, equal-and-opposite joint PD torques are recomputed every solver
-  substep. Mass, gravity, contacts and inertia determine motion. Initial placement
-  is done only when creating the film; playback does not teleport the body.
-- This film has stage_rig=false, no external support and no flight impulses.
-  The legacy v9 stage-assisted example remains available separately.
-- COM, velocity, angular momentum, energy, support margin, contact impulse and
-  muscle effort are exposed to the controller and optional COM overlay.
-- Slow motion reduces integrated dt; gravity and velocity units remain unchanged.
-  Browser playback respects playback.speed. Offline advance defaults to physical
-  time; pass time_scale=None to reproduce the cinematic timing.
-- Joint muscle activation drives cosmetic surface volume within collider bounds.
-  Face/hair, gradients, lighting, scenery and camera effects remain vector code.
-- Browser vision contains the current world, a vector re-render of the same head,
-  recent frames and physical measurements. It does not itself call the model.
+## What changed after v10
 
-## What is not solved
+- Distinct upper-arm, forearm, thigh and shin silhouettes, muscle planes, narrow
+  tendons, restrained skin marks and soft joint folds replace repeated capsules.
+- Palms, four segmented fingers, thumbs, knuckle folds and nails are vector paths
+  attached to the measured wrist. Fingers are cosmetic, not independent bodies.
+- Smaller eyes, orbital shadows, tear ducts, layered skin/iris/hair details and
+  smoother hair silhouettes improve close framing. Expressions follow the jump
+  phase: preparation, effort, flight, landing, then a smile after stable support.
+- Graphite shorts are optional cosmetics: surface.garment in 0..1 and fabric hex
+  color. Defaults preserve ordinary characters; the film enables them.
+- Smooth landscape ridges, haze and height-dependent foot shadows preserve the
+  shared palette and vector construction. No image generation or raster assets.
+- Film physics uses 8 substeps and 32 solver iterations. Relative servos refresh
+  each substep. Takeoff parameters and landing feedback were revised; arms return
+  during landing and ankle feedback follows actual velocity/COM displacement.
+- Captured flight joint targets clamp small numerical limit overshoot instead
+  of disabling the entire controller with an invalid target.
+- Optional toe bone heel in 0..16 extends the actual capsule/moment, not only a
+  drawing. Film heel remains 0: other heel geometries need controller retuning.
 
-Landing passed one separately reconstructed candidate trial but failed the
-continuous film from frame zero. It must not be advertised as a mastered skill.
-The remaining controller is sensitive to its trajectory and solver state. No
-further optimization was performed after the operator requested a status update.
+## Gates and evidence
 
-This is a simplified 2D rigid capsule model with bounded internal actuators,
-not validated human biomechanics. Film self-collision and activation lag are
-turned off. Illustrative scale: 100 pixels per metre; energy divides pixel-based
-values by 10000. COM/momentum cover the character, head and appendages, excluding
-carried objects/mechanism bodies. Facial expression is a presentation channel.
+The v10 continuous run failed. The v11 regression starts at frame zero and runs
+through 32 physical seconds with cinematic dt. It checks no head/hand/non-foot
+contact during the jump, a COM peak over 45 px above standing, final foot support
+for at least 4.5 seconds, no external supports, and zero stage work. The preset
+also exposes a success flag only after supported low-speed, low-rotation stance;
+loss of balance is labelled even without head contact. This is a regression for
+this body/initial world, not certification for arbitrary dimensions or terrain.
 
-## Editable source
+Playback QA prohibits model calls. Full suite: 379 Python and 52 Node UI tests;
+intermediate browser frames and an uncut canvas recording are in the handoff.
+The measured reference run lands, with 5.02 seconds final stable support, about
+0.537 seconds free flight and about 30.32 px COM rise after takeoff. COM rise from
+standing is larger because takeoff occurs after extension from the crouch.
 
-`physical_film.py` installs the initial world; `examples/body-controller.js`
-contains balance/jump feedback; `examples/matter.js` contains presentation and
-slow-motion direction. `dynamics.py` measures the solver. Read these through the
-source allowlist. Existing world-edit, project, fitness and memory tools remain
-available. The new demonstration is authored; it is not a general autonomous
-learning loop. Playback QA uses a provider that raises on any model call.
+## Physics boundary
 
-Run `uv sync --extra dev`, then `uv run dagi-web` with the existing configuration
-and credentials described in README. Open `/game/` and use “Физический мультфильм”.
-“Сначала” creates another film session. “Прыжок” requests a new attempt and may
-fail. Source handoff only: no push, deployment or remote issue updates.
+Stage rig is off; no free flight impulse, global root motor or playback position
+writes are used. Initial placement is only done when creating the film. Gravity,
+contacts, inertia and bounded equal-and-opposite joint torques drive movement.
+The legacy v9 stage-assisted film remains separate.
+
+This remains a simplified 2D capsule/polygon model. Self-collision and activation
+lag are disabled in this film. Cosmetic hands, face, garment and muscle shading
+are not validated human biomechanics. Mass/COM/momentum cover the skeleton, head
+and appendages, excluding carried objects/mechanism bodies. Scale is illustrative:
+100 pixels per metre; energy divides pixel-based quantities by 10000.
+
+Slow motion changes integrated dt, preserving gravity/velocity units. Offline
+advance defaults to physical time; pass time_scale=None for cinematic playback.
+Changing playback timing, proportions, masses, feet, ground or initial state
+requires fresh full-rollout validation. Repeated manual jumps are experimental.
+
+## Source and launch
+
+`physical_film.py` installs geometry, solver settings and editable project params.
+`examples/body-controller.js` provides internal feedback; `examples/matter.js`
+provides timing, look, camera, expressions, material events and gates.
+`dynamics.py` measures physics. Read these through the source allowlist.
+The controller also exposes optional experimental air/landing parameters; the
+recorded preset uses its frozen launch configuration and captured airborne pose.
+
+Run `uv sync --extra dev`, then `uv run dagi-web` using the existing README
+configuration/credentials. Open `/game/` → “Физический мультфильм”. “Сначала”
+creates another film session; “Материалы” replays the material sweep locally.
+Old saved film sessions retain their code: create a new film for v11.
+No push, deployment or remote issue updates were performed.
