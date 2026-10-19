@@ -38,6 +38,7 @@ from game.world import links as game_links
 from game.bridge import GAME_PROMPT, identity as game_identity, register_game, render_game_context
 from game.turns import GameContext, game_call_cap
 from game.life import LifeRuntime
+from game.learning import summary as learning_summary
 from game.store import GameStore, live_slot
 from game.world import PAIRS, frame as game_frame, observation as game_observation
 from game.studio import browser_report, build_summary, human_prompt, digest as game_digest, snapshot as game_snapshot, configuration as game_configuration
@@ -422,7 +423,7 @@ class WebApp:
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
-                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/anatomy.js", "/game/vector.js", "/game/scenery.js", "/game/direction.js", "/game/workshop.js", "/game/component-host.js"}:
+                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/anatomy.js", "/game/vector.js", "/game/scenery.js", "/game/learning.js", "/game/direction.js", "/game/workshop.js", "/game/component-host.js"}:
                         self._static(path)
                     elif path == "/api/auth/session":
                         if app._is_authenticated(self.headers):
@@ -492,7 +493,7 @@ class WebApp:
                             "scene": game_observation(world), "frame": game_frame(world),
                             "links": game_links(world), "motion": world["motion"], "history": world["history"],
                             "reflections": world["reflections"], "widgets": world["widgets"], "components": world["components"], "theme": world["theme"],
-                            "character":world["character"], "art":world["art"], "body_control":world["body_control"], "environment":world["environment"], "ropes":world["ropes"], "substances":world["substances"], "direction":world["direction"], "appendages":world["appendages"], "projects":[{"name":k,"version":v["version"],"description":v["description"]} for k,v in world["projects"].items()],
+                            "learning":learning_summary(world,details=True), "character":world["character"], "art":world["art"], "body_control":world["body_control"], "environment":world["environment"], "ropes":world["ropes"], "substances":world["substances"], "direction":world["direction"], "appendages":world["appendages"], "projects":[{"name":k,"version":v["version"],"description":v["description"]} for k,v in world["projects"].items()],
                             "life": world["life"], "policies": [{"name": k, "version": v["version"], "description": v["description"]} for k,v in world["policies"].items()], "appearance": world["appearance"], "evolution": world["evolution"],
                             "build": build_summary(world), "preview": {k: world["draft"]["candidate"][k] for k in ("widgets", "objects", "components")} if world["draft"] else None,
                             "last_release": world["last_release"], "activity": activity, "server_time": time.time(),
@@ -602,6 +603,15 @@ class WebApp:
                             if mode not in ("physical","assisted"):raise ValueError("mode must be physical or assisted")
                             game.create(session_id,mode=mode)
                         self._send_json(201, {"session_id": session_id})
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/learning/evaluate", parsed.path):
+                        from game.world import keys as game_keys
+                        from game.learning import handle as train_skill
+                        game_keys(body,("skill","world_version","contract"))
+                        if type(body.get("world_version")) is not int or not isinstance(body.get("contract"),str):raise ValueError("evaluation requires the displayed world/contract versions")
+                        session_id=int(match.group(1))
+                        if app._session_busy(session_id):raise ValueError("wait for the current model turn before evaluating manually")
+                        result=train_skill(app.config.database,session_id,{"action":"evaluate",**body})
+                        self._send_json(200,{"local":True,"model_calls":0,**result})
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)/project-event", parsed.path):
                         session_id=int(match.group(1))
                         from game.world import keys as game_keys

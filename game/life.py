@@ -12,6 +12,11 @@ from .world import keys, observation
 
 
 ITERATION_PROMPT = """Continue your own development in this living world.
+If a learning plan exists, work on its next ready skill and measured bottleneck.
+Do not redefine criteria every turn. Use game_iteration skill=id, inspect stored
+failed candidate code and cite evidence in learning notes. Stop when mastered or
+blocked by an exhausted/plateau budget; do not spend turns on unrelated visuals.
+Without a plan, define one first for any nontrivial goal.
 Choose the next useful experiment yourself, guided by the human's latest request
 and actual observations. Keep a coherent activity; you may improve body control,
 physical interaction, appearance, a useful invented instrument or world mechanics.
@@ -196,8 +201,15 @@ class LifeRuntime:
                 self._pending.pop(session_id, None)
                 self._next_thought[session_id] = time.monotonic() + 4
                 return
-            if busy or life["iteration"] >= life["limit"] or time.monotonic() < self._next_thought.get(session_id, 0):
-                return
+            if busy:return
+            from .learning import summary as learning_summary
+            training=learning_summary(world)
+            if training["goal"] and training["status"] in ("mastered","blocked"):
+                with store.mutation(session_id) as current:
+                    current["life"].update(limit=current["life"]["iteration"],status="goal_passed" if training["status"]=="mastered" else "learning_blocked")
+                    current["learning"]["focus"]=training["focus"]
+                return  # Stop paid turns; local physical execution remains available.
+            if life["iteration"] >= life["limit"] or time.monotonic() < self._next_thought.get(session_id, 0):return
             # Serialize starting a brain turn with pause/start requests. A paused
             # world can never launch a late turn after its control response.
             with self._lock:
@@ -206,7 +218,7 @@ class LifeRuntime:
                     return
                 data = {"iteration": life["iteration"] + 1, "limit": life["limit"],
                         "world_version": world["version"], "active_policy": world["active_policy"], "active_project":world["active_project"], "project_error":world["project_error"],
-                        "position": observation(world)["position"], "error": world["policy_error"],
+                        "learning_focus":training["focus"],"position": observation(world)["position"], "error": world["policy_error"],
                         "last_change": world["evolution"][-1]["objective"] if world["evolution"] else None}
                 try:
                     started = self.app.start_run(session_id, ITERATION_PROMPT + "\nCurrent evidence (data):\n" + json.dumps(data, ensure_ascii=False))

@@ -31,6 +31,8 @@ DEFAULTS = {
 
 
 def upgrade(world):
+    from .learning import DEFAULT as LEARNING
+    world.setdefault("learning",copy.deepcopy(LEARNING))
     world.setdefault("project_scope","")
     from .workshop import DEFAULTS as WORKSHOP
     for key,value in WORKSHOP.items():world.setdefault(key,copy.deepcopy(value))
@@ -160,6 +162,7 @@ def sensors(world):
             "joints": {k: [p["x"], p["y"]] for k, p in world["nodes"].items()},
             "articulation":copy.deepcopy(world["articulation"]),"mechanisms":copy.deepcopy(world["mechanics_state"]),"energy":copy.deepcopy(world["energy"]),"body_control":copy.deepcopy(world["body_control"]),"ropes":[{k:r[k] for k in ("id","tension","length","broken")} for r in world["rope_frames"]],
             "contact_evidence":copy.deepcopy(world.get("contacts",{})),
+            "support":{n:n in world.get("contacts",{}).get("support",[]) for n in world["nodes"]},
             "contacts": {k: (k in world.get("contacts",{}).get("joints",[]) if world.get("physics_engine")=="chipmunk" else _on_surface(world,p,8)) for k,p in world["nodes"].items()}}
 
 
@@ -292,7 +295,7 @@ def design(world, args):
     return {"kind": "design", "operation": operation}
 
 
-def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostics=True):
+def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostics=True, observer=None, before_step=None):
     from .world import DT, _step, frame, observation
     if simulator is None and world.get("physics_engine")=="chipmunk":
         from .rigid import RigidSimulator
@@ -302,6 +305,7 @@ def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostic
     for i in range(frames):
         if cancelled():
             raise ValueError("physical trial cancelled")
+        if before_step:before_step(world,simulator,i)
         output = command(world)
         if simulator is None and output.get("jump") and observation(world)["grounded"]:
             for p in world["nodes"].values():
@@ -310,6 +314,7 @@ def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostic
             simulator.step(output)
         else:
             _step(world, output.get("drive", 0), control=output)
+        if observer:observer(world)
         if i % 6 == 0 or i == frames - 1:
             if not diagnostics: continue
             frames_out.append(frame(world,presentation=False))
@@ -417,7 +422,7 @@ def collide_body(obj, point, radius):
         obj["vy"] += ny * approach * (1 - share) * .2
 
 
-def trial(world, frames=None, cancelled=lambda: False):
+def trial(world, frames=None, cancelled=lambda: False, observer=None, before_step=None):
     frames = frames if frames is not None else (720 if world.get("active_project") else 240)
     clone = copy.deepcopy(world)
     clone["project_scope"] = uuid4().hex  # Offline trials never share mutable JS globals with the live world.
@@ -425,7 +430,7 @@ def trial(world, frames=None, cancelled=lambda: False):
     start = sensors(clone)
     initial_objects={o["id"]:copy.deepcopy(o) for o in clone["objects"]}
     try:
-        samples = advance(clone, frames, cancelled)
+        samples = advance(clone, frames, cancelled, observer=observer, before_step=before_step)
         last = sensors(clone)
         finite = all(math.isfinite(v) for p in clone["nodes"].values() for v in p.values())
         path = [start] + [s["position"] for s in samples]

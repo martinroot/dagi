@@ -15,6 +15,8 @@ from .world import act, evolve, keys, observation, reflect, set_goal, validate_a
 from .studio import activate, abort_release, build, build_summary, digest, review, visual_edit
 
 SOURCE_FILES = {
+    "game/WALKING_FITNESS.json":Path(__file__).with_name("WALKING_FITNESS.json"),
+    "game/learning.py":Path(__file__).with_name("learning.py"),
     "game/character.py":Path(__file__).with_name("character.py"),
     "game/static/vector.js":Path(__file__).parent / "static" / "vector.js",
     "game/static/scenery.js":Path(__file__).parent / "static" / "scenery.js",
@@ -98,6 +100,16 @@ You inhabit the visible stickman AND author the world and how it is shown.
 New sessions use physical, unassisted articulation. A new body cannot already
 walk or hold a standing pose. Its controls are internal muscles (-1..1) and
 explicit relative joint servos; motor reactions act on both linked bodies.
+For a nontrivial human goal, establish a durable learning plan using game_train
+before iterating on code. Read game_observe view=schema,path=learning. Decompose
+into a dependency DAG of executable skills, each with explicit measured fitness,
+success, guards and repeatable cases. Keep criteria stable across attempts.
+Use game_iteration skill=id; first create missing programs, then fix the measured
+bottleneck, not cosmetics. Score improvement is progress, never mastery. Parent
+skills need end-to-end tests; child certificates alone are insufficient. Inspect
+failed working source via game_observe view=learning,path=skill_id/file.js and
+save only receipt-linked hypotheses with game_train action=note. Stop at mastery,
+budget exhaustion or a plateau; do not conceal failure by weakening criteria.
 Read game_observe view=schema path=physics for physical construction/control.
 Visual authoring: view=schema path=visual, and view=visual for your character and
 lighting/layers. character{values} edits real skeleton proportions, collision
@@ -545,6 +557,20 @@ def register_game(tools, life=None):
         with GameStore(tools.state.path) as store:
             world = current_world(store)
         view = args.get("view","state")
+        if view=="learning":
+            from .learning import summary as learning_summary
+            path=args.get("path","")
+            if not path:return learning_summary(world,details=True)
+            id,_,file=path.partition("/");skill=world["learning"]["skills"].get(id)
+            if not skill:raise ValueError("unknown skill")
+            if file:
+                source=skill.get("working",{}).get("files",{}).get(file)
+                if source is None and file=="policy":source=skill.get("working",{}).get("code")
+                if source is None:raise ValueError("unknown failed candidate source file")
+                offset=args.get("offset",0)
+                if type(offset) is not int or offset<0:raise ValueError("offset must be nonnegative")
+                return {"skill":id,"file":file,"source":source[offset:offset+5000],"next_offset":offset+5000 if len(source)>offset+5000 else None}
+            return {"contract":{k:v for k,v in skill.items() if k not in ("attempts","working")},"last_attempt":skill["attempts"][-1] if skill["attempts"] else None,"working":{k:len(v) for k,v in skill.get("working",{}).get("files",{}).items()},"lessons":[n for n in world["learning"]["lessons"] if n["skill"]==id][-3:]}
         if view=="visual":
             art=world.get("art")
             if args.get("path") and art:
@@ -574,6 +600,9 @@ def register_game(tools, life=None):
         if view=="schema":
             from .director import HELP
             section=args.get("path")
+            if section=="learning":
+                from .learning import HELP as LEARNING_HELP
+                return LEARNING_HELP
             if section=="visual":
                 from .character import HELP as VISUAL_HELP
                 return VISUAL_HELP
@@ -582,13 +611,13 @@ def register_game(tools, life=None):
                 return PHYSICS_HELP
             if section=="project":return HELP
             if section=="policy":return POLICY_HELP
-            return {"visual_schema":"Anatomy, real bone geometry, muscles, materials, lighting and image composition: view=schema,path=visual. character/art operations. Current character/art are in world observations.","physical_schema":"For exact muscle, constraint, rope, material and environment contracts use view=schema,path=physics. New sessions use unassisted muscles, not drive.","project":HELP,"policy":POLICY_HELP,"appearance":world["appearance"],"material":world["material"],
+            return {"learning_schema":"Goal decomposition, measured skill fitness, prerequisites and iteration memory: view=schema,path=learning. game_train defines contracts; game_iteration skill=id tests progress/mastery.","visual_schema":"Anatomy, real bone geometry, muscles, materials, lighting and image composition: view=schema,path=visual. character/art operations. Current character/art are in world observations.","physical_schema":"For exact muscle, constraint, rope, material and environment contracts use view=schema,path=physics. New sessions use unassisted muscles, not drive.","project":HELP,"policy":POLICY_HELP,"appearance":world["appearance"],"material":world["material"],
                     "extra_outputs":"emotion:{valence:-1..1,arousal:0..1,focus:0..1}; gaze:[world_x,world_y]; grip:{object:id,hand:left_hand|right_hand}, omit to release; params:{name:number}, accessed as p['name']",
                     "joints":"joint:{id,type:pivot|spring|motor,a:body_id|world,b:body_id|world,anchor:[x,y] for pivot,rate:-8..8,max_force:0..20000,length:0..500,stiffness:0..5000,damping:0..500}",
                     "change_types":'Every changes[] object carries an "operation" key. project{name,description,files,entry?,params?,replace?}; appendage{part}; remove_appendage/remove_body/remove_joint{id}; policy{name,code,description,params?}; appearance/material/theme/controller/physics{values}; body{body}; joint{joint}; widget{widget}; component{component}; remove_component/remove_widget{id}. Example: {"operation":"project","name":"scene","description":"...","files":{"main.js":"module.exports=()=>({})"}}',
                     "component":CATALOG["authored_component"],"widget":CATALOG["widget"]}
         if view=="draft": return {"build":build_summary(world)}
-        if view=="source": return inspect({"view":"source","path":args.get("path",""),"limit":5000})
+        if view=="source": return inspect({"view":"source","path":args.get("path",""),"offset":args.get("offset",0),"limit":5000})
         return summary(world)
 
     def iteration(args, context):
@@ -610,11 +639,17 @@ def register_game(tools, life=None):
         if action=="pause": return life.control(tools.session_id,{"action":"pause"})
         raise ValueError("action must be play, pause or discard")
 
+    def training(args, context):
+        from .learning import handle
+        return handle(tools.state.path,tools.session_id,args,context.cancel_event.is_set if context.cancel_event else lambda:False)
+
     specs = [
+        ("game_train","Define a versioned goal/skill dependency DAG with fitness and success contracts (action=plan), evaluate a saved skill without publishing (evaluate), or save a receipt-linked hypothesis/next change (note). Exact schema: game_observe view=schema,path=learning. Physics tests use no external model calls; tool success is not skill success.",
+         {"action":{"type":"string","enum":["plan","evaluate","note"]},"goal":{"type":"string"},"target":{"type":"string"},"reason":{"type":"string"},"skills":{"type":"array","items":{"type":"object"}},"skill":{"type":"string"},"attempt":{"type":"string"},"hypothesis":{"type":"string"},"next_change":{"type":"string"}},["action"],training,False),
         ("game_observe","Read compact state, current code, schema, draft or an allowlisted source. Schema contains exact code/output syntax; use it once, not before every small edit.",
-         {"view":{"type":"string","enum":["state","code","schema","draft","source","physics","visual"]},"path":{"type":"string"},"offset":{"type":"integer"}},[],observing,True),
+         {"view":{"type":"string","enum":["state","code","schema","draft","source","physics","visual","learning"]},"path":{"type":"string"},"offset":{"type":"integer"}},[],observing,True),
         ("game_iteration",GAME_ITERATION_DESCRIPTION,
-         {"objective":{"type":"string"},"changes":{"type":"array","items":{"type":"object"}},"search":{"type":"object"},"verify":{"type":"array","items":{"type":"object"}},"play":{"type":"boolean"}},["objective","changes"],iteration,False),
+         {"skill":{"type":"string"},"objective":{"type":"string"},"changes":{"type":"array","items":{"type":"object"}},"search":{"type":"object"},"verify":{"type":"array","items":{"type":"object"}},"play":{"type":"boolean"}},["objective","changes"],iteration,False),
         ("game_life","Control your live physical body directly without asking the human to click: play (no API calls for execution), pause, or discard an unfinished legacy draft.",
          {"action":{"type":"string","enum":["play","pause","discard"]}},["action"],life_tool,False),
         ("game_design", GAME_DESIGN_DESCRIPTION,
@@ -639,5 +674,5 @@ def register_game(tools, life=None):
     for name, description, properties, required, handler, retryable in specs:
         tools.register(Tool(name, description, {"type": "object", "properties": properties, "required": required, "additionalProperties": False},
                             wrap(handler), retryable=retryable, context_aware=True))
-    tools.model_tool_names = {"game_observe","game_iteration","game_life"}
+    tools.model_tool_names = {"game_observe","game_iteration","game_life","game_train"}
     return True

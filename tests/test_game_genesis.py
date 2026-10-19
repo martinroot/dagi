@@ -99,7 +99,7 @@ def test_game_model_surface_is_small_without_removing_registry_compatibility(tmp
         with GameStore(state.path) as store:store.create(sid)
         tools=ToolRegistry(tmp_path/"workspace",state,sid)
         register_game(tools)
-        assert {t.name for t in tools.specs()}=={"game_observe","game_iteration","game_life"}
+        assert {t.name for t in tools.specs()}=={"game_observe","game_iteration","game_life","game_train"}
         tools.set_execution_context(ToolExecutionContext(sid,"run",0,"model"))
         assert not tools.call("game_inspect",{}).is_error
 

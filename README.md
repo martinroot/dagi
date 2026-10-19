@@ -81,6 +81,22 @@ recording:
 All five are **scripted fixtures with no live model**: execution evidence, not
 live-model inventiveness, not general intelligence, not an aesthetic judgment.
 
+## Skill Fitness Lab (v8)
+
+[Learning contracts](game/LEARNING.md) turn a goal into a dependency DAG of
+executable skills with measured fitness, success conditions, guards and declared
+validation cases. Failed source and scoped hypotheses persist across turns.
+Improvement can publish without claiming mastery; dependencies and the final
+composition need their own current, source-bound receipts. Budgets and plateaus
+stop unproductive autonomous model turns. The UI shows observed values against
+thresholds and supports local reevaluation without model calls.
+
+The included [walking criteria example](game/WALKING_FITNESS.json) declares
+balance → step → walking; it supplies no controller or installed curriculum.
+The current evaluation adapter measures physics. A domain-neutral report grader
+is available for future trusted business-tool adapters; those are not connected
+to the sandbox in this release.
+
 ## Vector Character Studio (v7)
 
 [Visual authoring](game/VISUAL.md) adds real shoulder/hip attachments on a rigid

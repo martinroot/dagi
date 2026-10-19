@@ -1,0 +1,294 @@
+{
+  "action": "plan",
+  "goal": "Научиться проходить вправо без готового автоконтроллера и внешнего крепления",
+  "target": "walk",
+  "reason": "Пример критериев: баланс → отдельный шаг → полная ходьба; контроллеры ещё нужно написать и проверить",
+  "skills": [
+    {
+      "id": "balance",
+      "title": "Удерживать тело с реальной опорой",
+      "program": "balance",
+      "depends": [],
+      "metrics": [
+        {
+          "name": "upright_run",
+          "label": "Непрерывное удержание тела",
+          "expression": "s['upright']",
+          "reduce": "longest",
+          "target": {
+            "min": 8
+          },
+          "unit": "с"
+        },
+        {
+          "name": "support",
+          "label": "Время реальной опоры",
+          "expression": "(s['support']['left_foot'] or s['support']['left_toe'] or s['support']['right_foot'] or s['support']['right_toe'])",
+          "reduce": "duration",
+          "target": {
+            "min": 8
+          },
+          "unit": "с"
+        },
+        {
+          "name": "height",
+          "label": "Средняя высота головы над тазом",
+          "expression": "s['y']-s['joints']['head'][1]",
+          "reduce": "mean",
+          "unit": "px"
+        },
+        {
+          "name": "tilt",
+          "label": "Отклонение торса",
+          "expression": "abs(atan2(s['joints']['hip'][1]-s['joints']['neck'][1],s['joints']['hip'][0]-s['joints']['neck'][0])-pi/2)",
+          "reduce": "mean",
+          "target": {
+            "max": 0.4
+          },
+          "unit": "рад"
+        }
+      ],
+      "score": "r['metrics']['height']/80 + .3*r['metrics']['upright_run'] - r['metrics']['tilt']",
+      "success": "r['upright_ratio']>=.8",
+      "guards": [
+        "r['mode']=='physical'",
+        "r['external_supports']==0",
+        "r['powered_motors']==0",
+        "r['gravity']>=900",
+        "r['max_bone_error']<2"
+      ],
+      "cases": [
+        {
+          "id": "standard",
+          "frames": 600,
+          "start": "neutral",
+          "split": "train"
+        },
+        {
+          "id": "small_push",
+          "frames": 600,
+          "start": "neutral",
+          "split": "validation",
+          "impulses": [
+            {
+              "at": 120,
+              "joint": "hip",
+              "value": [
+                8,
+                0
+              ]
+            }
+          ]
+        }
+      ],
+      "attempt_limit": 12,
+      "plateau_limit": 5
+    },
+    {
+      "id": "step",
+      "title": "Поднять и вновь поставить левую ногу",
+      "program": "step",
+      "depends": [
+        "balance"
+      ],
+      "metrics": [
+        {
+          "name": "upright_run",
+          "label": "Непрерывное удержание тела",
+          "expression": "s['upright']",
+          "reduce": "longest",
+          "target": {
+            "min": 8
+          },
+          "unit": "с"
+        },
+        {
+          "name": "lift",
+          "label": "Максимальный подъём левой стопы",
+          "expression": "initial['joints']['left_foot'][1]-s['joints']['left_foot'][1]",
+          "reduce": "max",
+          "target": {
+            "min": 10
+          },
+          "unit": "px"
+        },
+        {
+          "name": "left_contacts",
+          "label": "Эпизоды левой опоры",
+          "expression": "(s['support']['left_foot'] or s['support']['left_toe'])",
+          "reduce": "transitions",
+          "target": {
+            "min": 2
+          }
+        },
+        {
+          "name": "right_support",
+          "label": "Время опоры на правую ногу",
+          "expression": "(s['support']['right_foot'] or s['support']['right_toe'])",
+          "reduce": "duration",
+          "target": {
+            "min": 8
+          },
+          "unit": "с"
+        },
+        {
+          "name": "left_final",
+          "label": "Левая стопа снова на опоре",
+          "expression": "1 if (s['support']['left_foot'] or s['support']['left_toe']) else 0",
+          "reduce": "last",
+          "target": {
+            "min": 1
+          }
+        }
+      ],
+      "score": ".2*r['metrics']['upright_run'] + min(r['metrics']['lift'],20)/10 + min(r['metrics']['left_contacts'],2)",
+      "success": "r['upright_ratio']>=.8",
+      "guards": [
+        "r['mode']=='physical'",
+        "r['external_supports']==0",
+        "r['powered_motors']==0",
+        "r['gravity']>=900",
+        "r['max_bone_error']<2"
+      ],
+      "cases": [
+        {
+          "id": "standard",
+          "frames": 600,
+          "start": "neutral",
+          "split": "train"
+        },
+        {
+          "id": "small_push",
+          "frames": 600,
+          "start": "neutral",
+          "split": "validation",
+          "impulses": [
+            {
+              "at": 120,
+              "joint": "hip",
+              "value": [
+                8,
+                0
+              ]
+            }
+          ]
+        }
+      ],
+      "attempt_limit": 12,
+      "plateau_limit": 5
+    },
+    {
+      "id": "walk",
+      "title": "Пройти вправо с чередованием опоры",
+      "program": "walk",
+      "depends": [
+        "balance",
+        "step"
+      ],
+      "metrics": [
+        {
+          "name": "progress",
+          "label": "Перемещение вправо",
+          "expression": "s['x']-initial['x']",
+          "reduce": "last",
+          "target": {
+            "min": 100
+          },
+          "unit": "px"
+        },
+        {
+          "name": "upright_run",
+          "label": "Непрерывное удержание тела",
+          "expression": "s['upright']",
+          "reduce": "longest",
+          "target": {
+            "min": 8
+          },
+          "unit": "с"
+        },
+        {
+          "name": "left_contacts",
+          "label": "Эпизоды левой опоры",
+          "expression": "(s['support']['left_foot'] or s['support']['left_toe'])",
+          "reduce": "transitions",
+          "target": {
+            "min": 3
+          }
+        },
+        {
+          "name": "right_contacts",
+          "label": "Эпизоды правой опоры",
+          "expression": "(s['support']['right_foot'] or s['support']['right_toe'])",
+          "reduce": "transitions",
+          "target": {
+            "min": 3
+          }
+        },
+        {
+          "name": "airtime",
+          "label": "Время без опоры",
+          "expression": "not (s['support']['left_foot'] or s['support']['left_toe'] or s['support']['right_foot'] or s['support']['right_toe'])",
+          "reduce": "duration",
+          "target": {
+            "max": 0.4
+          },
+          "unit": "с"
+        },
+        {
+          "name": "slip",
+          "label": "Суммарное проскальзывание опоры",
+          "expression": "((abs(s['joints']['left_toe'][0]-prev['joints']['left_toe'][0]) if s['support']['left_toe'] else abs(s['joints']['left_foot'][0]-prev['joints']['left_foot'][0]) if s['support']['left_foot'] else 0)+(abs(s['joints']['right_toe'][0]-prev['joints']['right_toe'][0]) if s['support']['right_toe'] else abs(s['joints']['right_foot'][0]-prev['joints']['right_foot'][0]) if s['support']['right_foot'] else 0))/s['dt']",
+          "reduce": "integral",
+          "target": {
+            "max": 25
+          },
+          "unit": "px"
+        },
+        {
+          "name": "end_upright",
+          "label": "Тело удерживается в конце",
+          "expression": "1 if s['upright'] else 0",
+          "reduce": "last",
+          "target": {
+            "min": 1
+          }
+        }
+      ],
+      "score": "r['metrics']['progress']/100 + .25*r['metrics']['upright_run'] - 2*r['metrics']['slip']/100 - .01*r['muscle_work']",
+      "success": "r['upright_ratio']>=.8 and r['grounded_ratio']>=.9",
+      "guards": [
+        "r['mode']=='physical'",
+        "r['external_supports']==0",
+        "r['powered_motors']==0",
+        "r['gravity']>=900",
+        "r['max_bone_error']<2"
+      ],
+      "cases": [
+        {
+          "id": "standard",
+          "frames": 600,
+          "start": "neutral",
+          "split": "train"
+        },
+        {
+          "id": "small_push",
+          "frames": 600,
+          "start": "neutral",
+          "split": "validation",
+          "impulses": [
+            {
+              "at": 120,
+              "joint": "hip",
+              "value": [
+                8,
+                0
+              ]
+            }
+          ]
+        }
+      ],
+      "attempt_limit": 16,
+      "plateau_limit": 5
+    }
+  ]
+}

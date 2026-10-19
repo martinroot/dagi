@@ -130,6 +130,7 @@ async function refreshWorld(token = generation) {
   const data = await api(`game/sessions/${id}`);
   if (token !== generation || id !== sessionId || data.scene.revision < revision) return;
   lifeRefresh(data);
+  if(typeof learningRefresh==="function")learningRefresh(data.learning);
   if(typeof studioRuntime==="function")studioRuntime(data);
   if(data.scene.revision === revision)return;
   const previous=sceneData, changedVersion=previous && data.scene.version!==previous.scene.version;
