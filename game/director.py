@@ -19,11 +19,12 @@ _CACHE = threading.local()
 HELP = {
     "edit": "project {name,description,files:{'main.js':source,...},entry?:'main.js',activate?:true}; edits one named project; files merge with existing files unless replace:true; <=12 files, <=48000 source chars total. Each file is CommonJS: module.exports; require('./helper.js') loads project files only. Main exports a synchronous function(input). Full JS functions, loops, classes, math and arrays work.",
     "input": "{t,dt,s,state,params,event}; t is seconds since this project was activated, dt=1/60; s is current physical sensors incl joints, objects, appendages, contact_evidence:{objects,support,joints,grip}, runtime{thinking,status}; state is your durable JSON state; event is a queued human project event or null; params is your saved numeric parameters.",
+    "physical_control":"For an unassisted body use control.muscles and relative servos; drive/jump/pose/free forces are unavailable. s.articulation,s.mechanisms,s.ropes,s.energy provide physical evidence. Read game_observe view=schema,path=physics for exact construction/control.",
     "return": "{control?,state?,camera?,expression?,draw?,caption?,beat?,hide_body?}; all omitted channels reset to neutral each tick except state. control uses existing drive/jump/pose/forces/object_forces/grip, plus appendage_pose:{id:absolute_angle_radians}. Physical output is validated and applied to real motors.",
     "camera": "{target:'head'|'hip'|joint_name|object_id|appendage_id|[world_x,world_y],zoom:.65..4,offset:[x,y],ease:.05..3,shake:0..5,letterbox:0...18}; target tracks live physics. Default overview center [500,300], zoom1. Framing is presentation, never a physical teleport.",
     "expression": "{valence:-1..1,arousal:0..1,focus:0..1,surprise:0..1,mouth:0..1,squint:0..1,tilt:-.5...5,gaze:[x,y]}; cues are authored expression, not claims of felt emotion.",
     "draw": "<=120 vector commands, each {type:line|circle|ellipse|rect|text|path,x,y,...,fill?:#RRGGBB,stroke?:#RRGGBB,width?:line_width,alpha?:0..1,space?:world|screen,layer?:background|foreground}. line:x2,y2; circle:radius; ellipse:rx,ry,angle?; rect:w,h,radius?; text:text,size?; path:points[[x,y],...],closed?. World commands share the camera; screen commands stay fixed. hide_body:true lets you draw a complete custom visual body using real joint positions.",
-    "anatomy": "appendage {part:{id,parent:existing_joint_or_previously_defined_appendage_id,length:8..90,angle:-6.3..6.3,radius:2..10,mass:.05..3,color:#RRGGBB}}; adds/updates a real capsule limb with pivot and rotary motor. appendage_pose sets its angle. remove_appendage{id} removes its descendant chain. Body appendages participate in collisions. Base skeleton remains supported by assisted motors.",
+    "anatomy": "appendage {part:{id,parent:existing_joint_or_previously_defined_appendage_id,length:8..90,angle:-6.3..6.3,radius:2..10,mass:.05..3,color:#RRGGBB}}; adds/updates a real capsule limb with pivot and rotary motor. appendage_pose sets its angle. remove_appendage{id} removes its descendant chain. Body appendages participate in collisions. Physical mode uses internal muscles and joint limits; assisted mode retains its explicitly labelled posture aids.",
     "human_controls": "widget or component event target:{type:'project',name:project_name,event?:your_event_id} runs locally without API. Your program receives input.event once; generic viewer button sends human_attention. Use event-driven reactions, not only timed choreography.",
     "world_edits": "body{body},joint{joint},remove_body{id},remove_joint{id},controller{values},physics{values},appearance{values},theme{values},component{component},widget{widget},project{...},appendage{part} can be submitted together in one game_iteration. Up to24 changes. No built-in scene sequence.",
     "limits": "8 MB JS heap, 256 KB stack, 8 ms CPU per invocation; no async, host imports, network or filesystem; state <=8 KB, output <=32 KB. Project runs at60Hz on server without API calls or open browser. Use state for memory; global variables are not durable and must not hold behavior state. Installed engine/auth/billing code is not hot-patched by project files.",
@@ -237,12 +238,16 @@ def anatomy(world, args):
         removed={args["id"]}
         for part in world["appendages"]:
             if part["parent"] in removed:removed.add(part["id"])
+        endpoints=removed|{"self:"+n for n in removed}
+        world["mechanisms"]=[j for j in world["mechanisms"] if j["a"] not in endpoints and j["b"] not in endpoints]
+        world["ropes"]=[r for r in world["ropes"] if r["a"] not in endpoints and r["b"] not in endpoints]
         world["appendages"]=[p for p in world["appendages"] if p["id"] not in removed]
         world["appendage_frames"]=[p for p in world["appendage_frames"] if p[0] not in removed]
     elif operation=="remove_body":
         keys(args,("operation","id"))
         if not any(o["kind"]=="body" and o["id"]==args.get("id") for o in world["objects"]):raise ValueError("physical body not found")
         world["objects"]=[o for o in world["objects"] if o["id"]!=args["id"]]
+        world["ropes"]=[r for r in world["ropes"] if args["id"] not in (r["a"],r["b"])]
         world["mechanisms"]=[j for j in world["mechanisms"] if args["id"] not in (j["a"],j["b"])]
     elif operation=="remove_joint":
         keys(args,("operation","id"))

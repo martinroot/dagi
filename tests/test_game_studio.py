@@ -271,7 +271,8 @@ def test_web_self_improvement_injects_passport_before_first_call_and_releases_ve
         session = json.loads(body)["session_id"]
         _, _, body = _request(f"{base}/api/sessions/{session}/runs", "POST", {"message": "Improve yourself"})
         run = json.loads(body)["run_id"]
-        detail = _wait_for_status(base, run, "completed")
+        # v6 embodiment trials run real Chipmunk physics per test; allow a real budget.
+        detail = _wait_for_status(base, run, "completed", timeout=60)
         assert all(c["status"] == "succeeded" for c in detail["tool_calls"])
         provider = next(p for p in instances if p.requests)
         first = next(m["content"] for m in provider.requests[0] if m["role"] == "system")

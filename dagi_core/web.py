@@ -34,6 +34,7 @@ from .tools import ToolRegistry, _resolve
 from .workspace import resolve_session_workspace
 from .goals import validate_checks, verify
 from .worker import load_workers
+from game.world import links as game_links
 from game.bridge import GAME_PROMPT, identity as game_identity, register_game, render_game_context
 from game.turns import GameContext, game_call_cap
 from game.life import LifeRuntime
@@ -421,7 +422,7 @@ class WebApp:
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
-                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/direction.js", "/game/component-host.js"}:
+                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/direction.js", "/game/workshop.js", "/game/component-host.js"}:
                         self._static(path)
                     elif path == "/api/auth/session":
                         if app._is_authenticated(self.headers):
@@ -489,9 +490,9 @@ class WebApp:
                         workspace = resolve_session_workspace(app.config.workspace, session["workspace"])
                         self._send_json(200, {"self": game_identity(session_id, workspace, world),
                             "scene": game_observation(world), "frame": game_frame(world),
-                            "links": PAIRS, "motion": world["motion"], "history": world["history"],
+                            "links": game_links(world), "motion": world["motion"], "history": world["history"],
                             "reflections": world["reflections"], "widgets": world["widgets"], "components": world["components"], "theme": world["theme"],
-                            "direction":world["direction"], "appendages":world["appendages"], "projects":[{"name":k,"version":v["version"],"description":v["description"]} for k,v in world["projects"].items()],
+                            "body_control":world["body_control"], "environment":world["environment"], "ropes":world["ropes"], "substances":world["substances"], "direction":world["direction"], "appendages":world["appendages"], "projects":[{"name":k,"version":v["version"],"description":v["description"]} for k,v in world["projects"].items()],
                             "life": world["life"], "policies": [{"name": k, "version": v["version"], "description": v["description"]} for k,v in world["policies"].items()], "appearance": world["appearance"], "evolution": world["evolution"],
                             "build": build_summary(world), "preview": {k: world["draft"]["candidate"][k] for k in ("widgets", "objects", "components")} if world["draft"] else None,
                             "last_release": world["last_release"], "activity": activity, "server_time": time.time(),
@@ -597,7 +598,9 @@ class WebApp:
                         with _StateContext(self._state()) as state:
                             session_id = state.create_session(title, workspace=workspace)
                         with GameStore(app.config.database) as game:
-                            game.create(session_id)
+                            mode=body.get("mode","physical")
+                            if mode not in ("physical","assisted"):raise ValueError("mode must be physical or assisted")
+                            game.create(session_id,mode=mode)
                         self._send_json(201, {"session_id": session_id})
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)/project-event", parsed.path):
                         session_id=int(match.group(1))
@@ -633,14 +636,21 @@ class WebApp:
                                 if kind=="grab":
                                     from game.world import number
                                     number(body.get("x"),0,1000,"x");number(body.get("y"),0,600,"y")
-                                    if not any(o["id"]==body.get("id") and o["kind"]=="body" for o in world["objects"]):raise ValueError("unknown dynamic object")
+                                    if not any(o["id"]==body.get("id") and o["kind"]=="body" and o.get("motion")!="static" for o in world["objects"]):raise ValueError("unknown dynamic object")
                                     world["human"].update(object=body["id"],pointer=[body["x"],body["y"]])
                                 elif kind=="release":
                                     world["human"].pop("object",None);world["human"].pop("pointer",None)
+                                elif kind=="muscle":
+                                    from game.embodiment import limits
+                                    from game.world import number
+                                    if body.get("joint") not in limits(world):raise ValueError("unknown muscle joint")
+                                    value=number(body.get("effort"),-1,1,"effort")
+                                    world["human"].update(muscles={body["joint"]:value},until=world["tick"]+18)
                                 elif kind=="drive":
                                     from game.world import number
                                     number(body.get("drive",0),-1,1,"drive")
                                     if type(body.get("jump",False)) is not bool:raise ValueError("jump must be boolean")
+                                    if world["body_control"]["mode"]=="physical":raise ValueError("physical mode uses muscle input, not automatic drive or jump")
                                     world["human"].update(drive=body.get("drive",0),jump=body.get("jump",False),until=world["tick"]+30)
                                 else:raise ValueError("input type must be grab, release or drive")
                         app.life.ensure_clock(session_id)
@@ -1238,7 +1248,7 @@ class WebApp:
             if is_game:
                 with GameStore(self.config.database) as game:
                     with game.transient(session_id) as world:
-                        world["life"].update(thinking=True,run_id=run_id)
+                        world["life"].update(thinking=True,run_id=run_id,run_kind="autonomous" if message.startswith("Continue your own development in this living world.") else "human")
             delegation = DelegationManager(
                 state,
                 self.config.workspace,
@@ -1300,7 +1310,7 @@ class WebApp:
                     try:
                         with game.transient(session_id) as world:
                             if world["life"].get("run_id")==run_id:
-                                world["life"]["thinking"]=False
+                                world["life"].update(thinking=False,run_id=None)
                     except ValueError:
                         pass  # Runtime closed while the cancelled turn was unwinding.
             state.close()

@@ -437,7 +437,7 @@ def test_web_agent_chat_moves_its_own_body_persists_evidence_and_new_session_is_
         assert b"game.js" in page
         _, _, script = _request(base + "/game/game.js")
         assert b"EventSource" in script
-        _, _, created = _request(base + "/api/game/sessions", "POST", {"title": "physical test"})
+        _, _, created = _request(base + "/api/game/sessions", "POST", {"title": "assisted compatibility test", "mode":"assisted"})
         session = json.loads(created)["session_id"]
         _, _, created = _request(base + "/api/game/sessions", "POST", {"title": "clean"})
         clean = json.loads(created)["session_id"]

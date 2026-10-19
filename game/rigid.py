@@ -20,7 +20,7 @@ class RigidSimulator:
         self.world = world
         self.space = pymunk.Space()
         self.space.gravity = (0, world["gravity"])
-        self.space.iterations = max(12,world["material"]["iterations"]*2)
+        self.space.iterations = max(36 if world["ropes"] else 12,world["material"]["iterations"]*2)
         self.space.collision_slop = .15
         self.space.damping = .96
         self.segments = {}
@@ -37,7 +37,9 @@ class RigidSimulator:
             floor.friction = 1.1 * world["material"]["friction"] / .82
             self.space.add(floor)
         nodes = world["nodes"]
-        for a, b in PAIRS:
+        pairs=PAIRS+[(s+"_foot",s+"_toe") for s in ("left","right") if s+"_toe" in nodes]
+        self.physical=world["body_control"]["mode"]=="physical"
+        for a, b in pairs:
             if a == "head":
                 continue
             pa, pb = pymunk.Vec2d(nodes[a]["x"], nodes[a]["y"]), pymunk.Vec2d(nodes[b]["x"], nodes[b]["y"])
@@ -50,7 +52,7 @@ class RigidSimulator:
                              (nodes[a]["y"] - nodes[a]["py"] + nodes[b]["y"] - nodes[b]["py"]) * 30)
             capsule = pymunk.Segment(body, (-length / 2, 0), (length / 2, 0), 4)
             capsule.friction = (1.25 if "foot" in b else .65)*world["material"]["friction"]/.82
-            capsule.filter = pymunk.ShapeFilter(group=1, categories=1)
+            capsule.filter = pymunk.ShapeFilter(group=0 if world["body_control"]["self_collision"] else 1, categories=1)
             self.space.add(body, capsule)
             self.segments[b] = (body, length, a, b)
             self._shape_joints[capsule] = b
@@ -69,17 +71,21 @@ class RigidSimulator:
         head.position = (nodes["head"]["x"], nodes["head"]["y"])
         head.velocity = ((nodes["head"]["x"] - nodes["head"]["px"]) * 60, (nodes["head"]["y"] - nodes["head"]["py"]) * 60)
         shape = pymunk.Circle(head, 12)
-        shape.filter = pymunk.ShapeFilter(group=1, categories=1)
+        shape.filter = pymunk.ShapeFilter(group=0 if world["body_control"]["self_collision"] else 1, categories=1)
         shape.friction = .5
         self.space.add(head, shape)
         parent, anchor = self.ends["neck"]
-        neck = pymunk.PinJoint(parent, head, anchor, (0, 0))
-        neck.distance = 20
+        if self.physical:
+            neck=pymunk.PivotJoint(parent,head,anchor,(0,20));neck.collide_bodies=False
+        else:
+            neck = pymunk.PinJoint(parent, head, anchor, (0, 0))
+            neck.distance = 20
         self.space.add(neck)
         self.ends["head"] = (head, (0, 0))
         self._shape_joints[shape] = "head"
         self.springs = {}
         for name, (body, length, a, b) in self.segments.items():
+            if self.physical:continue
             frequency = 1800 if name == "hip" else 2800 if "knee" in name or "foot" in name else 500
             spring = pymunk.DampedRotarySpring(self.space.static_body, body, -body.angle, body.moment * frequency, body.moment * 90)
             self.space.add(spring)
@@ -100,46 +106,24 @@ class RigidSimulator:
             shape = pymunk.Segment(body,(-length/2,0),(length/2,0),radius)
             shape.filter=pymunk.ShapeFilter(group=1,categories=1);shape.friction=.65
             pivot=pymunk.PivotJoint(parent,body,anchor,(-length/2,0))
-            motor=pymunk.DampedRotarySpring(self.space.static_body,body,-angle,body.moment*450,body.moment*35)
-            self.space.add(body,shape,pivot,motor)
+            motor=None if self.physical else pymunk.DampedRotarySpring(self.space.static_body,body,-angle,body.moment*450,body.moment*35)
+            self.space.add(body,shape,pivot)
+            if motor:self.space.add(motor)
             self.appendages[part["id"]]=(body,length,motor,part)
             self.extra_ends[part["id"]]=(body,(length/2,0))
             self._shape_joints[shape]=part["id"]
-        for obj in world["objects"]:
-            if obj["kind"] == "body":
-                mass = obj["mass"]
-                moment = pymunk.moment_for_circle(mass, 0, obj["radius"]) if obj["shape"] == "circle" else pymunk.moment_for_box(mass, (obj["width"], obj["height"]))
-                body = pymunk.Body(mass, moment)
-                body.position = (obj["x"], obj["y"])
-                body.velocity = (obj.get("vx", 0), obj.get("vy", 0))
-                body.angle = obj.get("angle", 0)
-                body.angular_velocity = obj.get("angular_velocity", 0)
-                shape = pymunk.Circle(body, obj["radius"]) if obj["shape"] == "circle" else pymunk.Poly.create_box(body, (obj["width"], obj["height"]), radius=2)
-                shape.elasticity = obj["restitution"]
-                shape.friction = .85
-                self.space.add(body, shape)
-                self.objects[obj["id"]] = body
-                self._shape_objects[shape] = obj["id"]
-            elif obj["kind"] == "block":
-                body = pymunk.Body(body_type=pymunk.Body.STATIC)
-                body.position = (obj["x"] + obj["width"] / 2, obj["y"] + obj["height"] / 2)
-                shape = pymunk.Poly.create_box(body, (obj["width"], obj["height"]), radius=1)
-                shape.friction = 1.1
-                self.space.add(body, shape)
-        self.space.on_collision(None, None, post_solve=self._contact)
-        for joint in world.get("mechanisms",[]):
-            a=self.space.static_body if joint["a"]=="world" else self.objects.get(joint["a"])
-            b=self.space.static_body if joint["b"]=="world" else self.objects.get(joint["b"])
-            if a is None or b is None:
-                raise ValueError("mechanism references a removed body")
-            if joint["type"]=="pivot":
-                connection=pymunk.PivotJoint(a,b,joint["anchor"])
-            elif joint["type"]=="motor":
-                connection=pymunk.SimpleMotor(a,b,joint["rate"])
-            else:
-                connection=pymunk.DampedSpring(a,b,(0,0),(0,0),joint["length"],joint["stiffness"],joint["damping"])
-            connection.max_force=joint["max_force"]
-            self.space.add(connection)
+        from .embodiment import Embodiment
+        from .mechanics import Mechanics
+        self.muscle_system=Embodiment(self)
+        self.mechanics=Mechanics(self)
+        parts=[(body,{a,b}) for body,length,a,b in self.segments.values()]+[(head,{"head","neck"})]+[(body,{part["parent"],part["id"]}) for body,length,motor,part in self.appendages.values()]
+        self.adjacent={frozenset((a,b)) for i,(a,nodes) in enumerate(parts) for b,other in parts[i+1:] if nodes&other}
+        self.space.on_collision(None,None,pre_solve=self._filter_contact,post_solve=self._contact)
+
+    def _filter_contact(self,arbiter,space,data):
+        a,b=arbiter.shapes
+        if a in self._shape_joints and b in self._shape_joints and frozenset((a.body,b.body)) in self.adjacent:
+            arbiter.process_collision=False
 
     def _contact(self, arbiter, space, data):
         a, b = arbiter.shapes
@@ -148,7 +132,7 @@ class RigidSimulator:
                 continue
             name = self._shape_joints[actor]
             self.joint_contacts.add(name)
-            if name.endswith("foot"):
+            if name.endswith("foot") or name.endswith("toe"):
                 # Contact must support the foot from below, not be a side wall.
                 p = (self.ends | self.extra_ends)[name][0].local_to_world((self.ends | self.extra_ends)[name][1])
                 if other.point_query((p.x, p.y + 5)).distance < 2:
@@ -160,15 +144,20 @@ class RigidSimulator:
         from .world import OFFSETS, DT
         w = self.world
         self.space.gravity = (0, w["gravity"])
-        self.space.damping = clamp(w["material"]["damping"]**4,.5,.999)
+        self.space.damping = w["body_control"]["air_damping"] if self.physical else clamp(w["material"]["damping"]**4,.5,.999)
+        self.muscle_system.prepare(control)
+        self.mechanics.world=w
+        self.mechanics.control(control)
         for body in self.space.bodies:
-            if body.body_type==pymunk.Body.DYNAMIC:
+            if not self.physical and body.body_type==pymunk.Body.DYNAMIC:
                 body.velocity=(body.velocity.x,body.velocity.y*w["material"]["vertical_damping"])
         drive = control.get("drive", 0)
         human = w.get("human", {})
         if human.get("until", 0) >= w["tick"]:
             drive = human.get("drive", drive)
         pose = {name: list(value) for name, value in OFFSETS.items()}
+        for side in ("left","right"):
+            if side+"_toe" in w["nodes"]:pose[side+"_toe"]=[pose[side+"_foot"][0]+13,pose[side+"_foot"][1]]
         phase = w["tick"] * DT * (5 + abs(drive) * 4)
         for side, offset in (("left", 0), ("right", math.pi)):
             swing = math.sin(phase + offset)
@@ -186,6 +175,7 @@ class RigidSimulator:
             spring.stiffness = body.moment * (1800 if name == "hip" else 2800 if "knee" in name or "foot" in name else 500) * strength * w["material"]["stiffness"]
             spring.damping = body.moment * 90 * min(1, strength)
         for name,(body,length,motor,part) in self.appendages.items():
+            if motor is None:continue
             angle=control.get("appendage_pose",{}).get(name,part["angle"])
             angle+=round((body.angle-angle)/(2*math.pi))*2*math.pi
             motor.rest_angle=-angle
@@ -193,8 +183,8 @@ class RigidSimulator:
         total_mass = sum(b.mass for b in self.space.bodies if b.body_type == pymunk.Body.DYNAMIC and b not in self.objects.values())
         grounded = bool(self.ground_contacts) or any(p["y"] > 530 for key, p in w["nodes"].items() if key.endswith("foot"))
         desired = drive * w["controller"]["speed"]
-        torso.apply_force_at_world_point((clamp((desired - torso.velocity.x) * total_mass * (35 if grounded else 1.5), -18000, 18000), 0), torso.position)
-        if (control.get("jump") or human.get("jump")) and grounded:
+        if not self.physical:torso.apply_force_at_world_point((clamp((desired - torso.velocity.x) * total_mass * (35 if grounded else 1.5), -18000, 18000), 0), torso.position)
+        if not self.physical and (control.get("jump") or human.get("jump")) and grounded:
             for body in self.space.bodies:
                 if body.body_type == pymunk.Body.DYNAMIC and body not in self.objects.values():
                     body.velocity = (body.velocity.x, -w["controller"]["jump"])
@@ -205,7 +195,7 @@ class RigidSimulator:
         head = self.ends["head"][0]
         target = hip + pymunk.Vec2d(*pose["head"])
         force = (target - head.position) * 900 - head.velocity * 65
-        head.apply_force_at_world_point(force * strength, head.position)
+        if not self.physical:head.apply_force_at_world_point(force * strength, head.position)
         for name, vector in control.get("forces", {}).items():
             body, anchor = self.ends[name]
             body.apply_force_at_world_point((vector[0] * body.mass, vector[1] * body.mass), body.local_to_world(anchor))
@@ -222,7 +212,9 @@ class RigidSimulator:
             body, anchor = self.ends.get(hand_name, self.ends["right_hand"])
             point = body.local_to_world(anchor)
             obj = self.objects[target_id]
-            if (obj.position - point).length < 55:
+            distance=min((shape.point_query(point).distance for shape in obj.shapes),default=float("inf"))
+            reachable=distance<=6 if self.physical else (obj.position-point).length<55
+            if reachable:
                 joint = pymunk.PivotJoint(body, obj, point)
                 joint.max_force = 4500
                 self.space.add(joint)
@@ -235,8 +227,13 @@ class RigidSimulator:
         self.contact_ids.clear()
         self.ground_contacts.clear()
         self.joint_contacts.clear()
-        for _ in range(2):
-            self.space.step(DT / 2)
+        self.mechanics.begin_step()
+        for _ in range(4 if self.physical or w["ropes"] else 2):
+            self.muscle_system.apply()
+            self.space.step(DT / (4 if self.physical or w["ropes"] else 2))
+            self.mechanics.after_substep()
+        self.muscle_system.record(DT)
+        self.mechanics.record(DT)
         for name, (body, local) in self.ends.items():
             p = body.local_to_world(local)
             velocity = body.velocity_at_world_point(p)

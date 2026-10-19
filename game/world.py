@@ -68,8 +68,12 @@ def upgrade(world):
     return living_upgrade(world)
 
 
+def links(world):
+    return PAIRS+[(side+"_foot",side+"_toe") for side in ("left","right") if side+"_toe" in world["nodes"]]
+
+
 def frame(world, presentation=True):
-    result = {"tick": world["tick"], "direction":copy.deepcopy(world.get("direction",{})), "emotion":copy.deepcopy(world.get("emotion",{})), "appendages":copy.deepcopy(world.get("appendage_frames",[])), "objects": [[o["id"],round(o["x"],2),round(o["y"],2),round(o.get("angle",0),3)] for o in world["objects"] if o["kind"]=="body"], "nodes": {name: [round(p["x"], 2), round(p["y"], 2)] for name, p in world["nodes"].items()}}
+    result = {"tick": world["tick"], "ropes":copy.deepcopy(world["rope_frames"]),"articulation":copy.deepcopy(world["articulation"]),"mechanisms":copy.deepcopy(world["mechanics_state"]),"energy":copy.deepcopy(world["energy"]), "direction":copy.deepcopy(world.get("direction",{})), "emotion":copy.deepcopy(world.get("emotion",{})), "appendages":copy.deepcopy(world.get("appendage_frames",[])), "objects": [[o["id"],round(o["x"],2),round(o["y"],2),round(o.get("angle",0),3)] for o in world["objects"] if o["kind"]=="body"], "nodes": {name: [round(p["x"], 2), round(p["y"], 2)] for name, p in world["nodes"].items()}}
     if not presentation:result.pop("direction",None)
     return result
 
@@ -80,7 +84,7 @@ def avatar_state(world):
         return "uncertain"
     if life.get("thinking"):
         return "curious"
-    if life.get("running") and world.get("active_policy"):
+    if life.get("running") and (world.get("active_policy") or world.get("active_project")):
         return "focused"
     if world.get("history") and world["history"][-1].get("kind") == "reflection":
         return "curious"
@@ -120,7 +124,7 @@ def observation(world):
         "position": {"x": round(hip["x"], 2), "y": round(hip["y"], 2)},
         "upright": upright, "grounded": grounded,
         "physics": {"gravity": world["gravity"], "step_hz": 60, "floor_y": FLOOR, "width": WIDTH,
-                    "clock": "continuous" if world.get("life",{}).get("running") else "paused", "engine": world.get("physics_engine","legacy"), "solver": "Verlet + distance constraints + circle/AABB contacts; assisted posture motor"},
+                    "clock": "continuous" if world.get("life",{}).get("running") else "paused", "engine": world.get("physics_engine","legacy"), "solver": ("Chipmunk articulated rigid bodies; internal muscles and joint limits" if world["body_control"]["mode"]=="physical" else "Chipmunk assisted motors") if world.get("physics_engine")=="chipmunk" else "Verlet assisted posture"},
         "controller": copy.deepcopy(world["controller"]), "objects": copy.deepcopy(world["objects"]),
         "behaviors": copy.deepcopy(world["behaviors"]), "goal": goal,
         "last_action": copy.deepcopy(world["history"][-1]) if world["history"] else None,
@@ -128,6 +132,7 @@ def observation(world):
         "autonomy_execution": copy.deepcopy(world.get("autonomy_execution")),
         "version": world.get("version", 0), "widget_count": len(world.get("widgets", [])),
         "life": copy.deepcopy(world.get("life", {})),
+        "body_control":copy.deepcopy(world["body_control"]), "energy":copy.deepcopy(world["energy"]),
         "active_project":world.get("active_project"), "project_error":copy.deepcopy(world.get("project_error")), "appendages":copy.deepcopy(world.get("appendages",[])),
         "active_policy": world.get("active_policy"), "policy_error": world.get("policy_error"),
         "appearance": copy.deepcopy(world.get("appearance", {})),

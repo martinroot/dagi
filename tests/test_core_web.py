@@ -78,8 +78,8 @@ def _stop(server, thread):
     thread.join(timeout=3)
 
 
-def _wait_for_status(base, run_id, expected):
-    deadline = time.monotonic() + 5
+def _wait_for_status(base, run_id, expected, timeout=5):
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         _, _, body = _request(f"{base}/api/runs/{run_id}")
         run = json.loads(body)

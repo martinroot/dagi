@@ -15,6 +15,9 @@ from .world import act, evolve, keys, observation, reflect, set_goal, validate_a
 from .studio import activate, abort_release, build, build_summary, digest, review, visual_edit
 
 SOURCE_FILES = {
+    "game/embodiment.py":Path(__file__).with_name("embodiment.py"),
+    "game/mechanics.py":Path(__file__).with_name("mechanics.py"),
+    "game/workshop.py":Path(__file__).with_name("workshop.py"),
     "game/director.py": Path(__file__).with_name("director.py"),
     "game/static/scene.js": Path(__file__).parent / "static" / "scene.js",
     "game/static/direction.js": Path(__file__).parent / "static" / "direction.js",
@@ -69,6 +72,7 @@ GAME_DESIGN_DESCRIPTION = (
 )
 
 GAME_ITERATION_DESCRIPTION = (
+    "Physical construction/control: game_observe view=schema,path=physics. New physical bodies require muscles/relative servos, not drive/jump/pose. Edits also include body_control{values},substance{name,values},rope{rope},remove_rope{id},environment{values}. "
     "Preferred creative surface: project {name,description,files:{'main.js':JavaScript_source,...},entry?:'main.js',params?,activate?}. "
     "Main is CommonJS module.exports=(input)=>({control,state,camera,expression,draw,caption,beat}); full JavaScript with functions/loops/modules executes locally on the server at60Hz. "
     "Read game_observe view=schema for exact project input/output syntax. Camera, expression and graphics synchronize with physical actions in one program. "
@@ -80,12 +84,35 @@ GAME_ITERATION_DESCRIPTION = (
     "body {body:{id,shape,rect:width,height|circle:radius,x,y,mass,restitution,color,label?}}; joint {joint:{...}}; component {component:{...}}; "
     "widget {widget:{...}}; todo {id,item_id,done}; theme {values:{background,accent}}; remove_component/remove_widget {id}. "
     "Legacy game_evolve shapes (add/remove/behavior) are NOT accepted here; call game_observe view=schema for exact current syntax. "
+    "Optional verify:[{label,expression}] tests <=6 boolean expressions over candidate metrics r (objects[id]{dx,dy,min_x,max_x,min_y,max_y,rotation}, ropes[id]{broken,peak_tension},work,upright_ratio). Failed predicates preserve the live world. "
     "Optional search {parameter,values:[numbers],score:expression over trial metrics r} evaluates <=8 alternatives locally, higher score wins; no model call per simulation step."
 )
 
 GAME_PROMPT = SYSTEM_PROMPT + """
 
 You inhabit the visible stickman AND author the world and how it is shown.
+New sessions use physical, unassisted articulation. A new body cannot already
+walk or hold a standing pose. Its controls are internal muscles (-1..1) and
+explicit relative joint servos; motor reactions act on both linked bodies.
+Read game_observe view=schema path=physics for physical construction/control.
+Do not output drive, jump, absolute pose or free forces in physical mode. Do not
+silently switch to assisted mode to fake learned walking. Develop balance,
+getting up and locomotion as explicit measured tasks, preserving failed attempts
+as useful evidence. You have angles, angular velocities, limits, contacts and
+work sensors. Name a new ability honestly; compilation does not mean mastery.
+General materials, constraints and colliding rope links support invented machines
+and robots. Endpoints may be skeleton joints, objects or world anchors. Route a
+rope physically around a pulley rim and inspect measured tension/actual motion.
+Before constructing a mechanism, state the expected causal motion and test it.
+Optional game_iteration verify[{label,expression}] checks boolean expressions over
+r: object dx/dy, min/max positions, rotation, rope peak_tension/broken, work and
+upright fraction. Parameter search uses the same measurements. Your own chosen
+predicates are evidence of that check only, not an independent intelligence score.
+Static anchors, powered motors and human dragging are external supports, not
+muscle learning. Use icons/hotkeys and project-event targets for local skill
+buttons. You own the sky/ground/environment and can layer custom graphics; painted
+terrain has no collision unless you construct static physical geometry.
+
 Your primary creative medium is a multi-file JavaScript project, not a tiny math
 expression. Write coherent behavior with reusable functions, loops and state.
 Coordinate physical motors, camera tracking/zooms, gaze, expressive face, custom
@@ -151,7 +178,7 @@ def render_game_context(database, session_id, workspace, model):
     with GameStore(database) as store:
         world = store.get(session_id)
     data = summary(world)
-    data.update({"workspace":str(workspace),"model":model,"code":{"body":"game/rigid.py","policy":"game/living.py","brain":"dagi_core/agent.py","context":"game/turns.py","viewer":"game/static/scene.js","director":"game/director.py","boundary":"you own multi-file JS project code, physical constructions, body appendages, camera, expression and vector rendering; installed host engine/auth/billing are inspectable, not project files"},"brain":"LLM JSON API -> registry -> executable policy -> measured evidence", "engine":"Chipmunk rigid bodies + assisted motors" if world["physics_engine"]=="chipmunk" else "legacy Verlet",
+    data.update({"workspace":str(workspace),"model":model,"code":{"body":"game/rigid.py","policy":"game/living.py","brain":"dagi_core/agent.py","context":"game/turns.py","viewer":"game/static/scene.js","director":"game/director.py","boundary":"you own multi-file JS project code, physical constructions, body appendages, camera, expression and vector rendering; installed host engine/auth/billing are inspectable, not project files"},"brain":"LLM JSON API -> registry -> executable policy -> measured evidence", "engine":("Chipmunk unassisted articulated body" if world["body_control"]["mode"]=="physical" else "Chipmunk assisted body") if world["physics_engine"]=="chipmunk" else "legacy Verlet",
                  "human_sees":"live body, objects, expression, tools, chat; a fresh chronological browser canvas filmstrip may be supplied separately",
                  "draft": {"state":world["draft"]["state"],"objective":world["draft"]["objective"]} if world["draft"] else None, "memory":str(world["policy_state"])[:600], "recent_objectives":[c["objective"] for c in world["evolution"][-3:]],
                  "programs":[{"name":k,"kind":kind,"version":v["version"],"description":v["description"]} for kind,collection in (("project",world["projects"]),("policy",world["policies"])) for k,v in collection.items()]})
@@ -508,6 +535,8 @@ def register_game(tools, life=None):
         with GameStore(tools.state.path) as store:
             world = current_world(store)
         view = args.get("view","state")
+        if view=="physics":
+            return {"body_control":world["body_control"],"sensors":sensors(world),"substances":world["substances"],"ropes":world["ropes"],"mechanisms":world["mechanisms"]}
         if view=="code":
             name=world["active_project"] or (world.get("project_error") or {}).get("name")
             if name:
@@ -526,9 +555,12 @@ def register_game(tools, life=None):
         if view=="schema":
             from .director import HELP
             section=args.get("path")
+            if section=="physics":
+                from .workshop import HELP as PHYSICS_HELP
+                return PHYSICS_HELP
             if section=="project":return HELP
             if section=="policy":return POLICY_HELP
-            return {"project":HELP,"policy":POLICY_HELP,"appearance":world["appearance"],"material":world["material"],
+            return {"physical_schema":"For exact muscle, constraint, rope, material and environment contracts use view=schema,path=physics. New sessions use unassisted muscles, not drive.","project":HELP,"policy":POLICY_HELP,"appearance":world["appearance"],"material":world["material"],
                     "extra_outputs":"emotion:{valence:-1..1,arousal:0..1,focus:0..1}; gaze:[world_x,world_y]; grip:{object:id,hand:left_hand|right_hand}, omit to release; params:{name:number}, accessed as p['name']",
                     "joints":"joint:{id,type:pivot|spring|motor,a:body_id|world,b:body_id|world,anchor:[x,y] for pivot,rate:-8..8,max_force:0..20000,length:0..500,stiffness:0..5000,damping:0..500}",
                     "change_types":'Every changes[] object carries an "operation" key. project{name,description,files,entry?,params?,replace?}; appendage{part}; remove_appendage/remove_body/remove_joint{id}; policy{name,code,description,params?}; appearance/material/theme/controller/physics{values}; body{body}; joint{joint}; widget{widget}; component{component}; remove_component/remove_widget{id}. Example: {"operation":"project","name":"scene","description":"...","files":{"main.js":"module.exports=()=>({})"}}',
@@ -558,9 +590,9 @@ def register_game(tools, life=None):
 
     specs = [
         ("game_observe","Read compact state, current code, schema, draft or an allowlisted source. Schema contains exact code/output syntax; use it once, not before every small edit.",
-         {"view":{"type":"string","enum":["state","code","schema","draft","source"]},"path":{"type":"string"},"offset":{"type":"integer"}},[],observing,True),
+         {"view":{"type":"string","enum":["state","code","schema","draft","source","physics"]},"path":{"type":"string"},"offset":{"type":"integer"}},[],observing,True),
         ("game_iteration",GAME_ITERATION_DESCRIPTION,
-         {"objective":{"type":"string"},"changes":{"type":"array","items":{"type":"object"}},"search":{"type":"object"},"play":{"type":"boolean"}},["objective","changes"],iteration,False),
+         {"objective":{"type":"string"},"changes":{"type":"array","items":{"type":"object"}},"search":{"type":"object"},"verify":{"type":"array","items":{"type":"object"}},"play":{"type":"boolean"}},["objective","changes"],iteration,False),
         ("game_life","Control your live physical body directly without asking the human to click: play (no API calls for execution), pause, or discard an unfinished legacy draft.",
          {"action":{"type":"string","enum":["play","pause","discard"]}},["action"],life_tool,False),
         ("game_design", GAME_DESIGN_DESCRIPTION,

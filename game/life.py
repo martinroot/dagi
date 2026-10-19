@@ -100,7 +100,7 @@ class LifeRuntime:
                     elif action in {"start", "play"}:
                         if session_id in self._pending:
                             raise ValueError("wait for the current iteration to finish before restarting")
-                        if action == "play" and not (world["active_policy"] or world["active_project"]):
+                        if action == "play" and world["body_control"]["mode"]!="physical" and not (world["active_policy"] or world["active_project"]):
                             raise ValueError("no feedback policy saved yet; start development or ask the agent to create one")
                         life.update(running=True, error=None, status="observing", thinking=False,
                                     iteration=0, limit=iterations if action == "start" else 0, run_id=None)

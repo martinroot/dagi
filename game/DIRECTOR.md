@@ -1,3 +1,5 @@
+> Current physical mode and construction contracts: [PHYSICS.md](PHYSICS.md). New sessions no longer have the assisted locomotion described in the v5 foundation.
+
 # Director v5 — agent-owned scene projects
 
 The agent owns an executable JavaScript project for the creative part of its

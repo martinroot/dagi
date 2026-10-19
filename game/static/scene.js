@@ -13,7 +13,7 @@ function shadow(ctx,x,y,rx,ry,opacity){ctx.save();ctx.fillStyle=`rgba(32,48,64,$
 function paintObject(ctx,obj,state){
   const x=state?.[1]??obj.x,y=state?.[2]??obj.y,angle=state?.[3]??obj.angle??0;
   if(obj.kind!=="body"){drawWorldObject(ctx,obj,displayed?.tick||0);return;}
-  const rx=obj.shape==="circle"?obj.radius:obj.width/2,ry=obj.shape==="circle"?obj.radius:obj.height/2;
+  const rx=obj.shape==="circle"?obj.radius:obj.shape==="polygon"?Math.max(...obj.vertices.map(p=>Math.abs(p[0]))):obj.width/2,ry=obj.shape==="circle"?obj.radius:obj.shape==="polygon"?Math.max(...obj.vertices.map(p=>Math.abs(p[1]))):obj.height/2;
   const altitude=Math.max(0,540-y-ry);shadow(ctx,x,541,Math.max(7,rx*(1-altitude/900)),Math.max(2,5-altitude/100),.12*Math.max(.15,1-altitude/600));
   ctx.save();ctx.translate(x,y);ctx.rotate(angle);ctx.lineWidth=1.4;
   if(obj.shape==="circle"){
@@ -21,7 +21,7 @@ function paintObject(ctx,obj,state){
     ctx.beginPath();ctx.arc(0,0,rx,0,Math.PI*2);ctx.fill();ctx.strokeStyle="#ffffff99";ctx.stroke();
     ctx.strokeStyle="#ffffff66";ctx.lineWidth=Math.max(2,rx*.11);ctx.beginPath();ctx.arc(0,0,rx*.69,-1.2,1.2);ctx.stroke();
   }else{
-    const g=ctx.createLinearGradient(0,-ry,0,ry);g.addColorStop(0,obj.color||"#9caecc");g.addColorStop(1,"#536778");ctx.fillStyle=g;ctx.beginPath();ctx.roundRect(-rx,-ry,rx*2,ry*2,Math.min(6,rx*.2));ctx.fill();ctx.strokeStyle="#ffffffa0";ctx.stroke();
+    const g=ctx.createLinearGradient(0,-ry,0,ry);g.addColorStop(0,obj.color||"#9caecc");g.addColorStop(1,"#536778");ctx.fillStyle=g;ctx.beginPath();if(obj.shape==="polygon"){ctx.moveTo(...obj.vertices[0]);for(const p of obj.vertices.slice(1))ctx.lineTo(...p);ctx.closePath();}else{ctx.roundRect(-rx,-ry,rx*2,ry*2,Math.min(6,rx*.2));}ctx.fill();ctx.strokeStyle="#ffffffa0";ctx.stroke();
     sceneLine(ctx,[[-rx+5,-ry+5],[rx-5,-ry+5]],"#ffffff66",2);
   }ctx.restore();
 }
@@ -53,11 +53,12 @@ function paintFace(ctx,head,skin,emotion,now,data){
   ctx.restore();
 }
 function paintScene(ctx,now,data,body){
-  const key=data?.theme?.background||"default";
+  const key=(data?.theme?.background||"default")+JSON.stringify(data?.environment||null);
   if(backdropKey!==key){
     backdropKey=key;backdropCache=document.createElement("canvas");backdropCache.width=1000;backdropCache.height=600;
     const target=backdropCache.getContext("2d");
     ((ctx)=>{
+  if(typeof paintEnvironment==="function"&&paintEnvironment(ctx,data?.environment))return;
   const base=data?.theme?.background;
   const bg=ctx.createLinearGradient(0,0,0,600);bg.addColorStop(0,base&&base!=="#ffffff"?base:"#e9eff5");bg.addColorStop(.75,"#f8fafb");bg.addColorStop(1,"#dde5e8");ctx.fillStyle=bg;ctx.fillRect(0,0,1000,600);
   const light=ctx.createRadialGradient(680,110,5,680,110,600);light.addColorStop(0,"#ffffffaa");light.addColorStop(1,"#ffffff00");ctx.fillStyle=light;ctx.fillRect(0,0,1000,540);
@@ -73,6 +74,7 @@ function paintScene(ctx,now,data,body){
   if(typeof drawProject==="function")drawProject(ctx,data,body,"world","background");
   const states=new Map((body.objects||[]).map(o=>[o[0],o]));
   for(const o of data.scene.objects)paintObject(ctx,o,states.get(o.id));
+  if(typeof paintConnections==="function")paintConnections(ctx,data,body);
   const n=body.nodes,skin=data.appearance||{};
   const hideBody=typeof directionData==="function"&&directionData(data,body).hide_body;
   if(!hideBody){
@@ -89,7 +91,7 @@ function paintScene(ctx,now,data,body){
   for(const name of ["left_foot","right_foot"]){const p=n[name];sceneLine(ctx,[[p[0]-4,p[1]],[p[0]+6,p[1]]],ink,width+1);}
   for(const name of ["left_hand","right_hand"]){const p=n[name];ctx.fillStyle=skin.accent||"#6b8dba";ctx.beginPath();ctx.arc(...p,Math.max(2,width*.48),0,Math.PI*2);ctx.fill();}
   for(const part of data.appendages||[]){const state=body.appendages?.find(p=>p[0]===part.id);if(state){sceneLine(ctx,[state[1],state[2]],part.color,part.radius*2);ctx.fillStyle=part.color;ctx.beginPath();ctx.arc(...state[2],part.radius*1.3,0,Math.PI*2);ctx.fill();}}
-  paintFace(ctx,n.head,skin,body.emotion||data.scene.emotion||{},now,data);
+  paintFace(ctx,n.head,skin,{...(body.emotion||data.scene.emotion||{}),tilt:(body.emotion?.tilt||0)+(data.body_control?.mode==="physical"?(body.articulation?.head?.world_angle||0):0)},now,data);
   if(data.life?.thinking){
     const x=n.head[0]+30,y=n.head[1]-25;
     for(let i=0;i<3;i++){ctx.fillStyle=`rgba(91,126,165,${.3+.5*(.5+.5*Math.sin(now/230-i))})`;ctx.beginPath();ctx.arc(x+i*7,y-Math.sin(now/230-i)*2,2,0,Math.PI*2);ctx.fill();}
@@ -103,14 +105,14 @@ function worldPointer(event){const r=canvas.getBoundingClientRect(),p=[(event.cl
 async function directInput(body){if(sessionId)await api(`game/sessions/${sessionId}/input`,"POST",body);}
 canvas.addEventListener("pointerdown",event=>{
   if(!sceneData)return;const [x,y]=worldPointer(event),states=new Map((displayed?.objects||[]).map(o=>[o[0],o]));
-  const obj=[...sceneData.scene.objects].reverse().find(o=>{if(o.kind!=="body")return false;const s=states.get(o.id),dx=x-(s?.[1]??o.x),dy=y-(s?.[2]??o.y);return o.shape==="circle"?Math.hypot(dx,dy)<o.radius+10:Math.abs(dx)<o.width/2+8&&Math.abs(dy)<o.height/2+8;});
+  const obj=[...sceneData.scene.objects].reverse().find(o=>{if(o.kind!=="body"||o.motion==="static")return false;const s=states.get(o.id),dx=x-(s?.[1]??o.x),dy=y-(s?.[2]??o.y);return o.shape==="circle"?Math.hypot(dx,dy)<o.radius+10:Math.abs(dx)<o.width/2+8&&Math.abs(dy)<o.height/2+8;});
   if(obj){pointerDrag=obj.id;canvas.setPointerCapture(event.pointerId);directInput({type:"grab",id:obj.id,x,y}).catch(error);}
 });
 canvas.addEventListener("pointermove",event=>{if(!pointerDrag||performance.now()-pointerSent<35)return;pointerSent=performance.now();const[x,y]=worldPointer(event);directInput({type:"grab",id:pointerDrag,x,y}).catch(error);});
 canvas.addEventListener("pointerup",()=>{if(pointerDrag){pointerDrag=null;directInput({type:"release"}).catch(error);}});
 canvas.addEventListener("pointercancel",()=>{pointerDrag=null;directInput({type:"release"}).catch(error);});
-window.addEventListener("keydown",event=>{if(["TEXTAREA","INPUT","SELECT"].includes(event.target.tagName))return;if(["ArrowLeft","ArrowRight"," "].includes(event.key)){event.preventDefault();directInput({type:"drive",drive:event.key==="ArrowLeft"?-1:event.key==="ArrowRight"?1:0,jump:event.key===" "}).catch(error);}});
-window.addEventListener("keyup",event=>{if(["ArrowLeft","ArrowRight"].includes(event.key))directInput({type:"drive",drive:0}).catch(error);});
+window.addEventListener("keydown",event=>{if(["TEXTAREA","INPUT","SELECT"].includes(event.target.tagName))return;if(["ArrowLeft","ArrowRight"," "].includes(event.key)){event.preventDefault();if(sceneData?.body_control?.mode==="physical"){if(event.key===" ")stopMuscle();else manualMuscle(event.key==="ArrowLeft"?-.7:.7);return;}directInput({type:"drive",drive:event.key==="ArrowLeft"?-1:event.key==="ArrowRight"?1:0,jump:event.key===" "}).catch(error);}});
+window.addEventListener("keyup",event=>{if(["ArrowLeft","ArrowRight"].includes(event.key)&&sceneData?.body_control?.mode==="physical"){stopMuscle();return;}if(["ArrowLeft","ArrowRight"].includes(event.key))directInput({type:"drive",drive:0}).catch(error);});
 
 let visionFrames=[],visionScope=null,visionLast=0;
 async function captureVision(){

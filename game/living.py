@@ -32,12 +32,16 @@ DEFAULTS = {
 
 def upgrade(world):
     world.setdefault("project_scope","")
+    from .workshop import DEFAULTS as WORKSHOP
+    for key,value in WORKSHOP.items():world.setdefault(key,copy.deepcopy(value))
     for key, value in DEFAULTS.items():
         world.setdefault(key, copy.deepcopy(value))
     for saved in (world.get("previous"), *(world.get("draft",{}).get(k) for k in ("candidate","seed") if world.get("draft"))):
         if saved:
             for key in ("projects","active_project","project_state","project_started","appendages"):
                 saved.setdefault(key,copy.deepcopy(DEFAULTS[key]))
+            for key in ("body_control","substances","ropes","environment"):
+                saved.setdefault(key,copy.deepcopy(WORKSHOP[key]))
     for obj in world.get("objects",[]):
         if obj["kind"]=="body" and "definition" not in obj:
             obj["definition"] = {k:copy.deepcopy(v) for k,v in obj.items() if k not in ("vx","vy","angle","angular_velocity","kind")}
@@ -154,8 +158,9 @@ def sensors(world):
             "grounded": obs["grounded"], "upright": obs["upright"],
             "goal": obs["goal"], "objects": copy.deepcopy(world["objects"]),
             "joints": {k: [p["x"], p["y"]] for k, p in world["nodes"].items()},
+            "articulation":copy.deepcopy(world["articulation"]),"mechanisms":copy.deepcopy(world["mechanics_state"]),"energy":copy.deepcopy(world["energy"]),"body_control":copy.deepcopy(world["body_control"]),"ropes":[{k:r[k] for k in ("id","tension","length","broken")} for r in world["rope_frames"]],
             "contact_evidence":copy.deepcopy(world.get("contacts",{})),
-            "contacts": {k: _on_surface(world, p, 8) for k, p in world["nodes"].items()}}
+            "contacts": {k: (k in world.get("contacts",{}).get("joints",[]) if world.get("physics_engine")=="chipmunk" else _on_surface(world,p,8)) for k,p in world["nodes"].items()}}
 
 
 def command(world):
@@ -170,9 +175,11 @@ def command(world):
 
 
 def validate_control(world, result):
-    if not isinstance(result, dict) or set(result) - {"drive", "jump", "pose", "forces", "memory", "intent", "object_forces", "emotion", "gaze", "grip", "appendage_pose"}:
+    if not isinstance(result, dict) or set(result) - {"drive", "jump", "pose", "forces", "memory", "intent", "object_forces", "emotion", "gaze", "grip", "appendage_pose", "muscles", "servos", "joint_controls"}:
         raise ValueError("policy returns {drive,jump,pose,forces,memory,intent,object_forces}")
     from .world import number
+    from .embodiment import validate as validate_muscles
+    validate_muscles(world,result)
     number(result.get("drive", 0), -1, 1, "drive")
     if type(result.get("jump", False)) is not bool:
         raise ValueError("jump must be boolean")
@@ -276,56 +283,10 @@ def design(world, args):
             if k == "iterations" and type(v) is not int:
                 raise ValueError("iterations must be integer")
         world["material"].update(values)
-    elif operation == "joint":
-        keys(args,("operation","joint"))
-        joint=copy.deepcopy(args.get("joint"))
-        keys(joint,("id","type","a","b","anchor","stiffness","damping","length","rate","max_force"))
-        text(joint.get("id"),40,"joint id")
-        if joint.get("type") not in ("pivot","spring","motor"):
-            raise ValueError("joint type must be pivot, spring or motor")
-        ids={o["id"] for o in world["objects"] if o["kind"]=="body"}|{"world"}
-        if joint.get("a") not in ids or joint.get("b") not in ids or joint["a"]==joint["b"]:
-            raise ValueError("joint endpoints must be distinct dynamic object IDs or world")
-        if joint["type"]=="pivot":
-            if not isinstance(joint.get("anchor"),list) or len(joint["anchor"])!=2:
-                raise ValueError("pivot requires anchor [world_x,world_y]")
-            number(joint["anchor"][0],0,1000,"anchor x");number(joint["anchor"][1],0,540,"anchor y")
-        for key,default,lo,hi in (("stiffness",50,0,5000),("damping",8,0,500),("length",50,0,500),("rate",0,-8,8),("max_force",2000,0,20000)):
-            joint.setdefault(key,default);number(joint[key],lo,hi,key)
-        index=next((i for i,j in enumerate(world["mechanisms"]) if j["id"]==joint["id"]),None)
-        if index is None:
-            if len(world["mechanisms"])>=20:raise ValueError("mechanism joint limit:20")
-            world["mechanisms"].append(joint)
-        else:world["mechanisms"][index]=joint
-    elif operation == "body":
-        keys(args, ("operation", "body"))
-        obj = copy.deepcopy(args.get("body"))
-        keys(obj, ("id", "shape", "x", "y", "width", "height", "radius", "mass", "restitution", "color", "label"))
-        text(obj.get("id"), 40, "body id")
-        if obj["id"] in world["nodes"] or obj["id"] in {p["id"] for p in world["appendages"]}:raise ValueError("body id must be distinct from skeleton joints and appendages")
-        if obj.get("shape") not in ("rect", "circle"):
-            raise ValueError("physical shape must be rect or circle")
-        for key, lo, hi in (("x", 20, 980), ("y", 30, 520), ("mass", .2, 50), ("restitution", 0, .85)):
-            obj.setdefault(key, {"mass": 2, "restitution": .2}.get(key))
-            number(obj[key], lo, hi, key)
-        if obj["shape"] == "circle":
-            number(obj.get("radius"), 6, 80, "radius")
-        else:
-            number(obj.get("width"), 10, 160, "width")
-            number(obj.get("height"), 10, 160, "height")
-        if not isinstance(obj.get("color", "#b7c5a4"), str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", obj.get("color", "#b7c5a4")):
-            raise ValueError("body color uses #RRGGBB")
-        obj.setdefault("color", "#b7c5a4")
-        text(obj.get("label", obj["id"]), 80, "label")
-        obj["definition"] = copy.deepcopy(obj)
-        obj.update(kind="body", vx=0, vy=0)
-        index = next((i for i, o in enumerate(world["objects"]) if o["id"] == obj["id"]), None)
-        if index is None:
-            if len(world["objects"]) >= 32:
-                raise ValueError("world object limit: 32")
-            world["objects"].append(obj)
-        else:
-            world["objects"][index] = obj
+    elif operation in ("joint","body"):
+        from .workshop import joint,body
+        return (joint if operation=="joint" else body)(world,args)
+
     else:
         raise ValueError("design operation must be policy, appearance, material or body")
     return {"kind": "design", "operation": operation}
@@ -365,6 +326,7 @@ def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostic
 
 
 def body_extent(obj):
+    if obj["shape"]=="polygon":return max(abs(p[0]) for p in obj["vertices"]),max(abs(p[1]) for p in obj["vertices"])
     return (obj["radius"], obj["radius"]) if obj["shape"] == "circle" else (obj["width"] / 2, obj["height"] / 2)
 
 
@@ -460,13 +422,20 @@ def trial(world, frames=None, cancelled=lambda: False):
     clone["project_scope"] = uuid4().hex  # Offline trials never share mutable JS globals with the live world.
     clone["draft"] = None
     start = sensors(clone)
+    initial_objects={o["id"]:copy.deepcopy(o) for o in clone["objects"]}
     try:
         samples = advance(clone, frames, cancelled)
         last = sensors(clone)
         finite = all(math.isfinite(v) for p in clone["nodes"].values() for v in p.values())
         path = [start] + [s["position"] for s in samples]
         travel = sum(math.hypot(b["x"] - a["x"], b["y"] - a["y"]) for a, b in zip(path, path[1:]))
-        return {"passed": finite, "frames": frames, "dx": round(last["x"] - start["x"], 2),
+        objects={}
+        for o in clone["objects"]:
+            first=initial_objects[o["id"]]
+            path=[first]+[next((p for p in sample["objects"] if p["id"]==o["id"]),o) for sample in samples]+[o]
+            objects[o["id"]]={"dx":round(o["x"]-first["x"],3),"dy":round(o["y"]-first["y"],3),"end_x":round(o["x"],3),"end_y":round(o["y"],3),"min_x":round(min(p["x"] for p in path),3),"max_x":round(max(p["x"] for p in path),3),"min_y":round(min(p["y"] for p in path),3),"max_y":round(max(p["y"] for p in path),3),"rotation":round(o.get("angle",0)-first.get("angle",0),3)}
+        rope_results={r["id"]:{"broken":r["broken"],"length":round(r["length"],3),"peak_tension":max((p["tension"] for frame in clone["motion"] for p in frame.get("ropes",[]) if p["id"]==r["id"]),default=r["tension"])} for r in clone["rope_frames"]}
+        return {"passed": finite, "objects":objects,"ropes":rope_results, "frames": frames, "mode":clone["body_control"]["mode"], "muscle_work":round(clone["energy"]["muscle_work"]-world["energy"]["muscle_work"],4),"motor_work":round(clone["energy"]["motor_work"]-world["energy"]["motor_work"],4), "dx": round(last["x"] - start["x"], 2),
                 "dy": round(last["y"] - start["y"], 2), "travel": round(travel, 2),
                 "upright_ratio": round(sum(s["upright"] for s in samples) / len(samples), 3),
                 "grounded_ratio": round(sum(s["grounded"] for s in samples) / len(samples), 3),

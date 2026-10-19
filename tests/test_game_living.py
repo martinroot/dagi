@@ -156,7 +156,7 @@ def test_autonomous_iteration_publishes_code_then_body_continues_without_more_ap
     app = WebApp(_config(tmp_path), provider_factory=lambda *_: LivingProvider())
     server, thread, base = _start(app)
     try:
-        _, _, data = _request(base + "/api/game/sessions", "POST", {"title": "living"})
+        _, _, data = _request(base + "/api/game/sessions", "POST", {"title": "living", "mode":"assisted"})
         session = json.loads(data)["session_id"]
         _request(f"{base}/api/game/sessions/{session}/life", "POST", {"action": "start", "iterations": 1})
 
@@ -190,7 +190,7 @@ def test_restart_preserves_policy_and_memory_but_does_not_restart_clock_or_spend
     app = WebApp(_config(tmp_path), provider_factory=lambda *_: LivingProvider())
     server, thread, base = _start(app)
     try:
-        _, _, data = _request(base + "/api/game/sessions", "POST", {"title": "restart"})
+        _, _, data = _request(base + "/api/game/sessions", "POST", {"title": "restart", "mode":"assisted"})
         session = json.loads(data)["session_id"]
         with GameStore(app.config.database) as store:
             with store.mutation(session) as w:

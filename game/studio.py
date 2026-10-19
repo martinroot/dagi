@@ -12,7 +12,7 @@ from uuid import uuid4
 from .living import design, trial
 from .world import act, evolve, keys, number, observation, text, validate_action
 
-LIVE_FIELDS = ("nodes", "tick", "gravity", "controller", "objects", "behaviors", "goal", "widgets", "components", "theme", "policies", "active_policy", "policy_state", "appearance", "material", "mechanisms", "projects", "active_project", "project_started", "project_state", "appendages")
+LIVE_FIELDS = ("nodes", "tick", "gravity", "controller", "objects", "behaviors", "goal", "widgets", "components", "theme", "policies", "active_policy", "policy_state", "appearance", "material", "mechanisms", "projects", "active_project", "project_started", "project_state", "appendages", "body_control", "substances", "ropes", "environment")
 TOOL_NAMES = {"game_inspect", "game_act", "game_evolve", "game_goal", "game_reflect", "game_build", "game_visual", "game_review"}
 
 
@@ -26,8 +26,8 @@ def configuration(world):
         result.pop(key, None)
     result["objects"] = [copy.deepcopy(o.get("definition",o)) if o["kind"]=="body" else copy.deepcopy(o) for o in result["objects"]]
     for obj in result["objects"]:
-        if obj.get("shape") in ("circle","rect"):
-            for key in ("vx","vy","angle","angular_velocity","definition"):
+        if obj.get("kind")=="body" or obj.get("shape") in ("circle","rect","polygon"):
+            for key in ("vx","vy","angular_velocity","definition"):
                 obj.pop(key,None)
     return result
 
@@ -68,12 +68,14 @@ def validate_target(target, world):
 
 
 def validate_widget(widget, world):
-    keys(widget, ("id", "kind", "x", "y", "width", "height", "title", "body", "items", "target"))
+    keys(widget, ("id", "kind", "x", "y", "width", "height", "title", "body", "items", "target", "icon", "hotkey"))
     text(widget.get("id"), 40, "widget id")
     kind = widget.get("kind")
     if not isinstance(kind, str) or kind not in {"panel", "skill", "todo", "button"}:
         raise ValueError("widget kind must be panel, skill, todo, or button")
     text(widget.get("title"), 60, "title")
+    if "icon" in widget:text(widget["icon"],16,"skill icon")
+    if "hotkey" in widget and widget["hotkey"] not in list("123456789"):raise ValueError("skill hotkey is1..9")
     number(widget.get("x"), 0, 1000, "x")
     number(widget.get("y"), 40, 520, "y")
     number(widget.get("width"), 110, 350, "width")
@@ -194,6 +196,9 @@ def visual_edit(world, args):
 def edit(world, change):
     if not isinstance(change, dict):
         raise ValueError("change must be an object")
+    if change.get("operation") in {"body_control","substance","rope","remove_rope","environment"}:
+        from .workshop import edit as workshop_edit
+        return workshop_edit(world,change)
     if change.get("operation") == "project":
         from .director import define
         return define(world, change)
@@ -237,7 +242,8 @@ def review(world):
                 findings.append({"id": widget["id"], "other": other["id"], "issue": "widget_overlap"})
         if any(widget["x"] <= p["x"] <= widget["x"] + widget["width"] and widget["y"] <= p["y"] <= widget["y"] + widget["height"] for p in world["nodes"].values()):
             findings.append({"id": widget["id"], "issue": "body_occlusion"})
-    contrast = (max(_luminance(world["theme"]["background"]), _luminance(world["appearance"]["stroke"])) + .05) / (min(_luminance(world["theme"]["background"]), _luminance(world["appearance"]["stroke"])) + .05)
+    backdrop=(world.get("environment") or {}).get("sky_bottom",world["theme"]["background"])
+    contrast = (max(_luminance(backdrop), _luminance(world["appearance"]["stroke"])) + .05) / (min(_luminance(backdrop), _luminance(world["appearance"]["stroke"])) + .05)
     for component in world["components"]:
         validate_component({k: v for k, v in copy.deepcopy(component).items() if k != "code_hash"}, world)
         if component["layer"] == "foreground" and any(component["x"] <= p["x"] <= component["x"] + component["width"] and component["y"] <= p["y"] <= component["y"] + component["height"] for p in world["nodes"].values()):
@@ -315,12 +321,12 @@ def build(world, args, cancelled=lambda: False):
         baseline, after = _simulate(baseline_world, cancelled), _simulate(candidate, cancelled)
         visual = review(candidate)
         checks = {"changed": digest(configuration(candidate)) != draft["base"], "finite_physics": after["finite"],
-                  "posture_no_regression": not baseline["upright"] or after["upright"],
+                  "posture_no_regression": candidate["body_control"]["mode"]=="physical" or not baseline["upright"] or after["upright"],
                   "layout_readable": visual["passed"], "goal_preserved": candidate["goal"] == world["goal"]}
         checks["authored_components_executed"] = all(c["status"] == "passed" for c in visual["component_execution"])
         policy_before, policy_after = trial(baseline_world, cancelled=cancelled), trial(candidate, cancelled=cancelled)
         checks["feedback_policy_executes"] = policy_after["passed"]
-        checks["feedback_posture_no_regression"] = not policy_before["passed"] or not policy_after["passed"] or policy_after["upright_ratio"] >= min(.65, policy_before.get("upright_ratio", 0))
+        checks["feedback_posture_no_regression"] = candidate["body_control"]["mode"]=="physical" or not policy_before["passed"] or not policy_after["passed"] or policy_after["upright_ratio"] >= min(.65, policy_before.get("upright_ratio", 0))
         skill_tests = []
         for name, steps in candidate["behaviors"].items():
             clone = copy.deepcopy(candidate)
@@ -365,12 +371,23 @@ def activate(world, args):
     world["previous"] = snapshot(world)
     live_nodes, live_tick = copy.deepcopy(world["nodes"]), world["tick"]
     old_objects = {o["id"]: copy.deepcopy(o) for o in world["objects"]}
+    old_ropes={r["id"]:copy.deepcopy(r) for r in world["ropes"]}
+    old_joints={j["id"]:copy.deepcopy(j) for j in world["mechanisms"]}
     same_policy = world["active_policy"]==draft["candidate"]["active_policy"] and world["policies"]==draft["candidate"]["policies"]
     same_project = world["active_project"]==draft["candidate"]["active_project"] and world["projects"]==draft["candidate"]["projects"]
     project_state,project_started = copy.deepcopy(world["project_state"]),world["project_started"]
     memory = copy.deepcopy(world["policy_state"])
     world.update(copy.deepcopy(draft["candidate"]))
-    world["nodes"], world["tick"] = live_nodes, live_tick
+    candidate_nodes=world["nodes"]
+    candidate_nodes.update(live_nodes)
+    for side in ("left","right"):
+        name=side+"_toe"
+        if name in candidate_nodes and name not in live_nodes:
+            foot=live_nodes[side+"_foot"]
+            candidate_nodes[name]={k:foot[k]+(13 if k in ("x","px") else 0) for k in foot}
+    world["nodes"], world["tick"] = candidate_nodes, live_tick
+    world["rope_state"]={k:v for k,v in world["rope_state"].items() if any(r["id"]==k and old_ropes.get(k)==r for r in world["ropes"])}
+    world["mechanics_state"]={k:v for k,v in world["mechanics_state"].items() if any(j["id"]==k and old_joints.get(k)==j for j in world["mechanisms"])}
     if same_policy: world["policy_state"] = memory
     if same_project:
         world["project_state"],world["project_started"]=project_state,project_started
@@ -382,7 +399,8 @@ def activate(world, args):
     for i,obj in enumerate(world["objects"]):
         old=old_objects.get(obj["id"])
         if old and old.get("definition")==obj.get("definition") and obj["kind"]=="body":
-            world["objects"][i]=old
+            for field in ("x","y","vx","vy","angle","angular_velocity"):
+                if field in old:obj[field]=old[field]
     world["version"] += 1
     world["policy_error"] = None
     world["failed_policy"] = None

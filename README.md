@@ -1,6 +1,6 @@
 # Dagi Core — minimal Hermes-inspired agent
 
-The optional [Director sandbox](game/DIRECTOR.md) lets the agent author JavaScript behavior, camera, expression and physical constructions in a live stickman world.
+The optional [Physical Workshop](game/PHYSICS.md) combines unassisted articulation, agent-authored JS behavior, physical mechanisms, editable scenery and a game skill interface.
 
 
 A compact terminal agent, not a reduced copy of the full Hermes platform. This implementation is aligned with the upstream `NousResearch/hermes-agent` architecture at commit [`848fc0a`](https://github.com/NousResearch/hermes-agent/commit/848fc0ad8be766b9dc10fe42bd80b5fc2d45d95c). The core is a clean implementation of selected invariants, not copied upstream source.

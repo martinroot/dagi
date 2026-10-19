@@ -18,7 +18,7 @@ from .world import observation
 
 GAME_TURN_CALL_CAP = 12
 DESIGN_CHANGE_OPERATIONS = {"policy", "appearance", "material", "body", "joint",
-                            "project", "appendage", "remove_appendage", "remove_body", "remove_joint", "controller", "physics", "component", "remove_component", "widget", "remove_widget", "todo", "theme"}
+                            "body_control", "substance", "rope", "remove_rope", "environment", "project", "appendage", "remove_appendage", "remove_body", "remove_joint", "controller", "physics", "component", "remove_component", "widget", "remove_widget", "todo", "theme"}
 CHANGE_SCHEMA_HINT = (
     "each change must be a design/visual edit: project{name,description,files,entry?,params?,activate?}; appendage{part}; remove_appendage/remove_body/remove_joint{id}; controller/physics{values}; policy {name,code,description,activate?,params?}; "
     "appearance {values}; material {values}; body {body}; joint {joint}; "
@@ -131,7 +131,7 @@ def summary(world):
     obs = observation(world)
     return {"body":world["body_id"], "version":world["version"], "position":obs["position"],
             "upright":obs["upright"], "contacts":world.get("contacts"), "running":world["life"]["running"],
-            "policy":world["active_policy"], "project":world["active_project"], "project_error":world["project_error"], "direction":{k:v for k,v in world["direction"].items() if k!="draw"}, "appendages":world["appendages"], "failed_policy":world.get("failed_policy"), "error":world["policy_error"],
+            "body_control":world["body_control"], "energy":world["energy"], "rope_count":len(world["ropes"]), "joint_count":len(world["mechanisms"]), "policy":world["active_policy"], "project":world["active_project"], "project_error":world["project_error"], "direction":{k:v for k,v in world["direction"].items() if k!="draw"}, "appendages":world["appendages"], "failed_policy":world.get("failed_policy"), "error":world["policy_error"],
             "intent":world["life"]["intent"], "objects":[{k:o[k] for k in ("id","kind","shape","x","y","vx","vy","radius","width","height") if k in o} for o in world["objects"]],
             "last_change": world["evolution"][-1] if world["evolution"] else None}
 
@@ -139,9 +139,13 @@ def summary(world):
 def iterate(database, session_id, args, cancelled=lambda:False, on_publish=None):
     from .living import evaluate, trial
     from .world import keys, text
-    keys(args, ("objective","changes","search","play"))
+    keys(args, ("objective","changes","search","play","verify"))
     if type(args.get("play",True)) is not bool:raise ValueError("play must be boolean")
     text(args.get("objective"),300,"objective")
+    verification=args.get("verify",[])
+    if not isinstance(verification,list) or len(verification)>6:raise ValueError("verify supports up to6 authored predicates")
+    for check in verification:
+        keys(check,("label","expression"));text(check.get("label"),100,"verification label");text(check.get("expression"),600,"verification expression over r")
     changes = _normalize_changes(args.get("changes"))
     with GameStore(database) as store:
         original = store.get(session_id)
@@ -204,13 +208,23 @@ def iterate(database, session_id, args, cancelled=lambda:False, on_publish=None)
             time.sleep(.08)
     build(candidate, {"operation":"test"}, cancelled)
     report = candidate["draft"]["report"]
+    tested=[]
+    for check in verification:
+        try:
+            value=evaluate(check["expression"],{"r":report["feedback_trial"]["candidate"]})
+            if type(value) is not bool:raise ValueError("predicate must return boolean")
+            tested.append({"label":check["label"],"passed":value})
+        except ValueError as exc:tested.append({"label":check["label"],"passed":False,"error":str(exc)[:160]})
+    report["author_verification"]=tested
+    report["checks"]["authored_predicates_pass"]=all(t["passed"] for t in tested)
+    report["passed"]=report["passed"] and report["checks"]["authored_predicates_pass"]
     if not report["passed"]:
         if staged:
             with GameStore(database) as store:
                 with store.mutation(session_id) as live:
                     if live["draft"] and live["draft"]["id"]==candidate["draft"]["id"]:live["draft"]=None
         return {"published":False,"checks":report["checks"],"trial":report["feedback_trial"],
-                "visual_findings":report["visual"]["findings"],"components":report["visual"]["component_execution"],"search":attempts}
+                "verification":tested,"visual_findings":report["visual"]["findings"],"components":report["visual"]["component_execution"],"search":attempts}
     if cancelled():
         raise ValueError("iteration cancelled; live world unchanged")
     # Transfer the tested candidate only if authored configuration still matches.
@@ -234,8 +248,8 @@ def iterate(database, session_id, args, cancelled=lambda:False, on_publish=None)
             raise ValueError("iteration cancelled before activation")
         store.apply(session_id, activate, {"id":candidate["draft"]["id"]})
         current = store.get(session_id)
-    if args.get("play",True) and (current["active_policy"] or current["active_project"]) and on_publish and not cancelled():
+    if args.get("play",True) and (current["active_policy"] or current["active_project"] or current["body_control"]["mode"]=="physical") and on_publish and not cancelled():
         on_publish(session_id,expected_pause=original["life"].get("pause_epoch",0))
     return {"published":True,"version":current["version"],"policy":current["active_policy"],"project":current["active_project"],
-            "objective":args["objective"],"trial":report["feedback_trial"],"search":attempts,
+            "objective":args["objective"],"trial":report["feedback_trial"],"search":attempts,"verification":tested,
             "scope":"Actual tested code is now active. These measurements do not certify aesthetic or semantic improvement."}

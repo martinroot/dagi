@@ -92,16 +92,26 @@ class GameStore:
     def __exit__(self, *exc):
         self.close()
 
-    def create(self, session_id):
+    def create(self, session_id, mode=None):
         world = fresh_world(session_id)
         world["project_scope"]=hashlib.sha256(f"{self.key}:{session_id}".encode()).hexdigest()
         if self.key in _DATABASES:
             world["physics_engine"] = "chipmunk"
+            if mode!="assisted":
+                from .workshop import initialize_physical
+                initialize_physical(world)
+                world["gravity"]=981
+        simulator=None
+        if self.key in _DATABASES and world["body_control"]["mode"]=="physical":
+            from .rigid import RigidSimulator
+            simulator=RigidSimulator(world)
         self.db.execute("INSERT INTO game_worlds VALUES (?, ?)", (session_id, json.dumps(world)))
         self.db.commit()
         if self.key in _DATABASES:
             with _GUARD:
-                _LIVE[(self.key, session_id)] = LiveSlot(world)
+                slot=LiveSlot(world)
+                slot.simulator=simulator
+                _LIVE[(self.key, session_id)] = slot
         return world
 
     def get(self, session_id):
@@ -167,10 +177,11 @@ class GameStore:
                     json.dumps(world, allow_nan=False, separators=(",", ":")), session_id))
                 self.db.commit()
                 old = slot.world
-                if old["nodes"] != world["nodes"] or old["objects"] != world["objects"] or old["material"] != world["material"] or old.get("mechanisms")!=world.get("mechanisms") or old.get("appendages")!=world.get("appendages"):
+                if old["nodes"] != world["nodes"] or old["objects"] != world["objects"] or old["material"] != world["material"] or old.get("mechanisms")!=world.get("mechanisms") or old.get("appendages")!=world.get("appendages") or any(old.get(k)!=world.get(k) for k in ("body_control","substances","ropes")):
                     slot.simulator = None
                 elif slot.simulator:
                     slot.simulator.world = world
+                    slot.simulator.mechanics.world = world
                 slot.world = world
             return
         # One transaction per bounded action. A second writer cannot overwrite stale state.

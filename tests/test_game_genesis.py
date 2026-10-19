@@ -130,7 +130,7 @@ def test_policy_widget_replays_locally_instead_of_spending_a_model_turn(tmp_path
     app=WebApp(_config(tmp_path),provider_factory=lambda *_:None)
     server,thread,base=_start(app)
     try:
-        _,_,raw=_request(base+"/api/game/sessions","POST",{"title":"local control"})
+        _,_,raw=_request(base+"/api/game/sessions","POST",{"title":"local control","mode":"assisted"})
         sid=json.loads(raw)["session_id"]
         with GameStore(app.config.database) as store:
             with store.mutation(sid) as world:
@@ -165,7 +165,7 @@ def test_atomic_iteration_optimizes_locally_publishes_and_starts_without_human_b
     app=WebApp(_config(tmp_path),provider_factory=lambda *_:None)
     server,thread,base=_start(app)
     try:
-        _,_,raw=_request(base+"/api/game/sessions","POST",{"title":"atomic"})
+        _,_,raw=_request(base+"/api/game/sessions","POST",{"title":"atomic","mode":"assisted"})
         sid=json.loads(raw)["session_id"]
         result=iterate(app.config.database,sid,{"objective":"Test local parameter alternatives","changes":[
             {"operation":"policy","name":"candidate","description":"test","params":{"speed":.3},"code":"{'drive':p['speed']}"}],
