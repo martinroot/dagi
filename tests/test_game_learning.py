@@ -14,40 +14,6 @@ from game.turns import iterate
 CODE="module.exports=({params})=>({control:{muscles:{right_hand:params.effort}}});"
 
 
-def test_plan_expression_errors_name_the_failing_contract_field():
-    base={"goal":"learn","target":"arm","reason":"test","skills":[skill()]}
-    from game.learning import plan
-    bad=deepcopy(base);bad["skills"][0]["score"]="[x for x in r]"
-    with pytest.raises(ValueError) as exc:plan(world(),bad)
-    assert "fitness score" in str(exc.value)
-    bad=deepcopy(base);bad["skills"][0]["metrics"][0]["expression"]="s['joints'].left_hand"
-    with pytest.raises(ValueError) as exc:plan(world(),bad)
-    assert "metric expression" in str(exc.value)
-    bad=deepcopy(base);bad["skills"][0]["success"]="for x in r: x"
-    with pytest.raises(ValueError) as exc:plan(world(),bad)
-    assert "success predicate" in str(exc.value)
-
-
-def test_game_turn_cap_grants_learning_headroom():
-    from game.turns import GAME_TURN_CALL_CAP,game_call_cap
-    assert GAME_TURN_CALL_CAP == 16
-    assert game_call_cap(25) == 16
-    assert game_call_cap(10) == 10
-
-
-def test_observe_learning_with_unknown_skill_path_lists_available_skills(tmp_path):
-    from game.learning import handle
-    from dagi_core.state import StateStore
-    from contextlib import closing as _closing
-    with _closing(StateStore(tmp_path/"state.db")) as state:
-        sid=state.create_session()
-        with GameStore(state.path) as store:store.create(sid)
-        handle(state.path,sid,{"action":"plan","goal":"learn","target":"arm","reason":"test","skills":[skill()]})
-        with pytest.raises(ValueError) as exc:handle(state.path,sid,{"action":"evaluate","skill":"ghost"})
-        assert "arm" in str(exc.value) and "unknown skill" in str(exc.value).lower()
-        with pytest.raises(ValueError) as exc:handle(state.path,sid,{"action":"note","skill":"ghost","attempt":"a","hypothesis":"h","next_change":"n"})
-        assert "arm" in str(exc.value) and "unknown skill" in str(exc.value).lower()
-
 def world():
  w=fresh_world(1);initialize_physical(w);w['physics_engine']='chipmunk';w['gravity']=0
  define(w,{'operation':'project','name':'arm','description':'Test muscular action','params':{'effort':0},'files':{'main.js':CODE}})

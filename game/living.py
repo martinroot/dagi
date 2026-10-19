@@ -178,7 +178,7 @@ def command(world):
 
 
 def validate_control(world, result):
-    if not isinstance(result, dict) or set(result) - {"drive", "jump", "pose", "forces", "memory", "intent", "object_forces", "emotion", "gaze", "grip", "appendage_pose", "muscles", "servos", "joint_controls"}:
+    if not isinstance(result, dict) or set(result) - {"drive", "jump", "pose", "forces", "memory", "intent", "object_forces", "emotion", "gaze", "grip", "appendage_pose", "muscles", "servos", "joint_controls", "rig"}:
         raise ValueError("policy returns {drive,jump,pose,forces,memory,intent,object_forces}")
     from .world import number
     from .embodiment import validate as validate_muscles
@@ -210,7 +210,7 @@ def validate_control(world, result):
         raise ValueError("appendage_pose references unknown part")
     for value in poses.values():number(value,-6.3,6.3,"appendage angle")
     emotion = result.get("emotion", {})
-    if not isinstance(emotion, dict) or set(emotion) - {"valence", "arousal", "focus", "surprise", "mouth", "squint", "tilt"}:
+    if not isinstance(emotion, dict) or set(emotion) - {"valence", "arousal", "focus", "surprise", "mouth", "squint", "tilt", "blink_left", "blink_right", "smile", "brow", "clench"}:
         raise ValueError("emotion uses valence -1..1, arousal/focus 0..1")
     for key,value in emotion.items():
         number(value, -.5 if key=="tilt" else -1 if key=="valence" else 0, .5 if key=="tilt" else 1, key)
@@ -441,7 +441,7 @@ def trial(world, frames=None, cancelled=lambda: False, observer=None, before_ste
             path=[first]+[next((p for p in sample["objects"] if p["id"]==o["id"]),o) for sample in samples]+[o]
             objects[o["id"]]={"dx":round(o["x"]-first["x"],3),"dy":round(o["y"]-first["y"],3),"end_x":round(o["x"],3),"end_y":round(o["y"],3),"min_x":round(min(p["x"] for p in path),3),"max_x":round(max(p["x"] for p in path),3),"min_y":round(min(p["y"] for p in path),3),"max_y":round(max(p["y"] for p in path),3),"rotation":round(o.get("angle",0)-first.get("angle",0),3)}
         rope_results={r["id"]:{"broken":r["broken"],"length":round(r["length"],3),"peak_tension":max((p["tension"] for frame in clone["motion"] for p in frame.get("ropes",[]) if p["id"]==r["id"]),default=r["tension"])} for r in clone["rope_frames"]}
-        return {"passed": finite, "objects":objects,"ropes":rope_results, "frames": frames, "mode":clone["body_control"]["mode"], "muscle_work":round(clone["energy"]["muscle_work"]-world["energy"]["muscle_work"],4),"motor_work":round(clone["energy"]["motor_work"]-world["energy"]["motor_work"],4), "dx": round(last["x"] - start["x"], 2),
+        return {"passed": finite, "objects":objects,"ropes":rope_results, "frames": frames, "mode":clone["body_control"]["mode"],"stage_rig":clone["body_control"].get("stage_rig",False),"stage_work":round(clone["energy"].get("stage_work",0)-world["energy"].get("stage_work",0),4), "muscle_work":round(clone["energy"]["muscle_work"]-world["energy"]["muscle_work"],4),"motor_work":round(clone["energy"]["motor_work"]-world["energy"]["motor_work"],4), "dx": round(last["x"] - start["x"], 2),
                 "dy": round(last["y"] - start["y"], 2), "travel": round(travel, 2),
                 "upright_ratio": round(sum(s["upright"] for s in samples) / len(samples), 3),
                 "grounded_ratio": round(sum(s["grounded"] for s in samples) / len(samples), 3),

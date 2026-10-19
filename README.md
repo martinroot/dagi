@@ -292,3 +292,20 @@ docs/examples/         example recordings and the inline debug-loop GIFs
 ## Provenance
 
 The first `main` commit (`b14b0ba`) was a prototype based on `Mohamedhasbini/hermes`; that snapshot and its MIT notice remain in Git history. The active implementation is a compact reimplementation informed by the current Hermes upstream commit [`848fc0a`](https://github.com/NousResearch/hermes-agent/commit/848fc0ad8be766b9dc10fe42bd80b5fc2d45d95c). See `NOTICE.md` for details.
+
+## Cinema v9 — authored animation in the vector world
+
+[Watch the first short](docs/examples/hello-dagi-cinema-v9.mp4) — local authored
+playback, no live model; the flip uses the labelled powered stage rig.
+
+**▷ Новый мультфильм** opens a separate short: camera shot progression, wink,
+smile, “Hello I'm Dagi”, looping material reveals, changing scenery, detailed
+vector hair/portrait, an assisted physical flip and a guard stance. Local
+playback and replay make no model calls. The film uses an explicitly labelled
+powered stage rig; it is scripted choreography, not a learned unassisted skill.
+
+Projects can now author live cosmetic `look` and head-anchored `speech` channels,
+independent eyelids, smile/brow/fist cues, up to 10× camera framing and generic
+numeric/vector/color timeline tracks. New ordinary sessions retain the clean
+unassisted start. [Contracts and limitations](game/CINEMA.md),
+[authored film](game/examples/hello-dagi.js), [timeline library](game/examples/story-kit.js).

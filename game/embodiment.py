@@ -21,6 +21,9 @@ def validate(world,output):
     physical=world["body_control"]["mode"]=="physical"
     if physical and (output.get("drive",0) or output.get("jump") or any(output.get(k) for k in ("pose","forces","object_forces","appendage_pose"))):
         raise ValueError("physical mode has no automatic drive/jump/pose/free forces; use muscles, relative servos and mechanism motors")
+    if "rig" in output:
+        from .cinema import validate_rig
+        validate_rig(world,output["rig"])
     info=limits(world)
     muscles=output.get("muscles",{});servos=output.get("servos",{})
     for field,values in (("muscles",muscles),("servos",servos)):

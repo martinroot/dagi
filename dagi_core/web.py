@@ -423,7 +423,7 @@ class WebApp:
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
-                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/anatomy.js", "/game/vector.js", "/game/scenery.js", "/game/learning.js", "/game/direction.js", "/game/workshop.js", "/game/component-host.js"}:
+                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/anatomy.js", "/game/vector.js", "/game/scenery.js", "/game/learning.js", "/game/cinema.js", "/game/direction.js", "/game/workshop.js", "/game/component-host.js"}:
                         self._static(path)
                     elif path == "/api/auth/session":
                         if app._is_authenticated(self.headers):
@@ -595,13 +595,18 @@ class WebApp:
                         title = body.get("title", "Embodied experiment")
                         if not isinstance(title, str) or not 1 <= len(title.strip()) <= 160:
                             raise ValueError("title must be 1..160 characters")
+                        mode=body.get("mode","physical")
+                        if mode not in ("physical","assisted"):raise ValueError("mode must be physical or assisted")
+                        film=body.get("film",False)
+                        if type(film) is not bool:raise ValueError("film must be boolean")
                         workspace = f"game/sessions/{uuid4().hex}"
                         with _StateContext(self._state()) as state:
                             session_id = state.create_session(title, workspace=workspace)
                         with GameStore(app.config.database) as game:
-                            mode=body.get("mode","physical")
-                            if mode not in ("physical","assisted"):raise ValueError("mode must be physical or assisted")
                             game.create(session_id,mode=mode)
+                            if film:
+                                from game.cinema import premiere
+                                with game.mutation(session_id) as world:premiere(world)
                         self._send_json(201, {"session_id": session_id})
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)/learning/evaluate", parsed.path):
                         from game.world import keys as game_keys

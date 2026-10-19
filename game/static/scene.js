@@ -63,6 +63,17 @@ function paintFace(ctx,head,skin,emotion,now,data){
   ctx.restore();
 }
 function paintScene(ctx,now,data,body){
+ const look=typeof directionData==="function"?directionData(data,body).look:null;
+ if(look&&typeof mergeLook==="function"){
+  const effective=mergeLook(data,look),r=look.reveal;
+  if(r&&r.progress>0&&r.progress<1){
+   paintSceneVector(ctx,now,data,body);ctx.save();
+   const values=Object.values(body.nodes),top=Math.min(...values.map(p=>p[1]))-35,bottom=Math.max(...values.map(p=>p[1]))+20,y=bottom-(bottom-top)*r.progress;
+   ctx.beginPath();ctx.rect(-2000,y,5000,3000);ctx.clip();paintSceneVector(ctx,now,effective,body);ctx.restore();paintRevealBand(ctx,effective,body,r);
+  }else paintSceneVector(ctx,now,effective,body);
+ }else paintSceneVector(ctx,now,data,body);
+}
+function paintSceneVector(ctx,now,data,body){
   const vectorWorld=!!(data?.art&&data?.environment);
   const key=(data?.theme?.background||"default")+JSON.stringify(data?.environment||null);
   if(!vectorWorld&&backdropKey!==key){
@@ -91,7 +102,7 @@ function paintScene(ctx,now,data,body){
   if(typeof paintConnections==="function")paintConnections(ctx,data,body);
   const n=body.nodes,skin=data.appearance||{};
   const hideBody=typeof directionData==="function"&&directionData(data,body).hide_body;
-  if(!hideBody&&!(data.character&&paintAnatomy(ctx,now,data,body))){
+  if(!hideBody&&!(data.character&&paintAnatomy(ctx,(body.tick||0)/60*1000,data,body))){
   const groundX=(n.left_foot[0]+n.right_foot[0])/2,altitude=Math.max(0,535-Math.max(n.left_foot[1],n.right_foot[1]));
   shadow(ctx,groundX,541,34,5,.15*Math.max(.2,1-altitude/200));
   ctx.save();ctx.lineCap="round";ctx.lineJoin="round";

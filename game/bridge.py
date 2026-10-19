@@ -15,6 +15,12 @@ from .world import act, evolve, keys, observation, reflect, set_goal, validate_a
 from .studio import activate, abort_release, build, build_summary, digest, review, visual_edit
 
 SOURCE_FILES = {
+
+    "game/cinema.py":Path(__file__).with_name("cinema.py"),
+    "game/examples/story-kit.js":Path(__file__).parent / "examples" / "story-kit.js",
+    "game/examples/hello-dagi.js":Path(__file__).parent / "examples" / "hello-dagi.js",
+    "game/static/cinema.js":Path(__file__).parent / "static" / "cinema.js",
+
     "game/WALKING_FITNESS.json":Path(__file__).with_name("WALKING_FITNESS.json"),
     "game/learning.py":Path(__file__).with_name("learning.py"),
     "game/character.py":Path(__file__).with_name("character.py"),
@@ -100,6 +106,12 @@ You inhabit the visible stickman AND author the world and how it is shown.
 New sessions use physical, unassisted articulation. A new body cannot already
 walk or hold a standing pose. Its controls are internal muscles (-1..1) and
 explicit relative joint servos; motor reactions act on both linked bodies.
+
+Creative films can use authored story tracks, look/speech channels and an
+explicit powered stage rig (schema path=cinema). Show assistance honestly; a
+staged flip is not learned locomotion. Evaluate shot timing and real physical
+contacts, and leave visual quality to human review, never invent a beauty score.
+
 For a nontrivial human goal, establish a durable learning plan using game_train
 before iterating on code. Read game_observe view=schema,path=learning. Decompose
 into a dependency DAG of executable skills, each with explicit measured fitness,
@@ -112,7 +124,7 @@ save only receipt-linked hypotheses with game_train action=note. Stop at mastery
 budget exhaustion or a plateau; do not conceal failure by weakening criteria.
 Read game_observe view=schema path=physics for physical construction/control.
 Visual authoring: view=schema path=visual, and view=visual for your character and
-lighting/layers. character{values} edits real skeleton proportions, collision
+lighting/layers. For authored films use view=schema,path=cinema: timeline tracks, per-frame look/speech, face controls and an explicit stage rig. Never present stage assistance as learned unsupported movement. character{values} edits real skeleton proportions, collision
 radii and masses plus separate skin/muscle/bone surfaces. art{values} controls
 unified vector lighting, atmospheric layers, gradients and Bezier curves.
 No raster backgrounds or image generation are needed. Appearance is not learned
@@ -562,7 +574,9 @@ def register_game(tools, life=None):
             path=args.get("path","")
             if not path:return learning_summary(world,details=True)
             id,_,file=path.partition("/");skill=world["learning"]["skills"].get(id)
+
             if not skill:raise ValueError("unknown skill; available: "+(', '.join(sorted(world["learning"]["skills"])) or "none"))
+
             if file:
                 source=skill.get("working",{}).get("files",{}).get(file)
                 if source is None and file=="policy":source=skill.get("working",{}).get("code")
@@ -600,6 +614,11 @@ def register_game(tools, life=None):
         if view=="schema":
             from .director import HELP
             section=args.get("path")
+
+            if section=="cinema":
+                from .cinema import HELP as CINEMA_HELP
+                return CINEMA_HELP
+
             if section=="learning":
                 from .learning import HELP as LEARNING_HELP
                 return LEARNING_HELP
@@ -611,7 +630,9 @@ def register_game(tools, life=None):
                 return PHYSICS_HELP
             if section=="project":return HELP
             if section=="policy":return POLICY_HELP
-            return {"learning_schema":"Goal decomposition, measured skill fitness, prerequisites and iteration memory: view=schema,path=learning. game_train defines contracts; game_iteration skill=id tests progress/mastery.","visual_schema":"Anatomy, real bone geometry, muscles, materials, lighting and image composition: view=schema,path=visual. character/art operations. Current character/art are in world observations.","physical_schema":"For exact muscle, constraint, rope, material and environment contracts use view=schema,path=physics. New sessions use unassisted muscles, not drive.","project":HELP,"policy":POLICY_HELP,"appearance":world["appearance"],"material":world["material"],
+
+            return {"cinema_schema":"Cinematic timeline, live portrait, material waves, speech and optional powered stage rig: view=schema,path=cinema.","learning_schema":"Goal decomposition, measured skill fitness, prerequisites and iteration memory: view=schema,path=learning. game_train defines contracts; game_iteration skill=id tests progress/mastery.","visual_schema":"Anatomy, real bone geometry, muscles, materials, lighting and image composition: view=schema,path=visual. character/art operations. Current character/art are in world observations.","physical_schema":"For exact muscle, constraint, rope, material and environment contracts use view=schema,path=physics. New sessions use unassisted muscles, not drive.","project":HELP,"policy":POLICY_HELP,"appearance":world["appearance"],"material":world["material"],
+
                     "extra_outputs":"emotion:{valence:-1..1,arousal:0..1,focus:0..1}; gaze:[world_x,world_y]; grip:{object:id,hand:left_hand|right_hand}, omit to release; params:{name:number}, accessed as p['name']",
                     "joints":"joint:{id,type:pivot|spring|motor,a:body_id|world,b:body_id|world,anchor:[x,y] for pivot,rate:-8..8,max_force:0..20000,length:0..500,stiffness:0..5000,damping:0..500}",
                     "change_types":'Every changes[] object carries an "operation" key. project{name,description,files,entry?,params?,replace?}; appendage{part}; remove_appendage/remove_body/remove_joint{id}; policy{name,code,description,params?}; appearance/material/theme/controller/physics{values}; body{body}; joint{joint}; widget{widget}; component{component}; remove_component/remove_widget{id}. Example: {"operation":"project","name":"scene","description":"...","files":{"main.js":"module.exports=()=>({})"}}',

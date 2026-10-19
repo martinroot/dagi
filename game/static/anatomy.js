@@ -62,6 +62,7 @@ function anatomicalTorso(ctx,data,n){
 function anatomicalHead(ctx,data,body,now){
  const n=body.nodes,c=data.character,s=c.surface,h=n.head,r=c.head_radius,emotion=body.emotion||data.scene.emotion||{},tilt=(body.articulation?.head?.world_angle||0)+(emotion.tilt||0),skeleton=c.style==='skeleton';
  ctx.save();ctx.translate(...h);ctx.rotate(tilt);ctx.scale(s.head_width,1);ctx.translate(-h[0],-h[1]);
+ if(typeof paintHair==="function")paintHair(ctx,h,r,data,true);
  const base=skeleton||c.style==='ceramic'?s.bone:s.skin;
  ctx.beginPath();ctx.moveTo(h[0]-r*.77,h[1]+r*.3);ctx.bezierCurveTo(h[0]-r*1.05,h[1]-r*.35,h[0]-r*.65,h[1]-r,h[0],h[1]-r);ctx.bezierCurveTo(h[0]+r*.9,h[1]-r,h[0]+r*1.04,h[1]-.2*r,h[0]+r*.77,h[1]+r*.3);ctx.lineTo(h[0]+r*.5,h[1]+r*.9);ctx.quadraticCurveTo(h[0],h[1]+r*1.02,h[0]-r*.5,h[1]+r*.9);ctx.closePath();
  ctx.fillStyle=artGradient(ctx,h[0]-r,h[1]-r,h[0]+r,h[1]+r,base,data,s.roughness,1,s.metallic);ctx.fill();ctx.strokeStyle=artMix(base,'#20343b',.5);ctx.lineWidth=s.outline*.75;ctx.stroke();
@@ -73,7 +74,9 @@ function anatomicalHead(ctx,data,body,now){
  }
  if(s.crest>.02){ctx.fillStyle=s.accent;ctx.beginPath();ctx.moveTo(h[0]-r*.7,h[1]-r*.5);ctx.bezierCurveTo(h[0]-r*.8,h[1]-r*(1+s.crest),h[0]+r*.1,h[1]-r*(1+s.crest*.8),h[0]+r*.6,h[1]-r*.7);ctx.lineTo(h[0]+r*.15,h[1]-r*.9);ctx.closePath();ctx.fill();}
  if(s.markings>.05&&!skeleton){ctx.globalAlpha=s.markings;sceneLine(ctx,[[h[0]+r*.64,h[1]-r*.4],[h[0]+r*.54,h[1]+r*.22]],s.accent,1.2);ctx.globalAlpha=1;}
- paintFace(ctx,h,{...data.appearance,head_radius:r,no_cranium:true,eye:skeleton?'#e8d8a7':s.eye}, {...emotion,tilt:0},now,data);
+ if(!skeleton&&c.features?.detail>.45&&typeof paintPortrait==="function")paintPortrait(ctx,h,r,data,{...emotion,tilt:0},now);
+ else paintFace(ctx,h,{...data.appearance,head_radius:r,no_cranium:true,eye:skeleton?'#e8d8a7':s.eye}, {...emotion,tilt:0},now,data);
+ if(typeof paintHair==="function")paintHair(ctx,h,r,data,false);
  ctx.restore();
 }
 function paintAnatomy(ctx,now,data,body){
@@ -88,7 +91,7 @@ function paintAnatomy(ctx,now,data,body){
   }else artLimb(ctx,n[a],n[b],r*(.75+s.muscles*.25),color,data,{back});
   const jr=r*(skeleton?.48:.6);artEllipse(ctx,...n[b],jr,jr,artGradient(ctx,n[b][0]-jr,n[b][1]-jr,n[b][0]+jr,n[b][1]+jr,color,data,s.roughness,1,s.metallic),artMix(color,'#243b41',.5),s.outline*.4);
   if(b.endsWith('hand')){
-   const angle=Math.atan2(n[b][1]-n[a][1],n[b][0]-n[a][0]);ctx.save();ctx.translate(...n[b]);ctx.rotate(angle);for(let i=0;i<4;i++){const y=(i-1.5)*r*.32;ctx.beginPath();ctx.moveTo(-r*.3,y);ctx.quadraticCurveTo(r*.6,y,r*.7+Math.sin(i+1)*r*.15,y+r*.15);ctx.strokeStyle=artMix(color,'#2a3b40',.15);ctx.lineWidth=skeleton?.75:1.1;ctx.stroke();}ctx.restore();
+   const angle=Math.atan2(n[b][1]-n[a][1],n[b][0]-n[a][0]);ctx.save();ctx.translate(...n[b]);ctx.rotate(angle);if((body.emotion?.clench||0)>.4){artEllipse(ctx,r*.12,0,r*.85,r*.72,artGradient(ctx,0,-r,0,r,color,data,s.roughness),artMix(color,'#233f48',.4),.45);for(let i=0;i<3;i++)sceneLine(ctx,[[r*.1,(i-1)*r*.32],[r*.55,(i-1)*r*.32]],artMix(color,'#233f48',.3),.45);}else for(let i=0;i<4;i++){const y=(i-1.5)*r*.32;ctx.beginPath();ctx.moveTo(-r*.3,y);ctx.quadraticCurveTo(r*.6,y,r*.7+Math.sin(i+1)*r*.15,y+r*.15);ctx.strokeStyle=artMix(color,'#2a3b40',.15);ctx.lineWidth=skeleton?.75:1.1;ctx.stroke();}ctx.restore();
   }
  }
  for(const [a,b] of links)if(b.startsWith('left'))limb(a,b,true);

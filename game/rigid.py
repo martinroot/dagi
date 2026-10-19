@@ -51,6 +51,12 @@ class RigidSimulator:
             body = pymunk.Body(mass, pymunk.moment_for_segment(mass, (-length / 2, 0), (length / 2, 0), radius))
             body.position = (pa + pb) / 2
             body.angle = (pb - pa).angle
+            if self.physical:
+                saved=world["articulation"].get(b,{})
+                if b=="hip" and world["articulation"].get("head"):
+                    h=world["articulation"]["head"];saved={"world_angle":h["world_angle"]-h["angle"]}
+                old_angle=saved.get("world_angle",body.angle)
+                body.angle+=round((old_angle-body.angle)/(2*math.pi))*2*math.pi
             body.velocity = ((nodes[a]["x"] - nodes[a]["px"] + nodes[b]["x"] - nodes[b]["px"]) * 30,
                              (nodes[a]["y"] - nodes[a]["py"] + nodes[b]["y"] - nodes[b]["py"]) * 30)
             delta=pb-pa
@@ -90,6 +96,8 @@ class RigidSimulator:
             delta=pymunk.Vec2d(nodes["neck"]["x"]-nodes["head"]["x"],nodes["neck"]["y"]-nodes["head"]["y"])
             dv=pymunk.Vec2d((nodes["neck"]["x"]-nodes["neck"]["px"]-nodes["head"]["x"]+nodes["head"]["px"])*60,(nodes["neck"]["y"]-nodes["neck"]["py"]-nodes["head"]["y"]+nodes["head"]["py"])*60)
             head.angular_velocity=delta.cross(dv)/max(.01,delta.length_squared)
+            old_angle=world["articulation"].get("head",{}).get("world_angle",head.angle)
+            head.angle+=round((old_angle-head.angle)/(2*math.pi))*2*math.pi
         head.velocity = ((nodes["head"]["x"] - nodes["head"]["px"]) * 60, (nodes["head"]["y"] - nodes["head"]["py"]) * 60)
         shape = pymunk.Circle(head, head_radius)
         shape.filter = pymunk.ShapeFilter(group=0 if world["body_control"]["self_collision"] else 1, categories=1)
@@ -167,6 +175,7 @@ class RigidSimulator:
         self.space.gravity = (0, w["gravity"])
         self.space.damping = w["body_control"]["air_damping"] if self.physical else clamp(w["material"]["damping"]**4,.5,.999)
         self.muscle_system.prepare(control)
+        from .cinema import apply_rig
         self.mechanics.world=w
         self.mechanics.control(control)
         for body in self.space.bodies:
@@ -255,6 +264,7 @@ class RigidSimulator:
         self.mechanics.begin_step()
         for _ in range(4 if self.physical or w["ropes"] else 2):
             self.muscle_system.apply()
+            apply_rig(self,control.get("rig"),DT / (4 if self.physical or w["ropes"] else 2))
             self.space.step(DT / (4 if self.physical or w["ropes"] else 2))
             self.mechanics.after_substep()
         self.muscle_system.record(DT)

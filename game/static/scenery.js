@@ -14,7 +14,7 @@ function vectorLandscapeStatic(ctx,env,art){
    const p=k/3,baseY=380+k*37,height=(95-k*15)*depth,color=artMix(env.sky_bottom,env.ground_bottom,.2+p*.23);
    ctx.save();const parallax=(1-p)*.45;if(typeof shot!=='undefined')ctx.translate((shot.x-500)*parallax,(shot.y-300)*parallax*.5);
    ctx.beginPath();ctx.moveTo(-100,540);ctx.lineTo(-100,baseY);
-   for(let x=-100;x<=1100;x+=55){const y=baseY-(Math.sin(x*.013+k*1.9)*.4+Math.sin(x*.027+k*.4)*.28+.4)*height;ctx.lineTo(x,y);}
+   for(let x=-100;x<=1100;x+=24){const y=baseY-(Math.sin(x*.013+k*1.9)*.4+Math.sin(x*.027+k*.4)*.28+.4)*height;ctx.lineTo(x,y);}
    ctx.lineTo(1100,540);ctx.closePath();const g=ctx.createLinearGradient(0,baseY-height,0,540);g.addColorStop(0,artTone(color,data));g.addColorStop(1,artTone(artMix(color,env.sky_bottom,haze*.6),data));ctx.fillStyle=g;ctx.fill();ctx.restore();
   }
  }
@@ -26,7 +26,27 @@ function vectorLandscapeStatic(ctx,env,art){
    ctx.beginPath();ctx.moveTo(x-spread,y);ctx.lineTo(x-spread*.45,y-height*.35);ctx.lineTo(x-spread*.65,y-height*.35);ctx.lineTo(x-spread*.18,y-height*.68);ctx.lineTo(x-spread*.38,y-height*.68);ctx.lineTo(x,y-height);ctx.lineTo(x+spread*.38,y-height*.68);ctx.lineTo(x+spread*.18,y-height*.68);ctx.lineTo(x+spread*.65,y-height*.35);ctx.lineTo(x+spread*.45,y-height*.35);ctx.lineTo(x+spread,y);ctx.closePath();ctx.fillStyle=artTone(artMix(env.ground_bottom,env.sky_bottom,.4+haze*.3),data);ctx.fill();
   }
  }
+ // Nearby trunks, branch fans and fern silhouettes add depth at close framing.
+ if(vegetation>.25){
+  ctx.save();ctx.globalAlpha=.45;
+  for(let i=0;i<16;i++){
+   const x=i*173%1031,y=533+(i*11%9),height=16+(i*31%25),spread=height*.19,col=artTone(artMix(env.ground_bottom,env.sky_bottom,.27+haze*.2),data);
+   sceneLine(ctx,[[x,y],[x-1,y-height]],col,.9);
+   for(let j=0;j<7;j++){const yy=y-height+j*height*.12,w=spread*(.15+j*.13);ctx.beginPath();ctx.moveTo(x-w,yy+height*.13);ctx.quadraticCurveTo(x-w*.3,yy,x,yy-height*.03);ctx.quadraticCurveTo(x+w*.5,yy,x+w,yy+height*.13);ctx.strokeStyle=col;ctx.lineWidth=1.7;ctx.stroke();}
+  }ctx.restore();
+ }
  const ground=ctx.createLinearGradient(0,540,0,650);ground.addColorStop(0,artTone(artMix(env.ground_top,light.color,.15*light.intensity),data));ground.addColorStop(.05,artTone(env.ground_top,data));ground.addColorStop(1,artTone(env.ground_bottom,data));ctx.fillStyle=ground;ctx.fillRect(-2000,540,5000,2000);
+ // Grouped river pebbles, fine soil and botanical marks stay vector at any zoom.
+ for(let i=0;i<80;i++){
+  const x=i*139%1009,y=544+(i*53%59),r=.4+(i*17%7)*.15;
+  artEllipse(ctx,x,y,r*2.2,r,artTone(artMix(env.ground_bottom,env.ground_top,(i%5)/5),data));
+ }
+ for(let i=0;i<Math.round(34*vegetation);i++){
+  const x=i*239%1009,y=547+(i*47%51),stem=2+(i*13%6),col=artTone(artMix(env.ground_bottom,'#132d39',.2),data);
+  sceneLine(ctx,[[x,y],[x+1,y-stem]],col,.45);
+  for(const side of [-1,1]){ctx.beginPath();ctx.moveTo(x,y-stem*.3);ctx.quadraticCurveTo(x+side*3,y-stem*.9,x+side*2,y-stem*.3);ctx.quadraticCurveTo(x+side,y-stem*.1,x,y-stem*.3);ctx.fillStyle=artTone(artMix(env.ground_top,light.color,.35),data);ctx.fill();}
+  if(i%4===0)artEllipse(ctx,x+1,y-stem,.7,.7,artTone(artMix(light.color,'#d6b095',.4),data));
+ }
  ctx.strokeStyle=artTone(artMix(env.ground_top,light.color,.25),data);ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(-2000,540);ctx.lineTo(3000,540);ctx.stroke();
 
 }

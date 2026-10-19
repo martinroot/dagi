@@ -17,12 +17,13 @@ import quickjs
 _CACHE = threading.local()
 
 HELP = {
+    "cinema":"For exact look/speech, vector portrait, timeline and explicit powered stage rig contracts read view=schema,path=cinema. Example source game/examples/story-kit.js and game/examples/hello-dagi.js is allowlisted; copy/edit into your own project.",
     "edit": "project {name,description,files:{'main.js':source,...},entry?:'main.js',activate?:true}; edits one named project; files merge with existing files unless replace:true; <=12 files, <=48000 source chars total. Each file is CommonJS: module.exports; require('./helper.js') loads project files only. Main exports a synchronous function(input). Full JS functions, loops, classes, math and arrays work.",
     "input": "{t,dt,s,state,params,event}; t is seconds since this project was activated, dt=1/60; s is current physical sensors incl joints, objects, appendages, contact_evidence:{objects,support,joints,grip}, runtime{thinking,status}; state is your durable JSON state; event is a queued human project event or null; params is your saved numeric parameters.",
     "physical_control":"For an unassisted body use control.muscles and relative servos; drive/jump/pose/free forces are unavailable. s.articulation,s.mechanisms,s.ropes,s.energy provide physical evidence. Read game_observe view=schema,path=physics for exact construction/control.",
-    "return": "{control?,state?,camera?,expression?,draw?,caption?,beat?,hide_body?}; all omitted channels reset to neutral each tick except state. control uses existing drive/jump/pose/forces/object_forces/grip, plus appendage_pose:{id:absolute_angle_radians}. Physical output is validated and applied to real motors.",
-    "camera": "{target:'head'|'hip'|joint_name|object_id|appendage_id|[world_x,world_y],zoom:.65..4,offset:[x,y],ease:.05..3,shake:0..5,letterbox:0...18}; target tracks live physics. Default overview center [500,300], zoom1. Framing is presentation, never a physical teleport.",
-    "expression": "{valence:-1..1,arousal:0..1,focus:0..1,surprise:0..1,mouth:0..1,squint:0..1,tilt:-.5...5,gaze:[x,y]}; cues are authored expression, not claims of felt emotion.",
+    "return": "{control?,state?,camera?,expression?,draw?,caption?,beat?,hide_body?,look?,speech?}; all omitted channels reset to neutral each tick except state. control uses existing drive/jump/pose/forces/object_forces/grip, plus appendage_pose:{id:absolute_angle_radians}. Physical output is validated and applied to real motors.",
+    "camera": "{target:'head'|'hip'|joint_name|object_id|appendage_id|[world_x,world_y],zoom:.65..10,offset:[x,y],ease:.05..3,shake:0..5,letterbox:0...18,cut?:bool}; target tracks live physics. Default overview center [500,300], zoom1. Framing is presentation, never a physical teleport.",
+    "expression": "{valence:-1..1,arousal:0..1,focus:0..1,surprise:0..1,mouth:0..1,squint:0..1,tilt:-.5...5,gaze:[x,y],blink_left:0..1,blink_right:0..1,smile:0..1,brow:0..1,clench:0..1}; cues are authored expression, not claims of felt emotion.",
     "draw": "Gradients, Bezier curves, transforms, blend and shadows: exact extended contract view=schema,path=visual. <=120 vector commands, each {type:line|circle|ellipse|rect|text|path,x,y,...,fill?:#RRGGBB,stroke?:#RRGGBB,width?:line_width,alpha?:0..1,space?:world|screen,layer?:background|foreground}. line:x2,y2; circle:radius; ellipse:rx,ry,angle?; rect:w,h,radius?; text:text,size?; path:points[[x,y],...],closed?. World commands share the camera; screen commands stay fixed. hide_body:true lets you draw a complete custom visual body using real joint positions.",
     "anatomy": "appendage {part:{id,parent:existing_joint_or_previously_defined_appendage_id,length:8..90,angle:-6.3..6.3,radius:2..10,mass:.05..3,color:#RRGGBB}}; adds/updates a real capsule limb with pivot and rotary motor. appendage_pose sets its angle. remove_appendage{id} removes its descendant chain. Body appendages participate in collisions. Physical mode uses internal muscles and joint limits; assisted mode retains its explicitly labelled posture aids.",
     "human_controls": "widget or component event target:{type:'project',name:project_name,event?:your_event_id} runs locally without API. Your program receives input.event once; generic viewer button sends human_attention. Use event-driven reactions, not only timed choreography.",
@@ -37,17 +38,19 @@ def _encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
-def _compiled(project, scope="compile"):
+JS_TIME_BUDGET = .016
+JS_ESCALATION = 2
+def _compiled(project, scope="compile", budget=JS_TIME_BUDGET):
     """One runtime per project AND thread. Never pass contexts across threads."""
     cache = getattr(_CACHE, "items", None)
     if cache is None:
         cache = _CACHE.items = {}
-    key = (scope, project["version"])
+    key = (scope, project["version"], budget)
     if key not in cache:
         ctx = quickjs.Context()
         ctx.set_memory_limit(8 * 1024 * 1024)
         ctx.set_max_stack_size(256 * 1024)
-        ctx.set_time_limit(.008)
+        ctx.set_time_limit(budget)
         # Capture serializer/loader in a closure, outside the authored function.
         source = """(()=>{const parse=JSON.parse.bind(JSON), stringify=JSON.stringify.bind(JSON);
 const files=FILES;
@@ -198,7 +201,9 @@ def command(world):
     from .world import number
     name=world["active_project"]
     project=world["projects"][name]
-    ctx, main = _compiled(project, world.get("project_scope") or world["body_id"])
+    scope=world.get("project_scope") or world["body_id"]
+    budget=world.get("js_budget", JS_TIME_BUDGET)
+    ctx, main = _compiled(project, scope, budget)
     sensor=sensors(world)
     sensor.update(appendages=copy.deepcopy(world["appendage_frames"]), runtime={k:world["life"].get(k) for k in ("thinking","status")})
     data={"t":(world["tick"]-world["project_started"])/60,"dt":1/60,"s":sensor,
@@ -206,16 +211,29 @@ def command(world):
     try:
         output=json.loads(main(_encode(data)))
     except (quickjs.JSException,TypeError,json.JSONDecodeError) as exc:
+        # A time-limit interrupt on a one-off heavy frame (large authored
+        # timelines) gets exactly one escalated retry on a wider budget: the
+        # protective watchdog stays for real runaway code, and a single slow
+        # frame is paid with one recompile instead of killing the film.
+        interrupted = "interrupted" in str(exc)
         # Discard a potentially corrupted runtime after any execution failure.
-        getattr(_CACHE,"items",{}).pop((world.get("project_scope") or world["body_id"],project["version"]),None)
+        getattr(_CACHE,"items",{}).pop((scope,project["version"],budget),None)
+        if interrupted and "js_budget" not in world:
+            world["js_budget"]=JS_TIME_BUDGET*JS_ESCALATION
+            try:
+                return command(world)
+            except ValueError:
+                raise
+            finally:
+                world.pop("js_budget",None)
         raise ValueError("project runtime: "+str(exc)[:240]) from exc
-    if not isinstance(output,dict) or set(output)-{"control","state","camera","expression","draw","caption","beat","hide_body"}:
-        raise ValueError("project returns control,state,camera,expression,draw,caption,beat,hide_body")
+    if not isinstance(output,dict) or set(output)-{"control","state","camera","expression","draw","caption","beat","hide_body","look","speech"}:
+        raise ValueError("project returns control,state,camera,expression,draw,caption,beat,hide_body,look,speech")
     state=output.get("state",world["project_state"])
     if not isinstance(state,dict) or len(_encode(state))>8192:
         raise ValueError("project state must be a JSON object <=8KB")
     camera=output.get("camera",{})
-    if not isinstance(camera,dict) or set(camera)-{"target","zoom","offset","ease","shake","letterbox"}:
+    if not isinstance(camera,dict) or set(camera)-{"target","zoom","offset","ease","shake","letterbox","cut"}:
         raise ValueError("invalid project camera")
     target=camera.get("target",[500,300])
     if isinstance(target,str):
@@ -227,11 +245,15 @@ def command(world):
     offset=camera.get("offset",[0,0])
     if not isinstance(offset,list) or len(offset)!=2:raise ValueError("camera offset is[x,y]")
     for v in offset:number(v,-500,500,"camera offset")
-    for key,default,lo,hi in (("zoom",1,.65,4),("ease",.35,.05,3),("shake",0,0,5),("letterbox",0,0,.18)):
+    for key,default,lo,hi in (("zoom",1,.65,10),("ease",.35,.05,3),("shake",0,0,5),("letterbox",0,0,.18)):
         number(camera.get(key,default),lo,hi,key)
     for key,limit in (("caption",180),("beat",80)):
         if key in output and (not isinstance(output[key],str) or len(output[key])>limit):raise ValueError(key+" exceeds text limit")
     if type(output.get("hide_body",False)) is not bool:raise ValueError("hide_body must be boolean")
+    if type(camera.get("cut",False)) is not bool:raise ValueError("camera cut must be boolean")
+    from .cinema import validate_look,validate_speech
+    look=validate_look(world,output["look"]) if "look" in output else {}
+    speech=validate_speech(output["speech"]) if "speech" in output else None
     draw=validate_draw(output.get("draw",[]))
     control=copy.deepcopy(output.get("control",{}))
     if not isinstance(control,dict):raise ValueError("control must be object")
@@ -239,12 +261,12 @@ def command(world):
     if isinstance(control["emotion"],dict) and "gaze" in control["emotion"]:
         control["gaze"]=control["emotion"].pop("gaze")
     # Always reset authored face channels so omitted surprise cannot stick forever.
-    control["emotion"]={"valence":0,"arousal":.25,"focus":.4,"surprise":0,"mouth":0,"squint":0,"tilt":0,**control["emotion"]} if isinstance(control["emotion"],dict) else control["emotion"]
+    control["emotion"]={"valence":0,"arousal":.25,"focus":.4,"surprise":0,"mouth":0,"squint":0,"tilt":0,"blink_left":0,"blink_right":0,"smile":0,"brow":0,"clench":0,**control["emotion"]} if isinstance(control["emotion"],dict) else control["emotion"]
     if "gaze" not in control:world["emotion"].pop("gaze",None)
     validate_control(world,control)
     world["project_state"]=copy.deepcopy(state)
     if world["event_queue"]:world["event_queue"].pop(0)
-    world["direction"]={"camera":camera,"draw":draw,"caption":output.get("caption",""),"beat":output.get("beat",""),"hide_body":output.get("hide_body",False)}
+    world["direction"]={"look":look,"speech":speech,"camera":camera,"draw":draw,"caption":output.get("caption",""),"beat":output.get("beat",""),"hide_body":output.get("hide_body",False)}
     world["life"]["intent"]=output.get("caption") or output.get("beat", "")
     return control
 

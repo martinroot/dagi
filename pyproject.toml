@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dagi-core"
-version = "0.7.0"
+version = "0.8.0"
 description = "A minimal Hermes-inspired terminal agent core"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -31,4 +31,4 @@ include = ["dagi_core*", "game*"]
 
 [tool.setuptools.package-data]
 dagi_core = ["static/*.html", "static/*.js"]
-game = ["*.md", "*.json", "static/*.html", "static/*.js"]
+game = ["*.md", "*.json", "examples/*.js", "static/*.html", "static/*.js"]

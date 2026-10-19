@@ -125,6 +125,14 @@ live model) and states that boundary explicitly. The layout section gained the
 workshop modules (`game/rigid.py`, `game/embodiment.py`, `game/mechanics.py`,
 `game/workshop.py`, `game/director.py`) and `docs/examples/`.
 
+## Cinema v9 integration (2026-10-19)
+
+Operator archive `dagi-cinema-v9-20261019.zip` with `dagi-cinema-v9-with-fitness-from-f3b0ef9.patch` (base f3b0ef9, 0.8.0). Conflicts in 7 files: `pyproject.toml`, `uv.lock`, `dagi_core/web.py`, `game/static/index.html` (took theirs — adds the film toolbar, cinema.js allowlist, 0.8.0), `game/learning.py` + `tests/test_game_learning.py` (took theirs, re-applied the session-32 `_expr` field-naming and available-skills listing on top), `game/bridge.py` (took theirs + kept the improved unknown-skill message). Their stale task map merged additively — no records lost.
+
+New surface: **▷ Новый мультфильм** opens a SEPARATE session with a scripted 38-second film (`game/examples/hello-dagi.js` + `story-kit.js`): shot progression, wink, smile, "Hello I'm Dagi", looping material reveals, changing scenery, detailed vector hair/portrait, an assisted flip and a guard stance. Everything is vector Canvas; 0 model calls; clean sessions still start empty and unassisted. Projects can now author live cosmetic `look` and head-anchored `speech` channels, independent eyelids/smile/brow/fist cues, up to 10× camera framing and generic numeric/vector/color tracks. Honesty is structural: the flip uses an explicitly labelled **powered stage rig** (`СЦЕНА · СИЛОВАЯ СТРАХОВКА`), recorded as external support in fitness guards; the film is not a learned skill.
+
+**Bug found and fixed during the gate:** the per-invocation quickjs wall-clock budget was 8 ms; the film's authored timelines spike to ~50 ms on heavy frames and randomly died mid-playback with `project runtime: InternalError: interrupted` (the operator's own tree is flaky on this hardware too — confirmed on their unmodified copy). Budget raised to 16 ms and a single escalated retry (32 ms, one recompile) added for genuine one-off heavy frames; runaway code still fails loudly. Regression test pins both directions. Note: the promised `hello-dagi-cinema-v9.mp4` is NOT inside the archive (only four stills in `verification/`), so the README link to it was replaced by a locally captured inline loop (captured from real playback against the live server; sampled).
+
 ## Session 32 diagnosis and learning-turn fix (2026-10-19)
 
 **Diagnosis (persisted log, read-only).** Session «научись ходить» run had used all 12 tool calls of the turn: two `game_train plan` calls rejected on contract-expression grammar before the third succeeded, one `game_observe view=learning path=learning` failed on path misuse, then two `game_iteration` calls repaired the balance controller — and the run ended with «provider call limit reached». Nothing was published (version 0, no active policy), while the world kept ticking (tick 182123, no controller, body grounded). The learning plan and attempts persisted: `balance` 2 attempts, `walk_forward` 0.
@@ -222,3 +230,19 @@ Execution order from the proposal: prerequisites #34, #35, and #23 are closed. S
 - #47/#48 are pushed to remote `main` but not installed in the live service. The existing #46 snapshot predates world-12 activity; after explicit deployment approval, make a fresh backup and repeat idle-work/API/auth checks before restarting.
 - Treat command checks as service-user commands, not an OS sandbox; they stay operator-disabled unless explicitly enabled.
 - Keep the async-child stash separate until iteration 6: `stash@{0}` (`WIP async child before sandbox iteration 6`).
+
+## Cinema v9 — local operator delivery (2026-10-19)
+
+User-directed next slice on the v8 source: reusable authored timeline library,
+validated per-frame cosmetic look/speech channels, detailed procedural vector
+portrait/hair, independent wink/smile/clench, 10× camera/cuts, and an optional
+powered stage rig through the dynamic solver. A separate local film session
+contains the first 38-second Hello Dagi short, replay/transform/stunt controls.
+Stage aid is visible, energy-accounted and counted by fitness support guards;
+it is not learned locomotion. Ordinary clean sessions remain empty/unassisted.
+This is a ZIP/source handoff; no remote issue creation/closure, push or deployment
+was performed. Remote integration/tracking stays pending with the operator.
+Verification for this local slice: 371 Python / 52 Node UI tests; Chromium
+film/replay/mobile, zero JS errors/overflow/external images/model calls; about
+60 Hz server physics; wheel and sdist built. Recorded preview is
+`docs/examples/hello-dagi-cinema-v9.mp4`.

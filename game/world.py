@@ -125,7 +125,7 @@ def observation(world):
         "position": {"x": round(hip["x"], 2), "y": round(hip["y"], 2)},
         "upright": upright, "grounded": grounded,
         "physics": {"gravity": world["gravity"], "step_hz": 60, "floor_y": FLOOR, "width": WIDTH,
-                    "clock": "continuous" if world.get("life",{}).get("running") else "paused", "engine": world.get("physics_engine","legacy"), "solver": ("Chipmunk articulated rigid bodies; internal muscles and joint limits" if world["body_control"]["mode"]=="physical" else "Chipmunk assisted motors") if world.get("physics_engine")=="chipmunk" else "Verlet assisted posture"},
+                    "clock": "continuous" if world.get("life",{}).get("running") else "paused", "engine": world.get("physics_engine","legacy"), "solver": ("Chipmunk articulated rigid bodies; "+("powered stage rig, internal muscles and joint limits" if world["body_control"].get("stage_rig") else "internal muscles and joint limits") if world["body_control"]["mode"]=="physical" else "Chipmunk assisted motors") if world.get("physics_engine")=="chipmunk" else "Verlet assisted posture"},
         "controller": copy.deepcopy(world["controller"]), "objects": copy.deepcopy(world["objects"]),
         "behaviors": copy.deepcopy(world["behaviors"]), "goal": goal,
         "last_action": copy.deepcopy(world["history"][-1]) if world["history"] else None,
