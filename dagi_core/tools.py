@@ -176,6 +176,7 @@ class ToolRegistry:
         self.approve_shell = approve_shell
         self.memory_session_scope = memory_session_scope
         self._tools: dict[str, Tool] = {}
+        self.model_tool_names: set[str] | None = None
         self._execution_context: ToolExecutionContext | None = None
         self._register_builtins(shell_enabled)
         self._builtin_tool_names = frozenset(self._tools)
@@ -193,7 +194,7 @@ class ToolRegistry:
         self._execution_context = context
 
     def specs(self) -> list[Tool]:
-        return list(self._tools.values())
+        return [tool for name,tool in self._tools.items() if self.model_tool_names is None or name in self.model_tool_names]
 
     def call(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         tool = self._tools.get(name)

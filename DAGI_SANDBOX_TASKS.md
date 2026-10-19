@@ -60,6 +60,18 @@ This is the single repository-level status map for the sandbox roadmap and cross
 - World-12 loop/goal reliability: [#47 closed](https://github.com/martinroot/dagi/issues/47), code `1f1f268`; configured provider budget now sets a compatible tool-round ceiling and goal feedback carries signed direction/progress. Its original read-only diagnosis was preserved; a later operator-authorized test-session reset is recorded under #48.
 - Embodied self-improvement and session audit export: [#48 open](https://github.com/martinroot/dagi/issues/48), code `cf993cb` (deployed with docs commit `cdabb01`); guarded physical-skill progression, two local execution cycles, replayable motion/avatar cues, and authenticated session JSON export are live. All 18 test sessions were reset on the operator's request; post-reset DB integrity, counts, auth gate, and public assets were verified. The protected rollback backup still holds pre-reset data; no live model-driven smoke has been run.
 
+## Genesis v4 integration (2026-10-19)
+
+Source: operator archive `dagi-genesis-v4-20261018.zip` (snapshot `2de5d6c4989a0d6b5fadf1a1feb538d3cf4f9de4`, base `69ce1e3`) plus `dagi-genesis-v4.patch` and Chromium verification materials (scripted provider; not a live LLM).
+
+Merge conflict check: `git apply --3way --check` applied **cleanly to all 24 patch files** — the archive's base equals the repository HEAD at the time of integration, so no overlap resolution was needed.
+
+What changes: the physics bottleneck moves to Pymunk 7.2 / Chipmunk — rigid capsule limbs, pivot constraints, rotary posture motors, whole-limb collision, friction, rotation, stacking and two-way impulses, with the skeleton still motor-assisted. A dedicated server thread advances physics at 60 Hz (two substeps) without SQLite/model calls; `/api/game/sessions/<id>/frames` streams SSE state (≤30 Hz) that the browser interpolates; semantic mutations stay durable before visibility with two-second motion checkpoints. The main model-facing tools become `game_observe` / `game_iteration` / `game_life` (legacy tools remain registered but hidden from new game requests); `game_iteration` accepts one coherent edit package (1..8 changes), optional local `play` and a bounded local parameter `search` over measured trial metrics. World migration converts web worlds to Chipmunk without deleting authored programs; a late live policy failure disables that controller and keeps the world settling instead of freezing. Canvas rendering gains DPR scaling, contact/altitude shadows, object orientation, expressive eyes and trails; an optional «Кадр мира для модели» sends a real downscaled canvas image to vision-capable models (off for non-vision models; caching the frame never calls the model).
+
+Limitations recorded from GENESIS.md: still assisted 2D physics, not learned biomechanics; installed Python engine source is not hot-patched from chat; a hard crash can lose ~2 s of motion; paid iterations never auto-resume after service restart; local search scores are experiment-specific evidence, not a universal ability score. New dependency `pymunk==7.2.0` is declared in pyproject and installed via `uv sync`.
+
+Gate: 260 pytest passed, 35 Node UI passed, wheel/sdist/syntax/diff checks passed. Live deployment requires the usual protected backup plus a migration rehearsal on a DB copy, because the existing operator sessions' worlds must convert to the Chipmunk representation.
+
 ## Living agent mechanism integration (2026-10-18)
 
 Source: operator archive `dagi-living-agent-20261018.zip` (snapshot `bd28753`, branch `feat/living-agent`, base `ac12ca4`), plus `dagi-living-agent.patch` and Chromium verification screenshots taken with a fixed scripted provider (not a live LLM).

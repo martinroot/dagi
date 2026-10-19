@@ -361,13 +361,11 @@ def test_dance_program_runs_multiple_cycles_and_frame_ceiling_is_enforced(stored
 
 
 def test_studio_prompt_describes_executable_feedback_and_honest_evidence():
-    assert "feedback policy" in GAME_PROMPT
-    assert "no screenshot vision" in GAME_PROMPT
-    assert "complexity score" in GAME_PROMPT
-    assert "no predefined activity" in GAME_PROMPT.lower()
-    assert "locally between API calls" in GAME_PROMPT
-    assert "baseline/candidate" in GAME_PROMPT
-    assert "Fix actual compilation/runtime" in GAME_PROMPT
+    assert "game_iteration" in GAME_PROMPT
+    assert "actual browser frame" in GAME_PROMPT
+    assert "game_life play/pause" in GAME_PROMPT
+    assert "tiny" in GAME_PROMPT and "measured" in GAME_PROMPT
+    assert "without model" in GAME_PROMPT
 
 
 def test_simple_action_ignores_cycles_arguments_with_a_measured_note(stored_world, tmp_path):
@@ -414,7 +412,7 @@ class EmbodiedProvider:
         self.requests.append(deepcopy(messages))
         game_results = [m for m in messages if m.get("role") == "tool" and m.get("name", "").startswith("game_")]
         commands = [("game_inspect", {}), ("game_goal", {"x": 280}),
-                    ("game_act", {"action": "right", "frames": 120}),
+                    ("game_act", {"action": "right", "frames": 90}),
                     ("game_reflect", {"expected": "reach x280", "hypothesis": "motor works", "next_test": "add a block"})]
         if len(game_results) < len(commands):
             name, arguments = commands[len(game_results)]
@@ -449,12 +447,12 @@ def test_web_agent_chat_moves_its_own_body_persists_evidence_and_new_session_is_
         assert len(detail["tool_calls"]) == 4
         assert all(call["status"] == "succeeded" for call in detail["tool_calls"])
         request = next(p.requests[0] for p in instances if p.requests)
-        assert "You are the stickman" in request[0]["content"]
+        assert "visible stickman" in request[0]["content"]
         _, _, payload = _request(f"{base}/api/game/sessions/{session}")
         body = json.loads(payload)
         assert body["scene"]["goal"]["passed"] is True
-        assert body["scene"]["tick"] == 120
-        assert body["reflections"][-1]["evidence_tick"] == 120
+        assert body["scene"]["tick"] == 90
+        assert body["reflections"][-1]["evidence_tick"] == 90
         assert f"stickman:{session}" == body["self"]["body_id"]
         state = StateStore(app.config.database)
         state.append_message(session, {"role": "user", "content": "authorization: Bearer dummy-export-secret"})
@@ -475,7 +473,7 @@ def test_web_agent_chat_moves_its_own_body_persists_evidence_and_new_session_is_
         session_run = next(item for item in exported["runs"] if item["run_id"] == run)
         assert any(row["event"].get("kind") == "tool_call" for row in session_run["events"])
         assert session_run["provider_calls"]
-        assert exported["game_world"]["tick"] == 120
+        assert exported["game_world"]["tick"] == 90
         assert "provider_requests" not in exported and "private_reasoning" not in exported
         assert "dummy-export-secret" not in json.dumps(exported, ensure_ascii=False)
         _, _, payload = _request(f"{base}/api/game/sessions/{clean}")

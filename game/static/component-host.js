@@ -122,7 +122,7 @@ async function authoredEvent(componentId,eventId){
   if(event.target){
     const token=generation;busy(true);
     try{const started=await api(`game/sessions/${sessionId}/interact`,'POST',{component_id:componentId,event_id:eventId,version:sceneData.scene.version});
-      if(token!==generation)return;message('user',`Компонент: ${record.component.title} / ${event.label}`);runId=started.run_id;stream(runId,0,token);
+      if(token!==generation)return;if(started.local){busy(false);await refreshWorld(token);return;}message('user',`Компонент: ${record.component.title} / ${event.label}`);runId=started.run_id;stream(runId,0,token);
     }catch(errorValue){busy(false);throw errorValue;}
   }
 }

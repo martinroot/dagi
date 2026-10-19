@@ -6,7 +6,7 @@ import time
 from threading import Event, Lock, Thread
 
 from .living import advance
-from .store import GameStore
+from .store import GameStore, clock_tick, enable_live, disable_live, live_slot
 from .world import keys, observation
 
 
@@ -32,11 +32,14 @@ class LifeRuntime:
         self._next_thought = {}
         self._pending = {}
         self._thread = None
+        self._clock_thread = None
 
     def close(self):
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=3)
+        if self._clock_thread:
+            self._clock_thread.join(timeout=3)
         with self._lock:
             active = list(self._active)
         for session_id in active:
@@ -44,17 +47,22 @@ class LifeRuntime:
                 with store.mutation(session_id) as world:
                     world["life"].update(running=False, thinking=False, status="paused", run_id=None)
 
+        disable_live(self.app.config.database)
+
     def recover(self):
+        enable_live(self.app.config.database)
         # Never automatically spend API budget or replay elapsed time on restart.
         with GameStore(self.app.config.database) as store:
             for (session_id,) in store.db.execute("SELECT session_id FROM game_worlds").fetchall():
                 world = store.get(session_id)
-                if world["life"]["running"] or world["life"]["thinking"]:
+                if world["life"]["running"] or world["life"]["thinking"] or world.get("physics_engine")!="chipmunk":
                     with store.mutation(session_id) as world:
+                        world["physics_engine"] = "chipmunk"
                         world["life"].update(running=False, thinking=False, status="paused", run_id=None,
                                              error="Server restarted; resume explicitly. Programs and memory preserved.")
 
     def control(self, session_id, args):
+        cancel_control=None
         keys(args, ("action", "iterations", "name"))
         action = args.get("action")
         if action not in {"start", "play", "pause", "select"}:
@@ -75,14 +83,15 @@ class LifeRuntime:
                         world["policy_state"] = {}
                         world["policy_error"] = None
                     elif action == "pause":
-                        life.update(running=False, thinking=False, status="paused")
+                        life.update(running=False, thinking=False, status="paused", run_id=None)
+                        life["pause_epoch"]=life.get("pause_epoch",0)+1
                         self._active.discard(session_id)
-                        owned = self._pending.get(session_id)
+                        owned = self._pending.pop(session_id,None)
                         if owned:
                             with self.app._lock:
                                 control = self.app._runs.get(owned)
                             if control:
-                                self.app._cancel_control(control)
+                                cancel_control=control
                     elif action in {"start", "play"}:
                         if session_id in self._pending:
                             raise ValueError("wait for the current iteration to finish before restarting")
@@ -93,11 +102,55 @@ class LifeRuntime:
                         self._active.add(session_id)
                         self._next_thought[session_id] = 0
                     result = dict(life)
-            if self._thread is None:
-                self._thread = Thread(target=self._loop, name="dagi-living-worlds", daemon=True)
-                self._thread.start()
-        return {"life": result, "max_provider_calls_per_iteration": self.app.config.usage_policy.max_calls_per_run,
+            self._start_threads()
+        if cancel_control is not None:
+            self.app._cancel_control(cancel_control)
+        return {"life": result, "max_provider_calls_per_iteration": min(8,self.app.config.usage_policy.max_calls_per_run),
                 "scope": "Start authorizes bounded model turns; play uses no model calls. Pause cancels the owned turn. No auto-resume after server restart."}
+
+    def _start_threads(self):
+        if self._thread is None:
+            self._thread = Thread(target=self._loop, name="dagi-brain-scheduler", daemon=True)
+            self._clock_thread = Thread(target=self._physics_loop, name="dagi-physics-60hz", daemon=True)
+            self._thread.start()
+            self._clock_thread.start()
+
+    def ensure_clock(self, session_id, expected_pause=None):
+        with self._lock:
+            slot=live_slot(self.app.config.database,session_id)
+            if expected_pause is not None and slot and slot.world["life"].get("pause_epoch",0)!=expected_pause:
+                return
+            if session_id in self._active and slot and slot.world["life"]["running"]:
+                return
+            with GameStore(self.app.config.database) as store:
+                with store.mutation(session_id) as world:
+                    world["life"]["running"] = True
+                    world["life"]["limit"] = 0  # Motor execution never authorizes new paid model turns.
+                    world["life"]["iteration"] = 0
+                    world["life"]["error"] = None
+                    world["life"]["status"] = "observing"
+            self._active.add(session_id)
+            self._start_threads()
+
+    def _physics_loop(self):
+        deadline = time.perf_counter()
+        while not self._stop.is_set():
+            deadline += 1 / 60
+            with self._lock:
+                sessions = tuple(self._active)
+            for session_id in sessions:
+                try:
+                    clock_tick(self.app.config.database, session_id)
+                except Exception:
+                    # An engine error affects this world, never every other session.
+                    slot = live_slot(self.app.config.database, session_id)
+                    if slot:
+                        with slot.lock:
+                            slot.world["policy_error"] = "Physical runtime failed; inspect and repair the current policy."
+            delay = deadline - time.perf_counter()
+            if delay < -.05:
+                deadline = time.perf_counter()  # Bound recovery; never fast-forward seconds of unseen motion.
+            self._stop.wait(max(0, delay))
 
     def _loop(self):
         while not self._stop.wait(.1):
@@ -119,17 +172,9 @@ class LifeRuntime:
             world = store.get(session_id)
             if not world or not world["life"]["running"]:
                 return
-            # One short transaction, deterministic 6/60 s. No wall-clock catch-up.
-            if not world["draft"] and not world["policy_error"]:
-                try:
-                    with store.mutation(session_id) as current:
-                        if current["life"]["running"] and not current["draft"]:
-                            advance(current, 6)
-                except ValueError as exc:
-                    with store.mutation(session_id) as current:
-                        current["policy_error"] = str(exc)[:240]
-                        current["life"]["error"] = str(exc)[:240]
-                    self._next_thought[session_id] = 0
+            slot = live_slot(self.app.config.database, session_id)
+            if slot and time.monotonic() - slot.saved_at > 2:
+                store.checkpoint(session_id)
             world = store.get(session_id)
             life = world["life"]
             pending = self._pending.get(session_id)
@@ -144,7 +189,7 @@ class LifeRuntime:
                     if run and run["status"] != "completed":
                         current["life"]["error"] = f"Итерация завершена со статусом {run['status']}. Подробности — в чате."
                 self._pending.pop(session_id, None)
-                self._next_thought[session_id] = time.monotonic() + 12
+                self._next_thought[session_id] = time.monotonic() + 4
                 return
             if busy or life["iteration"] >= life["limit"] or time.monotonic() < self._next_thought.get(session_id, 0):
                 return
@@ -156,7 +201,8 @@ class LifeRuntime:
                     return
                 data = {"iteration": life["iteration"] + 1, "limit": life["limit"],
                         "world_version": world["version"], "active_policy": world["active_policy"],
-                        "observed": observation(world), "recent_changes": world["evolution"][-2:]}
+                        "position": observation(world)["position"], "error": world["policy_error"],
+                        "last_change": world["evolution"][-1]["objective"] if world["evolution"] else None}
                 try:
                     started = self.app.start_run(session_id, ITERATION_PROMPT + "\nCurrent evidence (data):\n" + json.dumps(data, ensure_ascii=False))
                 except RuntimeError:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -9,7 +10,7 @@ import os
 import re
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,10 +35,11 @@ from .workspace import resolve_session_workspace
 from .goals import validate_checks, verify
 from .worker import load_workers
 from game.bridge import GAME_PROMPT, identity as game_identity, register_game, render_game_context
+from game.turns import GameContext
 from game.life import LifeRuntime
-from game.store import GameStore
+from game.store import GameStore, live_slot
 from game.world import PAIRS, frame as game_frame, observation as game_observation
-from game.studio import browser_report, build_summary, human_prompt, digest as game_digest, snapshot as game_snapshot
+from game.studio import browser_report, build_summary, human_prompt, digest as game_digest, snapshot as game_snapshot, configuration as game_configuration
 
 ProviderFactory = Callable[[str, str, str], Any]
 _REFLECTION_VOLATILE_KEYS = {"timestamp", "created_at", "updated_at", "request_id", "event_id", "nonce"}
@@ -419,7 +421,7 @@ class WebApp:
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
-                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/component-host.js"}:
+                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/component-host.js"}:
                         self._static(path)
                     elif path == "/api/auth/session":
                         if app._is_authenticated(self.headers):
@@ -444,6 +446,8 @@ class WebApp:
                     elif path == "/api/game/sessions":
                         with GameStore(app.config.database) as game:
                             self._send_json(200, {"sessions": game.list_sessions()})
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/frames", path):
+                        self._game_frames(int(match.group(1)))
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)/export", path):
                         session_id = int(match.group(1))
                         with GameStore(app.config.database) as game:
@@ -490,7 +494,7 @@ class WebApp:
                             "life": world["life"], "policies": [{"name": k, "version": v["version"], "description": v["description"]} for k,v in world["policies"].items()], "appearance": world["appearance"], "evolution": world["evolution"],
                             "build": build_summary(world), "preview": {k: world["draft"]["candidate"][k] for k in ("widgets", "objects", "components")} if world["draft"] else None,
                             "last_release": world["last_release"], "activity": activity, "server_time": time.time(),
-                            "render_key": game_digest(world["draft"]["candidate"] if world["draft"] else game_snapshot(world))})
+                            "render_key": game_digest(game_configuration({**world,**world["draft"]["candidate"]}) if world["draft"] else game_configuration(world))})
                     elif path == "/api/sessions":
                         with _StateContext(self._state()) as state:
                             sessions = state.list_sessions(100)
@@ -594,6 +598,42 @@ class WebApp:
                         with GameStore(app.config.database) as game:
                             game.create(session_id)
                         self._send_json(201, {"session_id": session_id})
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/vision", parsed.path):
+                        session_id=int(match.group(1))
+                        with GameStore(app.config.database) as game:
+                            if game.get(session_id) is None:raise ValueError("game session not found")
+                        slot=live_slot(app.config.database,session_id)
+                        if body.get("enabled") is False:
+                            with slot.lock:slot.vision=None
+                        else:
+                            image=body.get("image","")
+                            if not isinstance(image,str) or not image.startswith("data:image/jpeg;base64,") or len(image)>150000:
+                                raise ValueError("vision requires a bounded JPEG data URL")
+                            raw=base64.b64decode(image.split(",",1)[1],validate=True)
+                            if not raw.startswith(b"\xff\xd8") or len(raw)>100000:raise ValueError("invalid JPEG frame")
+                            if type(body.get("version")) is not int:raise ValueError("vision requires world version")
+                            with slot.lock:slot.vision={"image":image,"version":body["version"],"at":time.time()}
+                        self._send_json(200,{"saved":True})
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/input", parsed.path):
+                        session_id=int(match.group(1))
+                        with GameStore(app.config.database) as game:
+                            with game.transient(session_id) as world:
+                                kind=body.get("type")
+                                if kind=="grab":
+                                    from game.world import number
+                                    number(body.get("x"),0,1000,"x");number(body.get("y"),0,600,"y")
+                                    if not any(o["id"]==body.get("id") and o["kind"]=="body" for o in world["objects"]):raise ValueError("unknown dynamic object")
+                                    world["human"].update(object=body["id"],pointer=[body["x"],body["y"]])
+                                elif kind=="release":
+                                    world["human"].pop("object",None);world["human"].pop("pointer",None)
+                                elif kind=="drive":
+                                    from game.world import number
+                                    number(body.get("drive",0),-1,1,"drive")
+                                    if type(body.get("jump",False)) is not bool:raise ValueError("jump must be boolean")
+                                    world["human"].update(drive=body.get("drive",0),jump=body.get("jump",False),until=world["tick"]+30)
+                                else:raise ValueError("input type must be grab, release or drive")
+                        app.life.ensure_clock(session_id)
+                        self._send_json(200,{"accepted":True})
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)/life", parsed.path):
                         self._send_json(200, app.life.control(int(match.group(1)), body))
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)/interact", parsed.path):
@@ -603,7 +643,17 @@ class WebApp:
                             if world is None:
                                 raise ValueError("game session not found")
                             prompt = human_prompt(world, body)
-                        self._start_run(session_id, {"message": prompt})
+                            widget=next((w for w in world["widgets"] if w["id"]==body.get("widget_id")),None)
+                            target=widget.get("target") if widget else None
+                            if body.get("component_id"):
+                                component=next((c for c in world["components"] if c["id"]==body["component_id"]),None)
+                                event=next((e for e in component.get("events",[]) if e["id"]==body.get("event_id")),None) if component else None
+                                target=event.get("target") if event else None
+                        if target and target.get("type")=="policy":
+                            app.life.control(session_id,{"action":"select","name":target["name"]})
+                            app.life.ensure_clock(session_id)
+                            self._send_json(200,{"local":True,"policy":target["name"]})
+                        else:self._start_run(session_id, {"message": prompt})
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)/render-report", parsed.path):
                         with GameStore(app.config.database) as game:
                             game.apply(int(match.group(1)), browser_report, body)
@@ -749,6 +799,34 @@ class WebApp:
                     return
                 finally:
                     state.close()
+
+            def _game_frames(self, session_id):
+                with GameStore(app.config.database) as game:
+                    if game.get(session_id) is None:
+                        self._send_json(404, {"error":"game session not found"})
+                        return
+                slot = live_slot(app.config.database, session_id)
+                self.close_connection = True
+                self.send_response(200)
+                self.send_header("Content-Type","text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control","no-cache, no-transform")
+                self.send_header("X-Accel-Buffering","no")
+                self.end_headers()
+                revision = -1
+                try:
+                    while not app.life._stop.is_set():
+                        with slot.lock:
+                            w = slot.world
+                            packet = {"revision":w["revision"],"version":w["version"],"frame":game_frame(w),
+                                      "emotion":w["emotion"],"life":w["life"],"contacts":w["contacts"],
+                                      "error":w["policy_error"],"release":{k:w["draft"][k] for k in ("id","state","objective","edits","activate_at","countdown_ms") if k in w["draft"]} if w["draft"] else None} if w["revision"]!=revision else None
+                        if packet:
+                            self.wfile.write(("data: "+json.dumps(packet,separators=(",",":"))+"\n\n").encode())
+                            self.wfile.flush()
+                            revision = packet["revision"]
+                        time.sleep(1/30)
+                except (BrokenPipeError,ConnectionResetError):
+                    return
 
             def _start_run(self, session_id: int, body: dict[str, Any]) -> None:
                 self._send_json(202, app.start_run(session_id, body.get("message")))
@@ -1134,7 +1212,7 @@ class WebApp:
                 raise ValueError("session not found")
             workspace = resolve_session_workspace(self.config.workspace, session["workspace"])
             tools = ToolRegistry(workspace, state, session_id, shell_enabled=False)
-            is_game = register_game(tools)
+            is_game = register_game(tools, self.life)
             delegation = DelegationManager(
                 state,
                 self.config.workspace,
@@ -1151,7 +1229,7 @@ class WebApp:
                 repeat_failure_threshold=self.config.goal_repeat_failure_threshold,
             )
             delegation.register(tools)
-            context = ContextBuilder(
+            context = (GameContext if is_game else ContextBuilder)(
                 state,
                 max_tokens=self.config.context_limit_tokens,
                 max_tool_result_chars=self.config.context_max_tool_result_chars,
@@ -1164,7 +1242,7 @@ class WebApp:
                 state,
                 session_id,
                 system_prompt=GAME_PROMPT if is_game else SYSTEM_PROMPT,
-                usage_policy=self.config.usage_policy,
+                usage_policy=replace(self.config.usage_policy,max_calls_per_run=min(8,self.config.usage_policy.max_calls_per_run)) if is_game else self.config.usage_policy,
                 context_builder=context,
                 agent_id=self.agent_id,
                 agent_name=self.config.model,

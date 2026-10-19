@@ -100,6 +100,7 @@ async function humanControl(widgetId,itemId,version){
     const payload={widget_id:widgetId,version};if(itemId)payload.item_id=itemId;
     const data=await api(`game/sessions/${sessionId}/interact`,"POST",payload);
     if(token!==generation)return;
+    if(data.local){busy(false);await refreshWorld(token);return;}
     message("user",`Нажата кнопка мира: ${widgetId}${itemId ? ` / ${itemId}` : ""}`);
     runId=data.run_id;stream(runId,0,token);
   }catch(exc){if(token===generation)busy(false);throw exc;}
@@ -150,7 +151,7 @@ function drawStudio(ctx,now,data,body){
   if(data.build?.state==="scheduled"){
     overlay.hidden=false;overlay.className="release-overlay countdown";
     const remaining=data.build.activate_at*1000-(Date.now()+clockOffset);
-    number.textContent=remaining>0?String(Math.min(3,Math.ceil(remaining/1000))):"…";
+    number.textContent=remaining>0?String(Math.min(3,Math.ceil(remaining/(data.build.countdown_ms||3000)*3))):"…";
     label.textContent=remaining>0?"SATISFY · ПРОВЕРКИ ПРОЙДЕНЫ":"ОЖИДАНИЕ АКТИВАЦИИ СЕРВЕРОМ";
   }else if(releaseFlash&&now-releaseFlash.start<1400){
     overlay.hidden=false;overlay.className="release-overlay activated";number.textContent="БАХ";label.textContent=`WORLD v${releaseFlash.version} · ОБНОВЛЕНО`;

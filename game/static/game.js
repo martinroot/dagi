@@ -8,6 +8,7 @@ const toolCards = new Map();
 const seenLifeRuns = new Set();
 let trailFrames = [];
 let policyControlsKey = null;
+let frameSource=null, frameQueue=[], frameLive=false, frameVersion=-1, frameTick=-1, frameMetaPending=false;
 const canvas = $("world"), ctx = canvas.getContext("2d");
 const pretty = (value) => JSON.stringify(value, null, 2);
 
@@ -24,11 +25,12 @@ async function api(path, method = "GET", body) {
 }
 function error(exc) { $("error").textContent = exc.message || String(exc); }
 function showLogin() {
-  generation++; closeStream(); sessionId = null; runId = null;
+  generation++; closeStream(); closeFrames(); sessionId = null; runId = null;
   sceneData = displayed = animation = null; revision = -1;
   $("lab").hidden = true; $("login").hidden = false; $("logout").hidden = true;
 }
 function closeStream() { if (source) source.close(); source = null; }
+function closeFrames(){if(frameSource)frameSource.close();frameSource=null;frameLive=false;frameQueue=[];frameVersion=-1;frameTick=-1;}
 function busy(active) {
   $("send").disabled = active || !sessionId; $("stop").hidden = !active;
   $("download-log").disabled = !sessionId;
@@ -69,7 +71,7 @@ async function sessions() {
   return data.sessions;
 }
 async function selectSession(id, title) {
-  const token = ++generation; closeStream(); sessionId = id; runId = null; revision = -1;
+  const token = ++generation; closeStream(); closeFrames(); sessionId = id; runId = null; revision = -1;
   sceneData = displayed = animation = null; trailFrames = []; seenLifeRuns.clear(); policyControlsKey = null;
   if(typeof studioReset==="function")studioReset();
   $("title").textContent = title || `Эксперимент #${id}`; $("chat").replaceChildren(); toolCards.clear(); busy(false);
@@ -93,6 +95,7 @@ async function selectSession(id, title) {
   for (const item of snapshot.tool_calls.slice(-20)) if (!toolCards.has(item.tool_call_id)) savedTool(item);
   await refreshWorld(token);
   if (token !== generation) return;
+  connectFrames(id,token);
   const running = snapshot.runs.find((run) => run.status === "running");
   if (running) {
     runId = running.run_id; busy(true);
@@ -137,10 +140,11 @@ async function refreshWorld(token = generation) {
   if(data.frame?.nodes?.head){trailFrames.push(data.frame);trailFrames=trailFrames.slice(-12);}
   const motion = hadFrame && !changedVersion ? data.motion.filter((frame) => frame.tick >= oldTick) : [];
   animation = motion.length > 1 ? {frames:motion, start:performance.now(), duration:Math.min(4000, (motion.at(-1).tick - motion[0].tick) / 60 * 1000)} : null;
-  if (!animation) displayed = data.frame;
+  if(frameLive){animation=null;}
+  else if (!animation) displayed = data.frame;
   $("body-id").textContent = data.self.body_id;
   const programs = [...(data.self.programs || []),...(data.policies || [])].map((program) => `${program.name}@${program.version}`).join(", ") || "нет сохранённых программ";
-  $("identity").textContent = `Я: ${data.self.body_id}\nСессия: ${data.self.session_id}\nСреда: browser canvas + чат\nВосприятие: структурированная сцена\nКод тела: ${data.self.code.engine}\nМоё поведение: controller + versioned skills\nМои программы: ${programs}\nРабочая папка: ${data.self.workspace}\nЧеловек видит тело и результаты действий`;
+  $("identity").textContent = `Я: ${data.self.body_id}\nСессия: ${data.self.session_id}\nСреда: browser canvas + чат\nВосприятие: датчики + кадр canvas при включённом зрении\nКод тела: ${data.self.code.engine}\nМоё поведение: controller + versioned skills\nМои программы: ${programs}\nРабочая папка: ${data.self.workspace}\nЧеловек видит тело и результаты действий`;
   const s = data.scene;
   const autonomy = s.autonomy_execution, autonomyBadge = $("autonomy-status");
   autonomyBadge.hidden = !autonomy;
@@ -202,6 +206,7 @@ async function send(text) {
   const token = generation, id = sessionId;
   busy(true);
   try {
+    if(typeof captureVision==="function")await captureVision();
     const data = await api(`sessions/${id}/runs`, "POST", {message:text});
     if (token !== generation) return;
     message("user", text); $("message").value = ""; runId = data.run_id; stream(runId, 0, token);
@@ -239,6 +244,9 @@ function drawAvatarExpression(ctx, head, state, now) {
 }
 
 function draw(now) {
+  if(frameLive&&frameQueue.length){displayed=interpolatedFrame(now);animation=null;}
+  if(typeof resizeScene==="function")resizeScene(canvas,ctx);
+  if(typeof paintScene==="function"){paintScene(ctx,now,sceneData,displayed);if(typeof drawStudio==="function")drawStudio(ctx,now,sceneData,displayed);requestAnimationFrame(draw);return;}
   if (animation) {
     const fraction = animation.duration ? Math.min(1, (now - animation.start) / animation.duration) : 1;
     const first = animation.frames[0].tick, last = animation.frames.at(-1).tick;
@@ -289,12 +297,42 @@ function draw(now) {
   if(typeof drawStudio==="function")drawStudio(ctx,now,sceneData,displayed);
   requestAnimationFrame(draw);
 }
+function connectFrames(id,token){
+  const connection=new EventSource(new URL(`game/sessions/${id}/frames`,apiRoot));frameSource=connection;
+  connection.onmessage=(event)=>{
+    if(token!==generation||sessionId!==id)return;
+    const packet=JSON.parse(event.data);
+    if(packet.frame.tick<frameTick&&packet.version===frameVersion)return;
+    const stamp=performance.now();frameTick=packet.frame.tick;frameVersion=packet.version;
+    frameQueue.push({at:stamp,...packet.frame});frameQueue=frameQueue.slice(-12);frameLive=true;
+    if(sceneData){
+      const changed=sceneData.scene.version!==packet.version;
+      sceneData.life=packet.life;sceneData.scene.emotion=packet.emotion;sceneData.scene.contacts=packet.contacts;
+      sceneData.scene.policy_error=packet.error;sceneData.scene.tick=packet.frame.tick;
+      if(packet.release?.state==="scheduled")sceneData.build=packet.release;
+      if(changed&&!frameMetaPending){frameMetaPending=true;refreshWorld(token).catch(error).finally(()=>frameMetaPending=false);}
+    }
+    $("clock").textContent=`${(packet.frame.tick/60).toFixed(1)} s · PHYSICS 60 Hz`;
+    $("pose").textContent=packet.error?"Контроллер требует исправления":packet.life.running?"Прямой поток кадров · локальный код":"Пауза";
+  };
+  connection.onerror=()=>{if(frameSource===connection){frameLive=false;$("pose").textContent="Восстанавливаю поток кадров…";}};
+}
+function interpolatedFrame(now){
+  const target=now-70;
+  let i=frameQueue.findIndex(f=>f.at>=target);if(i<0)return frameQueue.at(-1);if(i===0)return frameQueue[0];
+  const a=frameQueue[i-1],b=frameQueue[i],t=Math.max(0,Math.min(1,(target-a.at)/(b.at-a.at||1)));
+  const nodes=Object.fromEntries(Object.keys(b.nodes).map(k=>[k,[a.nodes[k][0]+(b.nodes[k][0]-a.nodes[k][0])*t,a.nodes[k][1]+(b.nodes[k][1]-a.nodes[k][1])*t]]));
+  const prior=new Map((a.objects||[]).map(o=>[o[0],o]));
+  const objects=(b.objects||[]).map(o=>{const p=prior.get(o[0])||o;return[o[0],p[1]+(o[1]-p[1])*t,p[2]+(o[2]-p[2])*t,p[3]+(o[3]-p[3])*t];});
+  return{tick:a.tick+(b.tick-a.tick)*t,nodes,objects};
+}
 async function lifeAction(action,name) {
   if(!sessionId)return;
   const token=generation;
   const payload={action};
   if(action==="start")payload.iterations=Number($("life-iterations").value)||5;
   if(name)payload.name=name;
+  if(action==="start"&&typeof captureVision==="function")await captureVision();
   await api(`game/sessions/${sessionId}/life`,"POST",payload);
   if(token===generation)await refreshWorld(token);
 }
@@ -340,5 +378,5 @@ async function init() {
   await api("auth/session"); $("error").textContent=""; $("login").hidden=true; $("lab").hidden=false; $("logout").hidden=false;
   busy(false); const list=await sessions(); if(list.length) await selectSession(list[0].id,list[0].title);
 }
-setInterval(async()=>{if(polling||!sessionId||document.hidden)return;polling=true;try{await refreshWorld();}catch(exc){error(exc);}finally{polling=false;}},160);
+setInterval(async()=>{if(polling||!sessionId||document.hidden)return;polling=true;try{await refreshWorld();}catch(exc){error(exc);}finally{polling=false;}},1500);
 requestAnimationFrame(draw); init().catch(error);

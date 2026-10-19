@@ -12,7 +12,7 @@ from dagi_core.tools import ToolExecutionContext, ToolRegistry
 from dagi_core.web import WebApp
 from game.bridge import register_game, render_game_context
 from game.store import GameStore
-from game.studio import activate, browser_report, build, digest, human_prompt, review, snapshot, visual_edit
+from game.studio import configuration, activate, browser_report, build, digest, human_prompt, review, snapshot, visual_edit
 from game.world import act, evolve, fresh_world, observation
 from test_core_web import _config, _request, _start, _stop, _wait_for_status
 
@@ -101,8 +101,8 @@ def test_stale_live_world_or_tampered_candidate_cannot_reuse_a_test():
     build(world, {"operation": "discard"})
     begin_with_panel(world)
     act(world, {"action": "right", "frames": 1})
-    with pytest.raises(ValueError, match="live world changed"):
-        build(world, {"operation": "test"})
+    build(world, {"operation": "test"})
+    assert world["draft"]["report"]["passed"]  # Live motion does not invalidate an unchanged authored configuration.
 
 
 def test_old_world_migrates_without_reset_and_failed_batch_is_atomic(tmp_path):
@@ -147,11 +147,12 @@ def test_renderer_reports_and_clicks_are_bound_to_current_declared_scene():
     assert '"action": "right"' in human_prompt(world, {"widget_id": "walk", "version": 0})
     with pytest.raises(ValueError, match="world changed"):
         human_prompt(world, {"widget_id": "walk", "version": 1})
-    report = {"version": 0, "view": "live", "render_key": digest(snapshot(world)), "width": 1280, "height": 800, "overflow": False, "issues": []}
+    report = {"version": 0, "view": "live", "render_key": digest(configuration(world)), "width": 1280, "height": 800, "overflow": False, "issues": []}
     browser_report(world, report)
     assert review(world)["browser"]["stale"] is False
     act(world, {"action": "right", "frames": 30})
-    assert review(world)["browser"]["stale"] is True
+    assert review(world)["browser"]["stale"] is False
+    visual_edit(world,{"operation":"theme","values":{"accent":"#112233"}})
     with pytest.raises(ValueError, match="different scene"):
         browser_report(world, report)
 
@@ -165,7 +166,7 @@ def test_passport_is_current_and_live_actions_are_blocked_during_a_draft(tmp_pat
     register_game(tools)
     tools.set_execution_context(ToolExecutionContext(session, "run", 0, "brain-model"))
     initial = render_game_context(state.path, session, tools.workspace, "brain-model")
-    assert "LLM API JSON request" in initial and f"stickman:{session}" in initial
+    assert "LLM JSON API" in initial and f"stickman:{session}" in initial
     assert tools.call("game_build", {"operation": "begin", "objective": "visible work"}).is_error is False
     assert '"state":"building"' in render_game_context(state.path, session, tools.workspace, "brain-model")
     assert tools.call("game_act", {"action": "right"}).is_error is True

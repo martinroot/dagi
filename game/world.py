@@ -69,7 +69,7 @@ def upgrade(world):
 
 
 def frame(world):
-    return {"tick": world["tick"], "nodes": {name: [round(p["x"], 2), round(p["y"], 2)] for name, p in world["nodes"].items()}}
+    return {"tick": world["tick"], "objects": [[o["id"],round(o["x"],2),round(o["y"],2),round(o.get("angle",0),3)] for o in world["objects"] if o["kind"]=="body"], "nodes": {name: [round(p["x"], 2), round(p["y"], 2)] for name, p in world["nodes"].items()}}
 
 
 def avatar_state(world):
@@ -100,7 +100,7 @@ def avatar_state(world):
 def observation(world):
     nodes = world["nodes"]
     hip, head = nodes["hip"], nodes["head"]
-    grounded = any(_on_surface(world, nodes[name], 7) for name in ("left_foot", "right_foot"))
+    grounded = bool(world.get("contacts",{}).get("support")) if world.get("physics_engine")=="chipmunk" else any(_on_surface(world, nodes[name], 7) for name in ("left_foot", "right_foot"))
     upright = head["y"] < hip["y"] - 45 and abs(head["x"] - hip["x"]) < 35
     goal = copy.deepcopy(world["goal"])
     if goal:
@@ -118,7 +118,7 @@ def observation(world):
         "position": {"x": round(hip["x"], 2), "y": round(hip["y"], 2)},
         "upright": upright, "grounded": grounded,
         "physics": {"gravity": world["gravity"], "step_hz": 60, "floor_y": FLOOR, "width": WIDTH,
-                    "clock": "action-driven", "solver": "Verlet + distance constraints + circle/AABB contacts; assisted posture motor"},
+                    "clock": "continuous" if world.get("life",{}).get("running") else "paused", "engine": world.get("physics_engine","legacy"), "solver": "Verlet + distance constraints + circle/AABB contacts; assisted posture motor"},
         "controller": copy.deepcopy(world["controller"]), "objects": copy.deepcopy(world["objects"]),
         "behaviors": copy.deepcopy(world["behaviors"]), "goal": goal,
         "last_action": copy.deepcopy(world["history"][-1]) if world["history"] else None,
@@ -128,6 +128,7 @@ def observation(world):
         "life": copy.deepcopy(world.get("life", {})),
         "active_policy": world.get("active_policy"), "policy_error": world.get("policy_error"),
         "appearance": copy.deepcopy(world.get("appearance", {})),
+        "contacts": copy.deepcopy(world.get("contacts", {})), "emotion": copy.deepcopy(world.get("emotion", {})),
     }
 
 
@@ -278,17 +279,24 @@ def act(world, args, cancelled=lambda: False, stop_on_goal=False):
     frames_requested = sum(step["frames"] for step in steps)
     frames_executed = 0
     goal_stopped = False
+    simulator = None
+    if world.get("physics_engine")=="chipmunk":
+        from .rigid import RigidSimulator
+        simulator = RigidSimulator(world)
     motion = [frame(world)]
     for step in steps:
         action, frames, _ignored = validate_action(step)
-        if action == "jump" and observation(world)["grounded"]:
+        if simulator is None and action == "jump" and observation(world)["grounded"]:
             for p in world["nodes"].values():
                 p["py"] = p["y"] + world["controller"]["jump"] * DT
         for i in range(frames):
             if cancelled():
                 raise ValueError("action cancelled before world commit")
-            _step(world, -1 if action == "left" else 1 if action == "right" else 0,
-                  -1 if action == "climb_up" else 1 if action == "climb_down" else 0)
+            if simulator:
+                simulator.step({"drive": -1 if action=="left" else 1 if action=="right" else 0, "jump": action=="jump" and i==0})
+            else:
+                _step(world, -1 if action == "left" else 1 if action == "right" else 0,
+                      -1 if action == "climb_up" else 1 if action == "climb_down" else 0)
             frames_executed += 1
             if i % 8 == 0:
                 motion.append(frame(world))

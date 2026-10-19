@@ -2,7 +2,7 @@ import copy
 
 import pytest
 
-from game.studio import browser_report, build, digest, review
+from game.studio import browser_report, build, digest, review, configuration
 from game.world import fresh_world
 
 
@@ -20,7 +20,7 @@ def draft():
 
 def execution(world, status="passed"):
     candidate = world["draft"]["candidate"]
-    return {"version": 0, "view": "draft", "render_key": digest(candidate), "width": 1200, "height": 900, "overflow": False, "issues": [],
+    return {"version": 0, "view": "draft", "render_key": digest(configuration(candidate)), "width": 1200, "height": 900, "overflow": False, "issues": [],
         "components": [{"id": "novel-instrument", "code_hash": candidate["components"][0]["code_hash"], "status": status,
                         "detail": "Compiled and executed" if status == "passed" else "SyntaxError: Unexpected token"}]}
 

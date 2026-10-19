@@ -17,7 +17,7 @@ from functools import lru_cache
 
 
 DEFAULTS = {
-    "policies": {}, "active_policy": None, "policy_state": {}, "policy_error": None,
+    "physics_engine": "legacy", "mechanisms": [], "contacts": {}, "emotion": {"valence": 0, "arousal": .25, "focus": .4}, "human": {}, "policies": {}, "active_policy": None, "policy_state": {}, "policy_error": None,
     "appearance": {"stroke": "#282d23", "accent": "#e6703a", "fill": "#ffffff",
                    "line_width": 5, "head_radius": 12, "joint_radius": 3.5, "trail": 0},
     "material": {"damping": .985, "vertical_damping": .995, "friction": .82,
@@ -31,6 +31,9 @@ DEFAULTS = {
 def upgrade(world):
     for key, value in DEFAULTS.items():
         world.setdefault(key, copy.deepcopy(value))
+    for obj in world.get("objects",[]):
+        if obj["kind"]=="body" and "definition" not in obj:
+            obj["definition"] = {k:copy.deepcopy(v) for k,v in obj.items() if k not in ("vx","vy","angle","angular_velocity","kind")}
     return world
 
 
@@ -151,8 +154,8 @@ def command(world):
     name = world.get("active_policy")
     if not name:
         return {}
-    result = evaluate(world["policies"][name]["code"], {"s": sensors(world), "m": world["policy_state"]})
-    if not isinstance(result, dict) or set(result) - {"drive", "jump", "pose", "forces", "memory", "intent", "object_forces"}:
+    result = evaluate(world["policies"][name]["code"], {"s": sensors(world), "m": world["policy_state"], "p": world["policies"][name].get("params", {})})
+    if not isinstance(result, dict) or set(result) - {"drive", "jump", "pose", "forces", "memory", "intent", "object_forces", "emotion", "gaze", "grip"}:
         raise ValueError("policy returns {drive,jump,pose,forces,memory,intent,object_forces}")
     from .world import number
     number(result.get("drive", 0), -1, 1, "drive")
@@ -177,7 +180,22 @@ def command(world):
     intent = result.get("intent", "")
     if not isinstance(intent, str) or len(intent) > 100:
         raise ValueError("policy intent must be text <=100 characters")
-    world["policy_state"] = memory
+    emotion = result.get("emotion", {})
+    if not isinstance(emotion, dict) or set(emotion) - {"valence", "arousal", "focus"}:
+        raise ValueError("emotion uses valence -1..1, arousal/focus 0..1")
+    for key,value in emotion.items():
+        number(value, -1 if key=="valence" else 0, 1, key)
+    world["emotion"].update(emotion)
+    grip = result.get("grip")
+    if grip is not None:
+        if not isinstance(grip, dict) or set(grip)-{"object","hand"} or grip.get("hand","right_hand") not in ("left_hand","right_hand"):
+            raise ValueError("grip uses {object:id,hand:left_hand|right_hand}; omit to release")
+    if "gaze" in result:
+        if not isinstance(result["gaze"],list) or len(result["gaze"])!=2:
+            raise ValueError("gaze is [x,y]")
+        for value in result["gaze"]: number(value,-1000,2000,"gaze")
+        world["emotion"]["gaze"] = result["gaze"]
+    world["policy_state"] = copy.deepcopy(memory)
     world["life"]["intent"] = intent
     return result
 
@@ -187,7 +205,7 @@ def design(world, args):
     from .world import keys, number, text
     operation = args.get("operation")
     if operation == "policy":
-        keys(args, ("operation", "name", "code", "description", "activate"))
+        keys(args, ("operation", "name", "code", "description", "activate", "params"))
         name = text(args.get("name"), 40, "policy name")
         parse(args.get("code"))
         description = text(args.get("description"), 200, "description")
@@ -195,7 +213,12 @@ def design(world, args):
             raise ValueError("maximum 12 named policies")
         if type(args.get("activate", True)) is not bool:
             raise ValueError("activate must be boolean")
-        world["policies"][name] = {"code": args["code"], "description": description,
+        params = args.get("params", {})
+        if not isinstance(params,dict) or len(params)>16:
+            raise ValueError("params must be a small numeric dictionary")
+        for key,value in params.items():
+            text(key,40,"parameter name");number(value,-2000,2000,"parameter value")
+        world["policies"][name] = {"params": params, "code": args["code"], "description": description,
                                    "version": hashlib.sha256(args["code"].encode()).hexdigest()[:12]}
         if args.get("activate", True):
             world["active_policy"] = name
@@ -231,6 +254,27 @@ def design(world, args):
             if k == "iterations" and type(v) is not int:
                 raise ValueError("iterations must be integer")
         world["material"].update(values)
+    elif operation == "joint":
+        keys(args,("operation","joint"))
+        joint=copy.deepcopy(args.get("joint"))
+        keys(joint,("id","type","a","b","anchor","stiffness","damping","length","rate","max_force"))
+        text(joint.get("id"),40,"joint id")
+        if joint.get("type") not in ("pivot","spring","motor"):
+            raise ValueError("joint type must be pivot, spring or motor")
+        ids={o["id"] for o in world["objects"] if o["kind"]=="body"}|{"world"}
+        if joint.get("a") not in ids or joint.get("b") not in ids or joint["a"]==joint["b"]:
+            raise ValueError("joint endpoints must be distinct dynamic object IDs or world")
+        if joint["type"]=="pivot":
+            if not isinstance(joint.get("anchor"),list) or len(joint["anchor"])!=2:
+                raise ValueError("pivot requires anchor [world_x,world_y]")
+            number(joint["anchor"][0],0,1000,"anchor x");number(joint["anchor"][1],0,540,"anchor y")
+        for key,default,lo,hi in (("stiffness",50,0,5000),("damping",8,0,500),("length",50,0,500),("rate",0,-8,8),("max_force",2000,0,20000)):
+            joint.setdefault(key,default);number(joint[key],lo,hi,key)
+        index=next((i for i,j in enumerate(world["mechanisms"]) if j["id"]==joint["id"]),None)
+        if index is None:
+            if len(world["mechanisms"])>=20:raise ValueError("mechanism joint limit:20")
+            world["mechanisms"].append(joint)
+        else:world["mechanisms"][index]=joint
     elif operation == "body":
         keys(args, ("operation", "body"))
         obj = copy.deepcopy(args.get("body"))
@@ -250,6 +294,7 @@ def design(world, args):
             raise ValueError("body color uses #RRGGBB")
         obj.setdefault("color", "#b7c5a4")
         text(obj.get("label", obj["id"]), 80, "label")
+        obj["definition"] = copy.deepcopy(obj)
         obj.update(kind="body", vx=0, vy=0)
         index = next((i for i, o in enumerate(world["objects"]) if o["id"] == obj["id"]), None)
         if index is None:
@@ -263,20 +308,27 @@ def design(world, args):
     return {"kind": "design", "operation": operation}
 
 
-def advance(world, frames=6, cancelled=lambda: False):
+def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostics=True):
     from .world import DT, _step, frame, observation
+    if simulator is None and world.get("physics_engine")=="chipmunk":
+        from .rigid import RigidSimulator
+        simulator = RigidSimulator(world)
     frames_out = [frame(world)]
     samples = []
     for i in range(frames):
         if cancelled():
             raise ValueError("physical trial cancelled")
         output = command(world)
-        if output.get("jump") and observation(world)["grounded"]:
+        if simulator is None and output.get("jump") and observation(world)["grounded"]:
             for p in world["nodes"].values():
                 p["py"] = p["y"] + world["controller"]["jump"] * DT
-        _step(world, output.get("drive", 0), control=output)
+        if simulator is not None:
+            simulator.step(output)
+        else:
+            _step(world, output.get("drive", 0), control=output)
         if i % 6 == 0 or i == frames - 1:
             frames_out.append(frame(world))
+            if not diagnostics: continue
             sample = observation(world)
             hip = world["nodes"]["hip"]
             from .world import LINKS, _on_surface

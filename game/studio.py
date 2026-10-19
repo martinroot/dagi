@@ -12,12 +12,24 @@ from uuid import uuid4
 from .living import design, trial
 from .world import act, evolve, keys, number, observation, text, validate_action
 
-LIVE_FIELDS = ("nodes", "tick", "gravity", "controller", "objects", "behaviors", "goal", "widgets", "components", "theme", "policies", "active_policy", "policy_state", "appearance", "material")
+LIVE_FIELDS = ("nodes", "tick", "gravity", "controller", "objects", "behaviors", "goal", "widgets", "components", "theme", "policies", "active_policy", "policy_state", "appearance", "material", "mechanisms")
 TOOL_NAMES = {"game_inspect", "game_act", "game_evolve", "game_goal", "game_reflect", "game_build", "game_visual", "game_review"}
 
 
 def snapshot(world):
     return {name: copy.deepcopy(world[name]) for name in LIVE_FIELDS}
+
+
+def configuration(world):
+    result = snapshot(world)
+    for key in ("nodes", "tick", "policy_state"):
+        result.pop(key, None)
+    result["objects"] = [copy.deepcopy(o.get("definition",o)) if o["kind"]=="body" else copy.deepcopy(o) for o in result["objects"]]
+    for obj in result["objects"]:
+        if obj.get("shape") in ("circle","rect"):
+            for key in ("vx","vy","angle","angular_velocity","definition"):
+                obj.pop(key,None)
+    return result
 
 
 def digest(value):
@@ -27,7 +39,10 @@ def digest(value):
 def validate_target(target, world):
     keys(target, ("type", "name", "action", "frames", "text"))
     kind = target.get("type")
-    if kind == "behavior":
+    if kind == "policy":
+        keys(target,("type","name"))
+        if target.get("name") not in world["policies"]:raise ValueError("unknown feedback policy")
+    elif kind == "behavior":
         keys(target, ("type", "name"))
         text(target.get("name"), 40, "behavior name")
         if target["name"] not in world["behaviors"]:
@@ -175,7 +190,7 @@ def visual_edit(world, args):
 def edit(world, change):
     if not isinstance(change, dict):
         raise ValueError("change must be an object")
-    if change.get("operation") in {"policy", "appearance", "material", "body"}:
+    if change.get("operation") in {"policy", "appearance", "material", "body", "joint"}:
         return design(world, change)
     if change.get("operation") in ("component", "remove_component", "widget", "remove_widget", "todo", "theme"):
         return visual_edit(world, change)
@@ -221,7 +236,7 @@ def review(world):
         findings.append({"issue": "body_background_contrast", "ratio": round(contrast, 2)})
     browser = copy.deepcopy(world.get("browser_report"))
     if browser:
-        browser["stale"] = browser["render_key"] != digest(snapshot(world))
+        browser["stale"] = browser["render_key"] != digest(configuration(world))
         if not browser["stale"]:
             if browser["overflow"]:
                 findings.append({"issue": "browser_reported_page_overflow", "source": "untrusted browser measurement"})
@@ -259,7 +274,7 @@ def build(world, args, cancelled=lambda: False):
         if draft:
             raise ValueError("a draft already exists; inspect, edit or discard it")
         world["draft"] = {"id": uuid4().hex, "state": "building", "objective": text(args.get("objective"), 300, "objective"),
-                          "base": digest(snapshot(world)), "candidate": snapshot(world), "edits": 0, "test_count": 0, "report": None}
+                          "base": digest(configuration(world)), "seed": snapshot(world), "candidate": snapshot(world), "edits": 0, "test_count": 0, "report": None}
     elif operation == "discard":
         keys(args, ("operation",))
         if draft and draft["state"] == "scheduled":
@@ -281,17 +296,19 @@ def build(world, args, cancelled=lambda: False):
         keys(args, ("operation",))
         if not draft or draft["state"] == "scheduled" or draft["test_count"] >= 3:
             raise ValueError("begin a draft; at most three tests are allowed per draft")
-        if draft["base"] != digest(snapshot(world)):
+        if draft["base"] != digest(configuration(world)):
             raise ValueError("live world changed; discard and rebuild against current state")
         candidate = copy.deepcopy(world)
         candidate.update(copy.deepcopy(draft["candidate"]))
-        baseline, after = _simulate(world, cancelled), _simulate(candidate, cancelled)
+        baseline_world = copy.deepcopy(world)
+        baseline_world.update(copy.deepcopy(draft.get("seed",snapshot(world))))
+        baseline, after = _simulate(baseline_world, cancelled), _simulate(candidate, cancelled)
         visual = review(candidate)
-        checks = {"changed": digest(draft["candidate"]) != draft["base"], "finite_physics": after["finite"],
+        checks = {"changed": digest(configuration(candidate)) != draft["base"], "finite_physics": after["finite"],
                   "posture_no_regression": not baseline["upright"] or after["upright"],
                   "layout_readable": visual["passed"], "goal_preserved": candidate["goal"] == world["goal"]}
         checks["authored_components_executed"] = all(c["status"] == "passed" for c in visual["component_execution"])
-        policy_before, policy_after = trial(world, cancelled=cancelled), trial(candidate, cancelled=cancelled)
+        policy_before, policy_after = trial(baseline_world, cancelled=cancelled), trial(candidate, cancelled=cancelled)
         checks["feedback_policy_executes"] = policy_after["passed"]
         checks["feedback_posture_no_regression"] = not policy_before["passed"] or not policy_after["passed"] or policy_after["upright_ratio"] >= min(.65, policy_before.get("upright_ratio", 0))
         skill_tests = []
@@ -318,7 +335,7 @@ def build(world, args, cancelled=lambda: False):
         keys(args, ("operation",))
         if not draft or draft["state"] != "tested" or not draft["report"] or not draft["report"]["passed"]:
             raise ValueError("a passing draft test is required before release")
-        if draft["base"] != digest(snapshot(world)) or draft["report"]["candidate_hash"] != digest(draft["candidate"]):
+        if draft["base"] != digest(configuration(world)) or draft["report"]["candidate_hash"] != digest(draft["candidate"]):
             raise ValueError("test evidence is stale; test the exact current draft")
         draft["state"] = "scheduled"
         draft["activate_at"] = time.time() + 3.2
@@ -333,12 +350,24 @@ def activate(world, args):
         raise ValueError("scheduled release no longer exists")
     if time.time() < draft["activate_at"]:
         raise ValueError("release countdown is still running")
-    if draft["base"] != digest(snapshot(world)) or draft["report"]["candidate_hash"] != digest(draft["candidate"]):
+    if draft["base"] != digest(configuration(world)) or draft["report"]["candidate_hash"] != digest(draft["candidate"]):
         raise ValueError("live world or candidate changed after testing")
     world["previous"] = snapshot(world)
+    live_nodes, live_tick = copy.deepcopy(world["nodes"]), world["tick"]
+    old_objects = {o["id"]: copy.deepcopy(o) for o in world["objects"]}
+    same_policy = world["active_policy"]==draft["candidate"]["active_policy"] and world["policies"]==draft["candidate"]["policies"]
+    memory = copy.deepcopy(world["policy_state"])
     world.update(copy.deepcopy(draft["candidate"]))
+    world["nodes"], world["tick"] = live_nodes, live_tick
+    if same_policy: world["policy_state"] = memory
+    for i,obj in enumerate(world["objects"]):
+        old=old_objects.get(obj["id"])
+        if old and old.get("definition")==obj.get("definition") and obj["kind"]=="body":
+            world["objects"][i]=old
     world["version"] += 1
     world["policy_error"] = None
+    world["failed_policy"] = None
+    world["life"]["error"] = None
     world["motion"] = []
     world["last_release"] = {"id": draft["id"], "version": world["version"], "objective": draft["objective"],
                              "activated_at": time.time(), "checks": draft["report"]["checks"], "report": copy.deepcopy(draft["report"])}
@@ -358,7 +387,7 @@ def build_summary(world):
     draft = world["draft"]
     if not draft:
         return None
-    return {k: copy.deepcopy(draft[k]) for k in ("id", "state", "objective", "edits", "test_count", "report", "activate_at", "release_error", "improvement_mode", "baseline_complexity_score") if k in draft}
+    return {k: copy.deepcopy(draft[k]) for k in ("id", "state", "objective", "edits", "test_count", "report", "activate_at", "countdown_ms", "release_error", "improvement_mode", "baseline_complexity_score") if k in draft}
 
 
 def human_prompt(world, args):
@@ -392,7 +421,7 @@ def browser_report(world, args):
     if args.get("view") not in ("live", "draft"):
         raise ValueError("renderer view must be live or draft")
     target = world["draft"]["candidate"] if args["view"] == "draft" and world["draft"] else snapshot(world) if args["view"] == "live" else None
-    if target is None or args.get("render_key") != digest(target):
+    if target is None or args.get("render_key") != digest(configuration(target)):
         raise ValueError("renderer report belongs to a different scene")
     number(args.get("width"), 100, 10000, "width")
     number(args.get("height"), 100, 10000, "height")
