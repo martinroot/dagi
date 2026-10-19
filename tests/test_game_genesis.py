@@ -202,6 +202,46 @@ def test_game_iteration_description_carries_exact_change_schema():
         assert needle in GAME_ITERATION_DESCRIPTION, needle
 
 
+def _policy_change(operation_key="operation", wrapper=False, alias=False, flatten=False, as_string=False):
+    inner={"name":"rhythm","description":"rhythmic dance","code":"{'drive':0.3*sin(s['t']*1.5),'intent':'dancing'}"}
+    if flatten:
+        change=dict(inner)
+    elif wrapper:
+        change={"policy":dict(inner)}
+    else:
+        change={operation_key:"policy",**inner}
+    changes=[change]
+    if as_string:
+        import json as _json
+        changes=_json.dumps(changes)
+    return changes
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"operation_key":"operation"},
+    {"alias":True},
+    {"wrapper":True},
+    {"flatten":True},
+    {"as_string":True},
+    {"operation_key":"operation","as_string":True},
+])
+def test_iteration_normalizes_recognizable_change_shapes(tmp_path, kwargs):
+    with closing(StateStore(tmp_path/"state.db")) as state:
+        sid=state.create_session()
+        with GameStore(state.path) as store:store.create(sid)
+        result=iterate(state.path,sid,{"objective":"Rhythmic dance","changes":_policy_change(**kwargs),"play":False})
+        assert result["published"] is True
+        assert result["policy"]=="rhythm"
+        with GameStore(state.path) as store:
+            world=store.get(sid)
+        assert "rhythm" in world["policies"] and world["active_policy"]=="rhythm"
+
+
+def test_schema_view_documents_the_operation_key_on_every_change():
+    from game.bridge import GAME_ITERATION_DESCRIPTION
+    assert '{\"operation\":\"policy\"' in GAME_ITERATION_DESCRIPTION or '"operation"' in GAME_ITERATION_DESCRIPTION
+
+
 def test_game_turn_cap_grants_discovery_headroom():
     from game.turns import game_call_cap, GAME_TURN_CALL_CAP
     assert GAME_TURN_CALL_CAP == 12

@@ -32,6 +32,45 @@ def game_call_cap(operator_cap):
     return min(GAME_TURN_CALL_CAP, operator_cap)
 
 
+def _normalize_changes(changes):
+    """Accept recognizable shapes of the documented design/visual change schema.
+
+    Models reliably produce four encodings of the same edit: a JSON string, a
+    `type` alias, a single-key wrapper such as {"policy": {...}}, or flattened
+    policy fields without the operation key. All four are normalized to the
+    canonical {"operation": ..., ...fields} form instead of burning a call.
+    """
+    if isinstance(changes, str):
+        try:
+            changes = json.loads(changes)
+        except Exception:
+            try:
+                import ast
+                changes = ast.literal_eval(changes)
+            except Exception:
+                raise ValueError("changes must be an array of design/visual edit objects")
+    if not isinstance(changes, list) or not 1 <= len(changes) <= 8:
+        raise ValueError("changes must contain 1..8 design/visual edits")
+    normalized = []
+    for change in changes:
+        if not isinstance(change, dict):
+            raise ValueError("unsupported change shape: " + CHANGE_SCHEMA_HINT)
+        change = dict(change)
+        if "operation" not in change and "type" in change:
+            change["operation"] = change.pop("type")
+        if "operation" not in change and len(change) == 1:
+            (key, value), = change.items()
+            if key in DESIGN_CHANGE_OPERATIONS and isinstance(value, dict):
+                change = {"operation": key, **value}
+        if "operation" not in change and ("code" in change or (
+                "name" in change and not ({"values", "body", "component", "widget", "joint"} & set(change)))):
+            change = {"operation": "policy", **change}
+        if change.get("operation") not in DESIGN_CHANGE_OPERATIONS:
+            raise ValueError("unsupported change shape: " + CHANGE_SCHEMA_HINT)
+        normalized.append(change)
+    return normalized
+
+
 class GameContext(ContextBuilder):
     def build(self, session_id, run_id, system_prompt, tools, *, runtime_context_factory=None):
         records = self.state.message_records(session_id)
@@ -101,12 +140,7 @@ def iterate(database, session_id, args, cancelled=lambda:False, on_publish=None)
     keys(args, ("objective","changes","search","play"))
     if type(args.get("play",True)) is not bool:raise ValueError("play must be boolean")
     text(args.get("objective"),300,"objective")
-    changes = args.get("changes")
-    if not isinstance(changes,list) or not 1<=len(changes)<=8:
-        raise ValueError("changes must contain 1..8 design/visual edits")
-    for change in changes:
-        if not isinstance(change,dict) or change.get("operation") not in DESIGN_CHANGE_OPERATIONS:
-            raise ValueError("unsupported change shape: " + CHANGE_SCHEMA_HINT)
+    changes = _normalize_changes(args.get("changes"))
     with GameStore(database) as store:
         original = store.get(session_id)
     if original is None:

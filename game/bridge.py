@@ -67,7 +67,8 @@ GAME_DESIGN_DESCRIPTION = (
 
 GAME_ITERATION_DESCRIPTION = (
     "Submit one coherent self-modification: objective plus changes[] of design/visual edits; it runs real baseline/candidate "
-    "physics and publishes a passing result (play defaults true). Exact change fields: policy {name,code,description,activate?,params?}; "
+    "physics and publishes a passing result (play defaults true). Every change is an object with an \"operation\" key plus its fields, e.g. "
+    "{\"operation\":\"policy\",\"name\":...,\"code\":...,\"description\":...}. Exact fields: policy {name,code,description,activate?,params?}; "
     "appearance {values:{stroke,accent,fill,line_width,head_radius,joint_radius,trail}}; material {values:{damping,vertical_damping,friction,pose_strength,stiffness,iterations}}; "
     "body {body:{id,shape,rect:width,height|circle:radius,x,y,mass,restitution,color,label?}}; joint {joint:{...}}; component {component:{...}}; "
     "widget {widget:{...}}; todo {id,item_id,done}; theme {values:{background,accent}}; remove_component/remove_widget {id}. "
@@ -491,7 +492,7 @@ def register_game(tools, life=None):
             return {"policy":POLICY_HELP,"appearance":world["appearance"],"material":world["material"],
                     "extra_outputs":"emotion:{valence:-1..1,arousal:0..1,focus:0..1}; gaze:[world_x,world_y]; grip:{object:id,hand:left_hand|right_hand}, omit to release; params:{name:number}, accessed as p['name']",
                     "joints":"joint:{id,type:pivot|spring|motor,a:body_id|world,b:body_id|world,anchor:[x,y] for pivot,rate:-8..8,max_force:0..20000,length:0..500,stiffness:0..5000,damping:0..500}",
-                    "change_types":"policy{name,code,description,params?}; appearance{values}; material{values}; body{body}; widget{widget}; component{component}; theme{values}; controller{values}; add{object}; remove{id}",
+                    "change_types":'changes:[{operation:"policy"|"appearance"|"material"|"body"|"joint"|"component"|"widget"|"theme"|"remove_component"|"remove_widget", ...fields}] — every change object carries an "operation" key. Examples: {"operation":"policy","name":"pace","code":"...","description":"..."}; {"operation":"body","body":{"id":"orb","shape":"circle","x":300,"y":480,"radius":16,"mass":3}}; {"operation":"appearance","values":{"accent":"#e6703a"}}',
                     "component":CATALOG["authored_component"],"widget":CATALOG["widget"]}
         if view=="draft": return {"build":build_summary(world)}
         if view=="source": return inspect({"view":"source","path":args.get("path",""),"limit":5000})
