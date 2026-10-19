@@ -71,6 +71,25 @@ Two identical failures after Genesis v4 went live, both ending `provider call li
 
 Both slices are RED/GREEN with regression tests in `tests/test_game_genesis.py`; the full gate ran before each push (263 then 270 pytest, 35 Node UI, wheel/sdist, syntax/diff). Deployments restarted only after live runs reached idle, with protected backups. Unknown change shapes still fail with the design/visual operation list — tolerance is for recognizable encodings, not for skipping validation.
 
+## Repository concept description (2026-10-19, full rewrite)
+
+Per operator direction the README is fully rewritten and the videos sit at the
+top, before any prose. All available operator-supplied recordings are published
+under `docs/examples/`: `physical-workshop-fixture.mp4` (the operator's own
+recording: rope → wheel → weight, cart with motors, mountains, the
+«торс закреплён / ходьба не обучена» banner), `workshop-physical-test-bench.webm`,
+`workshop-unassisted-start.webm` (v6 verification set) and
+`director-scripted-demo.webm` (v5 verification set). No poster frames are used;
+each video is a plain link with an honest caption — scripted fixtures, no live
+model, execution evidence only. The concept body follows: body-is-the-agent,
+craftable world, craftable/tested/versioned abilities, visible bounded memory,
+tools exercised on physics; the operational sections (features, safety, run/env,
+delegation, sandbox, workshop, custom tools, verification, layout, provenance)
+are kept complete. Note: the Genesis v4 archive's `scripted-motion.webm` could not
+be re-extracted — that archive's file was intermittently invisible on this host
+and the scratch copy was already cleaned; re-supply it if that recording is
+wanted in the repo.
+
 ## Repository concept description (2026-10-19)
 
 The README now leads with the project concept instead of the implementation

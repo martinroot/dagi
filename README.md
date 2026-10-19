@@ -1,56 +1,58 @@
 # Dagi Core — an agent whose sandbox is a physical world
 
-A compact agent core with a visual physical workshop attached to it. One session
+A compact agent core with a visual physical workshop attached. One session
 streams chat, tool traces and provider evidence **and** contains a body in a 2D
-world. The idea is simple: the agent's abilities are mechanisms it authors,
-tests and publishes; its memory is visible, bounded state; its tools are
-exercised against real physics rather than mocked payloads.
+world. The agent's abilities are mechanisms it authors, tests and publishes; its
+memory is visible bounded state; its tools are exercised against real physics
+rather than mocked payloads.
+
+## Videos
+
+- [`physical-workshop-fixture.mp4`](docs/examples/physical-workshop-fixture.mp4) — the workshop in one shot: a stickman holds a flexible rope that runs over a wheel down to a weight (*гибкая цепь → колесо → груз*), a cart labelled *шарниры + моторы + трение*, editable mountains, sun and clouds, and the banner *«Проверочный стенд: торс закреплён. Ходьба не обучена.»* — the torso is fixed and walking is not learned: standing, balance and gait are abilities to be authored, not features shipped in the engine.
+- [`workshop-physical-test-bench.webm`](docs/examples/workshop-physical-test-bench.webm) — the physical test bench: unassisted start, joint force controls and mechanism measurements.
+- [`workshop-unassisted-start.webm`](docs/examples/workshop-unassisted-start.webm) — a clean session without controller assistance: the body must earn its stance.
+- [`director-scripted-demo.webm`](docs/examples/director-scripted-demo.webm) — the agent-owned JavaScript scene project: one program coordinating physical action, camera, gaze, expression and graphics.
+
+All four are **scripted fixtures with no live model**: they prove that mechanisms
+execute and stay observable. They do not demonstrate live-model inventiveness,
+and passing checks establish execution evidence, not general intelligence or
+aesthetic quality.
+
+## The concept
+
+**The body is the agent.** One stickman per game session. The canvas shows the
+actual simulation state — joints, contacts, objects — not a decorative avatar.
+The agent perceives structured geometry and contacts, not screenshot pixels,
+unless the operator enables the world-frame observation for a vision model.
+
+**The world is craftable.** Objects, mechanisms (ropes over wheels to weights,
+carts with motors, shared joints, springs, gears, rigid links), materials with
+density, friction and restitution, editable sky, ground, sun, clouds and
+mountain silhouettes, and body appearance: all authored by the agent or the
+human. A clean session is an empty world with a bare skeleton — no activity
+ladder, prop curriculum or story is installed.
+
+**Abilities are craftable, tested and versioned.** Feedback controllers
+(policies), saved action programs and extra physical limbs are the agent's
+skills: authored as code, executed locally at 60 Hz without per-frame model
+calls, measured in baseline/candidate trials, and published only when their
+checks pass. A skill button is a control surface, never a claim of mastery; a
+failing measurement blocks publication instead of trusting a claim.
+
+**Memory is visible and bounded.** Policy memory, session transcripts, skills,
+reflections and the self-passport persist and are inspectable. Reloading the page
+or restarting the service preserves them; a hard crash can lose at most the last
+motion checkpoint, and nothing auto-replays or auto-spends.
+
+**Tools are exercised on physics.** `game_observe` reads compact state, schemas
+and current source; `game_iteration` submits one coherent edit package, runs real
+trials and publishes through a countdown; `game_life` executes or pauses locally
+without model calls. Human controls (shared plan, call-agent signal, the agent's
+own buttons) work as local events without LLM calls.
 
 The optional [Physical Workshop](game/PHYSICS.md) combines unassisted
 articulation, agent-authored JS behavior, physical mechanisms, editable scenery
 and a game skill interface.
-
-## The concept in one screen
-
-- **The body is the agent.** One stickman per game session. What the human sees
-  on canvas is the actual simulation state — joints, contacts, objects — not a
-  decorative avatar. The agent perceives structured geometry and contacts, not
-  screenshot pixels, unless the operator enables the world-frame observation.
-- **The world is craftable.** Objects, mechanisms (ropes over wheels to weights,
-  carts with motors, gears and joints), materials with density and friction,
-  editable sky/ground/sun/mountains, and body appearance are authored by the
-  agent or the human. A clean session is an empty world with a bare skeleton:
-  no activity ladder, prop curriculum or story is installed.
-- **Abilities are craftable, tested and versioned.** Controllers (feedback
-  policies) and saved programs are the agent's skills: authored as code,
-  executed locally at 60 Hz without per-frame model calls, measured in
-  baseline/candidate trials, and published only when their checks pass. A skill
-  button is a control surface, never a claim of mastery.
-- **Memory is visible and bounded.** Policy memory, session transcripts, skills,
-  reflections and the self-passport persist and are inspectable. Reloading the
-  page or restarting the service preserves them; a hard crash can lose at most
-  the last checkpoint of motion, and nothing auto-replays or auto-spends.
-- **Tools are exercised on physics.** `game_observe` reads state and schemas,
-  `game_iteration` submits one coherent edit package, runs real trials and
-  publishes through a countdown, and `game_life` executes or pauses locally
-  without model calls. A failing measurement blocks publication instead of
-  trusting a claim.
-
-### Example: the workshop fixture
-
-[`docs/examples/physical-workshop-fixture.mp4`](docs/examples/physical-workshop-fixture.mp4)
-(~12 s, 2112×1266) shows the mechanism side of the concept: a stickman holding a
-flexible rope that runs over a wheel down to a weight (*гибкая цепь → колесо →
-груз*), a wheeled cart labelled *шарниры + моторы + трение*, and editable
-mountains, sun and clouds. The caption states *«Проверочный стенд: торс
-закреплён. Ходьба не обучена.»* — the torso is fixed and walking is not learned,
-which is the point: standing, balance and gait are abilities the agent authors
-and verifies itself, not features shipped in the engine.
-
-Honest scope of this recording: it is a **scripted physics fixture with no live
-model**. It proves that mechanisms execute and are observable; it does not
-demonstrate live-model inventiveness, and passing checks establish execution
-evidence, not general intelligence or aesthetic quality.
 
 ## Core features
 
@@ -69,11 +71,15 @@ evidence, not general intelligence or aesthetic quality.
 - A terminal CLI with session listing/resume plus a separate loopback visual sandbox.
 - Interrupted tool actions are recovered by state: safe pending calls may resume, while unknown outcomes are never replayed automatically. Legacy tool-result text without an explicit persisted outcome remains uncertain; new tool completion commits the result message, outcome, and run event atomically.
 
-The runtime has one direct dependency, `openai`; SQLite and the CLI use the Python standard library. There is no messaging gateway, MCP, cron, voice, profile, or remote-backend integration in this version. The physical workshop additionally uses `pymunk` (Chipmunk rigid bodies) and `python-quickjs-ng` (server-side agent JavaScript), both installed by `uv sync`.
+The runtime has one direct dependency, `openai`; SQLite and the CLI use the
+Python standard library. There is no messaging gateway, MCP, cron, voice,
+profile, or remote-backend integration in this version. The physical workshop
+additionally uses `pymunk` (Chipmunk rigid bodies) and `python-quickjs-ng`
+(server-side agent JavaScript), both installed by `uv sync`.
 
 ## Safety
 
-`DAGI_ENABLE_SHELL` is disabled by default. When enabled, every CLI shell command requires interactive approval; command text is escaped before display. The workspace constrains file tools but is not an OS-level sandbox. The bounded goal-check runner uses argv without a shell, a fixed credential-free environment, process-group cleanup, and capped output; any command check is still privileged code executed as the Dagi service user, not an OS sandbox. Keep `DAGI_ENABLE_CHECK_COMMANDS` disabled unless an operator explicitly opts in on a trusted installation; a request payload cannot change this setting. Only one `dagi-web` process may own a given `DAGI_HOME`; an owner-only runtime lock prevents duplicate recovery/workers. The database is created with mode `0600`; the default `~/.dagi` directory is `0700` on POSIX. An explicitly selected existing `DAGI_HOME` keeps its existing directory permissions. API keys, session password hashes, and worker tokens are excluded from `Config` repr and are never written to the repository or database.
+`DAGI_ENABLE_SHELL` is disabled by default. When enabled, every CLI shell command requires interactive approval; command text is escaped before display. The workspace constrains file tools but is not an OS-level sandbox. The bounded goal-check runner uses argv without a shell, a fixed credential-free environment, process-group cleanup, and capped output; any command check is still privileged code executed as the Dagi service user, not an OS sandbox. Keep `DAGI_ENABLE_CHECK_COMMANDS` disabled unless an operator explicitly opts in on a trusted installation; a request payload cannot change this setting. Only one `dagi-web` process may own a given `DAGI_HOME`; an owner-only runtime lock prevents duplicate recovery/workers. The database is created with mode `0600`; the default `~/.dagi` directory is `0700` on POSIX. An explicitly selected existing `DAGI_HOME` keeps its existing directory permissions. API keys, session password hashes, and worker tokens are excluded from `Config` repr and are never written to the repository or database. Agent JavaScript runs in a bounded interpreter (heap, stack, CPU and output caps, no host imports, network or filesystem); it cannot rewrite installed engine, auth or billing code.
 
 ## Run
 
@@ -95,7 +101,7 @@ Environment variables:
 - `DAGI_BASE_URL` — API endpoint; defaults to `https://api.openai.com/v1`.
 - `DAGI_MODEL` — model; defaults to `gpt-4o-mini`.
 - `DAGI_MODEL_PRICES` — JSON model map with `input_per_million` and `output_per_million` prices in USD per million tokens.
-- `DAGI_MAX_PROVIDER_CALLS_PER_RUN` — maximum primary and auxiliary provider calls across the parent/child budget group; defaults to `32`.
+- `DAGI_MAX_PROVIDER_CALLS_PER_RUN` — maximum primary and auxiliary provider calls across the parent/child budget group; defaults to `32`. Game turns are additionally capped at `min(12, this value)` for discovery headroom.
 - `DAGI_BUDGET_USD` — optional shared parent/child spend limit; requires price entries for every selected model.
 - `DAGI_ESTIMATE_MISSING_USAGE` — estimate missing token usage (default `true`); set to `false` to retain it as unavailable.
 - `DAGI_CONTEXT_LIMIT_TOKENS` — approximate request-context limit; defaults to `32768`.
@@ -145,24 +151,13 @@ uv run dagi-web
 
 It binds to `127.0.0.1:8765` by default. The sandbox shows sessions, runs, chat/events, exact provider requests, tool outcomes, errors, and usage. The login form creates an HttpOnly, SameSite=Strict session cookie; APIs reject unauthenticated requests, login attempts are rate-limited, and logout revokes the current session. Configure a PBKDF2-SHA256 password hash and exact public HTTPS origin in the protected service environment file. Run events are persisted and replayed after reconnect; opening a saved run only inspects it and never starts it again. Each HTTP handler and run worker opens its own SQLite connection. Shell tools are disabled in the web sandbox; use the CLI for individually approved shell actions. Keep the server on loopback unless you add an authenticated reverse proxy.
 
-## Embodied debugging lab
+## Embodied workshop
 
-Open **`http://127.0.0.1:8765/game/`** after starting `uv run dagi-web` with the
-same provider and web-login settings used by the visual sandbox.
+Open **`http://127.0.0.1:8765/game/`** after starting `uv run dagi-web` with the same provider and web-login settings used by the visual sandbox.
 
-Each new session starts with a clean physical stickman and an empty world.
-The model can author multi-file JavaScript projects that coordinate physical
-behavior, camera, gaze, facial expression and custom vector graphics. It can
-construct mechanisms, add physical appendages, create tools and human controls,
-and publish a tested version through the SATISFY / countdown transition.
+Each new session starts with a clean physical stickman and an empty world. New sessions have unassisted muscles and joint limits — standing and walking are controller-development tasks, not installed routines — while older sessions stay in a marked `ASSISTED` mode for compatibility. The model can author multi-file JavaScript projects that coordinate physical behavior, camera, gaze, facial expression and custom vector graphics; construct mechanisms, appendages and tools; create human controls; and publish a tested version through the countdown transition. Local projects run on the server without per-frame model calls or an open browser. Chat and bounded autonomous development use the normal configured provider. The browser streams physical state and can supply chronological canvas observations. Passing checks establish execution evidence, not autonomous intelligence or aesthetic improvement.
 
-Local projects run on the server without per-frame model calls or an open
-browser. Chat and bounded autonomous development use the normal configured
-provider. The browser streams physical state and can supply chronological canvas
-observations. Passing checks establish execution evidence, not autonomous
-intelligence or aesthetic improvement. See [game/DIRECTOR.md](game/DIRECTOR.md)
-for setup, project contracts and validation boundaries, and
-[game/PHYSICS.md](game/PHYSICS.md) for the unassisted embodiment rules.
+See [`game/DIRECTOR.md`](game/DIRECTOR.md) for the project contract, [`game/PHYSICS.md`](game/PHYSICS.md) for the unassisted embodiment rules and [`game/GENESIS.md`](game/GENESIS.md) for the runtime architecture.
 
 ## Custom tools
 
@@ -236,4 +231,4 @@ docs/examples/         example recordings (scripted fixtures, no live model)
 
 ## Provenance
 
-The first `main` commit (`b14b0ba`) was a prototype based on `Mohamedhasbini/hermes`; that snapshot and its MIT notice remain in Git history. The active implementation is a compact reimplementation informed by the current Hermes upstream commit linked above. See `NOTICE.md` for details.
+The first `main` commit (`b14b0ba`) was a prototype based on `Mohamedhasbini/hermes`; that snapshot and its MIT notice remain in Git history. The active implementation is a compact reimplementation informed by the current Hermes upstream commit [`848fc0a`](https://github.com/NousResearch/hermes-agent/commit/848fc0ad8be766b9dc10fe42bd80b5fc2d45d95c). See `NOTICE.md` for details.
