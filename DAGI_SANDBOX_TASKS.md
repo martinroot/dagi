@@ -71,7 +71,27 @@ Two identical failures after Genesis v4 went live, both ending `provider call li
 
 Both slices are RED/GREEN with regression tests in `tests/test_game_genesis.py`; the full gate ran before each push (263 then 270 pytest, 35 Node UI, wheel/sdist, syntax/diff). Deployments restarted only after live runs reached idle, with protected backups. Unknown change shapes still fail with the design/visual operation list — tolerance is for recognizable encodings, not for skipping validation.
 
-## Repository concept description (2026-10-19, full rewrite)
+## Repository description as an agent-debugging instrument (2026-10-19)
+
+Per operator direction the README is reframed: **the sandbox is an instrument
+for debugging an AI agent, not a game**. Title is "Dagi — a debugging instrument
+for an AI agent"; the body argues why a physical world is the right debugger
+(claims become measurements; every change is a baseline experiment; state and
+memory inspectable; failures isolated, not narrated; the agent's own
+observe→trial→publish→reflect loop mirrors the human's). The top of the file
+embeds the workshop loop as an inline autoplaying GIF
+(`docs/examples/workshop-debug-loop.gif`, ~5.2 MB, 12 s, 800 px, 10 fps, 96
+colors, converted from the operator's `physics-workshop-demo.rar` recording —
+byte-identical to the published `workshop-physical-test-bench.webm` source) so it
+plays without a click; the raw recordings remain linked below for full quality.
+Operational sections (features, safety, run/env, delegation, sandbox, workshop,
+custom tools, verification, layout, provenance) were preserved verbatim; the
+sandbox/workshop sections were renamed to their debugger roles. Caption states
+honestly: scripted fixture, no live model — the instrument, not intelligence.
+RAR extraction used a locally downloaded `unrar` .deb (no root) — cleaned up
+afterwards.
+
+## Repository concept description (2026-10-19)
 
 Per operator direction the README is fully rewritten and the videos sit at the
 top, before any prose. All available operator-supplied recordings are published
