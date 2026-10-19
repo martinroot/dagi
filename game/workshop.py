@@ -12,7 +12,7 @@ SUBSTANCES = {
 }
 BODY_CONTROL = {"mode":"assisted","muscle_scale":1,"air_damping":.999,"joint_damping":12,"self_collision":False}
 ENVIRONMENT = {"sky_top":"#a9d4ee","sky_bottom":"#eff8ed","ground_top":"#9bb384","ground_bottom":"#597b67","sun":{"x":780,"y":105,"radius":38,"color":"#fff0ba"},"clouds":[],"mountains":[]}
-DEFAULTS = {"body_control":BODY_CONTROL,"substances":SUBSTANCES,"ropes":[],"rope_frames":[],"rope_state":{},"mechanics_state":{},"articulation":{},"energy":{"muscle_work":0,"motor_work":0,"power":0},"environment":None}
+DEFAULTS = {"body_control":BODY_CONTROL,"substances":SUBSTANCES,"ropes":[],"rope_frames":[],"rope_state":{},"mechanics_state":{},"articulation":{},"energy":{"muscle_work":0,"motor_work":0,"power":0},"environment":None,"character":None,"art":None}
 
 HELP = {
  "body_control":"body_control {values:{mode:'physical'|'assisted',muscle_scale:.1..3,air_damping:.95..1,joint_damping:0..100,self_collision:bool}}. New browser sessions are physical. No automatic stance, drive, jump, pose or global limb springs in physical mode. Original assisted worlds retain their mode and are labelled. Physical feet include ankle/toe links.",
@@ -38,6 +38,8 @@ def initialize_physical(world):
     world["body_control"]["self_collision"]=True
     world["environment"]=copy.deepcopy(ENVIRONMENT)
     add_feet(world)
+    from .character import initialize
+    initialize(world)
 
 
 def add_feet(world):

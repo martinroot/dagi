@@ -16,7 +16,7 @@ def clamp(value, lo, hi):
 
 class RigidSimulator:
     def __init__(self, world):
-        from .world import PAIRS
+        from .character import bone_pairs, anchors
         self.world = world
         self.space = pymunk.Space()
         self.space.gravity = (0, world["gravity"])
@@ -37,20 +37,31 @@ class RigidSimulator:
             floor.friction = 1.1 * world["material"]["friction"] / .82
             self.space.add(floor)
         nodes = world["nodes"]
-        pairs=PAIRS+[(s+"_foot",s+"_toe") for s in ("left","right") if s+"_toe" in nodes]
+        pairs=bone_pairs(world)
+        character=world.get("character")
         self.physical=world["body_control"]["mode"]=="physical"
         for a, b in pairs:
             if a == "head":
                 continue
             pa, pb = pymunk.Vec2d(nodes[a]["x"], nodes[a]["y"]), pymunk.Vec2d(nodes[b]["x"], nodes[b]["y"])
             length = (pb - pa).length
-            mass = 4.0 if b == "hip" else .8 if "knee" in b else .55
-            body = pymunk.Body(mass, pymunk.moment_for_segment(mass, (-length / 2, 0), (length / 2, 0), 4))
+            spec=character["bones"][b] if character else None
+            radius=spec["radius"] if spec else 4
+            mass = spec["mass"] if spec else 4.0 if b == "hip" else .8 if "knee" in b else .55
+            body = pymunk.Body(mass, pymunk.moment_for_segment(mass, (-length / 2, 0), (length / 2, 0), radius))
             body.position = (pa + pb) / 2
             body.angle = (pb - pa).angle
             body.velocity = ((nodes[a]["x"] - nodes[a]["px"] + nodes[b]["x"] - nodes[b]["px"]) * 30,
                              (nodes[a]["y"] - nodes[a]["py"] + nodes[b]["y"] - nodes[b]["py"]) * 30)
-            capsule = pymunk.Segment(body, (-length / 2, 0), (length / 2, 0), 4)
+            delta=pb-pa
+            va=pymunk.Vec2d((nodes[a]["x"]-nodes[a]["px"])*60,(nodes[a]["y"]-nodes[a]["py"])*60)
+            vb=pymunk.Vec2d((nodes[b]["x"]-nodes[b]["px"])*60,(nodes[b]["y"]-nodes[b]["py"])*60)
+            body.angular_velocity=delta.cross(vb-va)/max(.01,length**2)
+            capsule = pymunk.Segment(body, (-length / 2, 0), (length / 2, 0), radius)
+            if character and b=="hip":
+                sw=max(radius*2,character["shoulder_width"]);hw=max(radius,character["hip_width"])
+                vertices=[(-length/2,-radius*.4),(-length/2+8,-sw/2),(length/2-3,-hw/2),(length/2+radius*.3,0),(length/2-3,hw/2),(-length/2+8,sw/2),(-length/2,radius*.4)]
+                capsule=pymunk.Poly(body,vertices);body.moment=pymunk.moment_for_poly(mass,vertices)
             capsule.friction = (1.25 if "foot" in b else .65)*world["material"]["friction"]/.82
             capsule.filter = pymunk.ShapeFilter(group=0 if world["body_control"]["self_collision"] else 1, categories=1)
             self.space.add(body, capsule)
@@ -59,6 +70,8 @@ class RigidSimulator:
             if a not in self.ends:
                 self.ends[a] = (body, (-length / 2, 0))
             self.ends[b] = (body, (length / 2, 0))
+            if character and b=="hip":
+                for name,point in anchors(character).items():self.ends[name]=(body,point)
         # Adjacent rigid limbs share actual pivot constraints.
         for name, (body, length, a, b) in self.segments.items():
             if b == "hip":
@@ -67,19 +80,27 @@ class RigidSimulator:
             pivot = pymunk.PivotJoint(parent, body, anchor, (-length / 2, 0))
             pivot.collide_bodies = False
             self.space.add(pivot)
-        head = pymunk.Body(1.0, pymunk.moment_for_circle(1.0, 0, 12))
+        head_mass=character["head_mass"] if character else 1.0
+        head_radius=character["head_radius"] if character else 12
+        neck_length=character["neck_length"] if character else 20
+        head = pymunk.Body(head_mass, pymunk.moment_for_circle(head_mass, 0, head_radius))
         head.position = (nodes["head"]["x"], nodes["head"]["y"])
+        if self.physical:
+            head.angle=math.atan2(nodes["neck"]["y"]-nodes["head"]["y"],nodes["neck"]["x"]-nodes["head"]["x"])-math.pi/2
+            delta=pymunk.Vec2d(nodes["neck"]["x"]-nodes["head"]["x"],nodes["neck"]["y"]-nodes["head"]["y"])
+            dv=pymunk.Vec2d((nodes["neck"]["x"]-nodes["neck"]["px"]-nodes["head"]["x"]+nodes["head"]["px"])*60,(nodes["neck"]["y"]-nodes["neck"]["py"]-nodes["head"]["y"]+nodes["head"]["py"])*60)
+            head.angular_velocity=delta.cross(dv)/max(.01,delta.length_squared)
         head.velocity = ((nodes["head"]["x"] - nodes["head"]["px"]) * 60, (nodes["head"]["y"] - nodes["head"]["py"]) * 60)
-        shape = pymunk.Circle(head, 12)
+        shape = pymunk.Circle(head, head_radius)
         shape.filter = pymunk.ShapeFilter(group=0 if world["body_control"]["self_collision"] else 1, categories=1)
         shape.friction = .5
         self.space.add(head, shape)
         parent, anchor = self.ends["neck"]
         if self.physical:
-            neck=pymunk.PivotJoint(parent,head,anchor,(0,20));neck.collide_bodies=False
+            neck=pymunk.PivotJoint(parent,head,anchor,(0,neck_length));neck.collide_bodies=False
         else:
             neck = pymunk.PinJoint(parent, head, anchor, (0, 0))
-            neck.distance = 20
+            neck.distance = neck_length
         self.space.add(neck)
         self.ends["head"] = (head, (0, 0))
         self._shape_joints[shape] = "head"
@@ -165,6 +186,10 @@ class RigidSimulator:
             pose[side + "_foot"][1] -= max(0, swing) * 42 * abs(drive)
             pose[side + "_knee"][0] += swing * 14 * abs(drive)
             pose[side + "_hand"][0] -= swing * 10 * abs(drive)
+        if w.get("character"):
+            for side in ("left","right"):
+                for name in (side+"_shoulder",side+"_pelvis"):
+                    pose[name]=[w["nodes"][name]["x"]-w["nodes"]["hip"]["x"],w["nodes"][name]["y"]-w["nodes"]["hip"]["y"]]
         pose.update(control.get("pose", {}))
         strength = w["controller"]["balance"] * w["material"]["pose_strength"] / .08
         for name, spring in self.springs.items():

@@ -40,7 +40,7 @@ def upgrade(world):
         if saved:
             for key in ("projects","active_project","project_state","project_started","appendages"):
                 saved.setdefault(key,copy.deepcopy(DEFAULTS[key]))
-            for key in ("body_control","substances","ropes","environment"):
+            for key in ("body_control","substances","ropes","environment","character","art"):
                 saved.setdefault(key,copy.deepcopy(WORKSHOP[key]))
     for obj in world.get("objects",[]):
         if obj["kind"]=="body" and "definition" not in obj:
@@ -315,9 +315,10 @@ def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostic
             frames_out.append(frame(world,presentation=False))
             sample = observation(world)
             hip = world["nodes"]["hip"]
-            from .world import LINKS, _on_surface
+            from .world import _on_surface
+            from .character import bone_lengths
             sample["speed"] = math.hypot(hip["x"] - hip["px"], hip["y"] - hip["py"]) / DT
-            sample["bone_error"] = max(abs(math.hypot(world["nodes"][a]["x"] - world["nodes"][b]["x"], world["nodes"][a]["y"] - world["nodes"][b]["y"]) - length) for a, b, length in LINKS)
+            sample["bone_error"] = max(abs(math.hypot(world["nodes"][a]["x"] - world["nodes"][b]["x"], world["nodes"][a]["y"] - world["nodes"][b]["y"]) - length) for a, b, length in bone_lengths(world))
             sample["foot_slip"] = sum(abs(world["nodes"][name]["x"] - world["nodes"][name]["px"]) / DT
                                       for name in ("left_foot", "right_foot") if _on_surface(world, world["nodes"][name], 7))
             samples.append(sample)

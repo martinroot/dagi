@@ -422,7 +422,7 @@ class WebApp:
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
-                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/direction.js", "/game/workshop.js", "/game/component-host.js"}:
+                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/anatomy.js", "/game/vector.js", "/game/scenery.js", "/game/direction.js", "/game/workshop.js", "/game/component-host.js"}:
                         self._static(path)
                     elif path == "/api/auth/session":
                         if app._is_authenticated(self.headers):
@@ -492,7 +492,7 @@ class WebApp:
                             "scene": game_observation(world), "frame": game_frame(world),
                             "links": game_links(world), "motion": world["motion"], "history": world["history"],
                             "reflections": world["reflections"], "widgets": world["widgets"], "components": world["components"], "theme": world["theme"],
-                            "body_control":world["body_control"], "environment":world["environment"], "ropes":world["ropes"], "substances":world["substances"], "direction":world["direction"], "appendages":world["appendages"], "projects":[{"name":k,"version":v["version"],"description":v["description"]} for k,v in world["projects"].items()],
+                            "character":world["character"], "art":world["art"], "body_control":world["body_control"], "environment":world["environment"], "ropes":world["ropes"], "substances":world["substances"], "direction":world["direction"], "appendages":world["appendages"], "projects":[{"name":k,"version":v["version"],"description":v["description"]} for k,v in world["projects"].items()],
                             "life": world["life"], "policies": [{"name": k, "version": v["version"], "description": v["description"]} for k,v in world["policies"].items()], "appearance": world["appearance"], "evolution": world["evolution"],
                             "build": build_summary(world), "preview": {k: world["draft"]["candidate"][k] for k in ("widgets", "objects", "components")} if world["draft"] else None,
                             "last_release": world["last_release"], "activity": activity, "server_time": time.time(),

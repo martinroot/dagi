@@ -15,6 +15,10 @@ from .world import act, evolve, keys, observation, reflect, set_goal, validate_a
 from .studio import activate, abort_release, build, build_summary, digest, review, visual_edit
 
 SOURCE_FILES = {
+    "game/character.py":Path(__file__).with_name("character.py"),
+    "game/static/vector.js":Path(__file__).parent / "static" / "vector.js",
+    "game/static/scenery.js":Path(__file__).parent / "static" / "scenery.js",
+    "game/static/anatomy.js":Path(__file__).parent / "static" / "anatomy.js",
     "game/embodiment.py":Path(__file__).with_name("embodiment.py"),
     "game/mechanics.py":Path(__file__).with_name("mechanics.py"),
     "game/workshop.py":Path(__file__).with_name("workshop.py"),
@@ -95,6 +99,12 @@ New sessions use physical, unassisted articulation. A new body cannot already
 walk or hold a standing pose. Its controls are internal muscles (-1..1) and
 explicit relative joint servos; motor reactions act on both linked bodies.
 Read game_observe view=schema path=physics for physical construction/control.
+Visual authoring: view=schema path=visual, and view=visual for your character and
+lighting/layers. character{values} edits real skeleton proportions, collision
+radii and masses plus separate skin/muscle/bone surfaces. art{values} controls
+unified vector lighting, atmospheric layers, gradients and Bezier curves.
+No raster backgrounds or image generation are needed. Appearance is not learned
+behavior. New body proportions must be tested; they can invalidate a controller.
 Do not output drive, jump, absolute pose or free forces in physical mode. Do not
 silently switch to assisted mode to fake learned walking. Develop balance,
 getting up and locomotion as explicit measured tasks, preserving failed attempts
@@ -535,6 +545,15 @@ def register_game(tools, life=None):
         with GameStore(tools.state.path) as store:
             world = current_world(store)
         view = args.get("view","state")
+        if view=="visual":
+            art=world.get("art")
+            if args.get("path") and art:
+                layer=next((x for x in art["layers"] if x["id"]==args["path"]),None)
+                if not layer:raise ValueError("unknown vector layer id")
+                offset=args.get("offset",0)
+                if type(offset) is not int or offset<0:raise ValueError("offset must be nonnegative")
+                return {**layer,"commands":layer["commands"][offset:offset+12],"next_offset":offset+12 if len(layer["commands"])>offset+12 else None}
+            return {"character":world["character"],"art":summary(world)["art"],"environment":world["environment"],"read_layer":"view=visual,path=layer_id,offset=command_index"}
         if view=="physics":
             return {"body_control":world["body_control"],"sensors":sensors(world),"substances":world["substances"],"ropes":world["ropes"],"mechanisms":world["mechanisms"]}
         if view=="code":
@@ -555,12 +574,15 @@ def register_game(tools, life=None):
         if view=="schema":
             from .director import HELP
             section=args.get("path")
+            if section=="visual":
+                from .character import HELP as VISUAL_HELP
+                return VISUAL_HELP
             if section=="physics":
                 from .workshop import HELP as PHYSICS_HELP
                 return PHYSICS_HELP
             if section=="project":return HELP
             if section=="policy":return POLICY_HELP
-            return {"physical_schema":"For exact muscle, constraint, rope, material and environment contracts use view=schema,path=physics. New sessions use unassisted muscles, not drive.","project":HELP,"policy":POLICY_HELP,"appearance":world["appearance"],"material":world["material"],
+            return {"visual_schema":"Anatomy, real bone geometry, muscles, materials, lighting and image composition: view=schema,path=visual. character/art operations. Current character/art are in world observations.","physical_schema":"For exact muscle, constraint, rope, material and environment contracts use view=schema,path=physics. New sessions use unassisted muscles, not drive.","project":HELP,"policy":POLICY_HELP,"appearance":world["appearance"],"material":world["material"],
                     "extra_outputs":"emotion:{valence:-1..1,arousal:0..1,focus:0..1}; gaze:[world_x,world_y]; grip:{object:id,hand:left_hand|right_hand}, omit to release; params:{name:number}, accessed as p['name']",
                     "joints":"joint:{id,type:pivot|spring|motor,a:body_id|world,b:body_id|world,anchor:[x,y] for pivot,rate:-8..8,max_force:0..20000,length:0..500,stiffness:0..5000,damping:0..500}",
                     "change_types":'Every changes[] object carries an "operation" key. project{name,description,files,entry?,params?,replace?}; appendage{part}; remove_appendage/remove_body/remove_joint{id}; policy{name,code,description,params?}; appearance/material/theme/controller/physics{values}; body{body}; joint{joint}; widget{widget}; component{component}; remove_component/remove_widget{id}. Example: {"operation":"project","name":"scene","description":"...","files":{"main.js":"module.exports=()=>({})"}}',
@@ -590,7 +612,7 @@ def register_game(tools, life=None):
 
     specs = [
         ("game_observe","Read compact state, current code, schema, draft or an allowlisted source. Schema contains exact code/output syntax; use it once, not before every small edit.",
-         {"view":{"type":"string","enum":["state","code","schema","draft","source","physics"]},"path":{"type":"string"},"offset":{"type":"integer"}},[],observing,True),
+         {"view":{"type":"string","enum":["state","code","schema","draft","source","physics","visual"]},"path":{"type":"string"},"offset":{"type":"integer"}},[],observing,True),
         ("game_iteration",GAME_ITERATION_DESCRIPTION,
          {"objective":{"type":"string"},"changes":{"type":"array","items":{"type":"object"}},"search":{"type":"object"},"verify":{"type":"array","items":{"type":"object"}},"play":{"type":"boolean"}},["objective","changes"],iteration,False),
         ("game_life","Control your live physical body directly without asking the human to click: play (no API calls for execution), pause, or discard an unfinished legacy draft.",

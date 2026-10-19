@@ -65,13 +65,31 @@ local events, no LLM round-trip.
 Scripted fixtures that prove the instrument executes; each link opens the raw
 recording:
 
+- [`vector-character-fixture.webm`](docs/examples/vector-character-fixture.webm) — v7 vector character: editable anatomy and muscle surfaces, shared vector scenery and materials, physical arm movement, body/face camera framing. The torso is explicitly supported; a rendering fixture, not learned standing.
 - [`physical-workshop-fixture.mp4`](docs/examples/physical-workshop-fixture.mp4) — rope → wheel → weight, cart with motors, editable scenery, the «торс закреплён. Ходьба не обучена.» bench banner.
 - [`workshop-physical-test-bench.webm`](docs/examples/workshop-physical-test-bench.webm) — the physical test bench: unassisted start, joint force controls, mechanism measurements (the source of the loop above).
 - [`workshop-unassisted-start.webm`](docs/examples/workshop-unassisted-start.webm) — a clean session without controller assistance.
 - [`director-scripted-demo.webm`](docs/examples/director-scripted-demo.webm) — an agent-owned JavaScript scene project coordinating action, camera, gaze and graphics.
 
-All are **scripted fixtures with no live model**: execution evidence, not
+All five are **scripted fixtures with no live model**: execution evidence, not
 live-model inventiveness, not general intelligence, not an aesthetic judgment.
+
+## Vector Character Studio (v7)
+
+[Visual authoring](game/VISUAL.md) adds real shoulder/hip attachments on a rigid
+torso, editable bone lengths, capsule radii and segment masses — geometry that
+actually changes physics and inertia — plus anatomical, skeletal, ceramic and
+ink surfaces, shared lighting, gradient materials and atmospheric vector
+scenery. The game renders entirely from Canvas2D vector geometry: no raster
+backgrounds or external images. Named scene layers and the agent's live JS
+graphics share one vector API: Bezier curves, linear/radial gradients,
+transforms, blend modes, shadows, layer order and parallax. For the debugger
+this means: cosmetic edits preserve motion and are verified to do so, while
+geometry edits remap the live pose and are re-tested against their new
+dimensions — appearance changes cannot silently invalidate a controller's
+calibration. The viewer offers body/face framing and automatic detail control
+independent of the 60 Hz physical clock. The new skeleton ships no gait and no
+automatic stance holding.
 
 ## Core features
 

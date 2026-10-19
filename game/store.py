@@ -177,7 +177,8 @@ class GameStore:
                     json.dumps(world, allow_nan=False, separators=(",", ":")), session_id))
                 self.db.commit()
                 old = slot.world
-                if old["nodes"] != world["nodes"] or old["objects"] != world["objects"] or old["material"] != world["material"] or old.get("mechanisms")!=world.get("mechanisms") or old.get("appendages")!=world.get("appendages") or any(old.get(k)!=world.get(k) for k in ("body_control","substances","ropes")):
+                from .character import physical_shape
+                if physical_shape(old.get("character"))!=physical_shape(world.get("character")) or old["nodes"] != world["nodes"] or old["objects"] != world["objects"] or old["material"] != world["material"] or old.get("mechanisms")!=world.get("mechanisms") or old.get("appendages")!=world.get("appendages") or any(old.get(k)!=world.get(k) for k in ("body_control","substances","ropes")):
                     slot.simulator = None
                 elif slot.simulator:
                     slot.simulator.world = world

@@ -17,11 +17,11 @@ from .store import GameStore, live_slot
 from .world import observation
 
 GAME_TURN_CALL_CAP = 12
-DESIGN_CHANGE_OPERATIONS = {"policy", "appearance", "material", "body", "joint",
+DESIGN_CHANGE_OPERATIONS = {"character","art","policy", "appearance", "material", "body", "joint",
                             "body_control", "substance", "rope", "remove_rope", "environment", "project", "appendage", "remove_appendage", "remove_body", "remove_joint", "controller", "physics", "component", "remove_component", "widget", "remove_widget", "todo", "theme"}
 CHANGE_SCHEMA_HINT = (
     "each change must be a design/visual edit: project{name,description,files,entry?,params?,activate?}; appendage{part}; remove_appendage/remove_body/remove_joint{id}; controller/physics{values}; policy {name,code,description,activate?,params?}; "
-    "appearance {values}; material {values}; body {body}; joint {joint}; "
+    "character/art {values} (schema path=visual); appearance {values}; material {values}; body {body}; joint {joint}; "
     "component {component}; widget {widget}; todo {id,item_id,done}; theme {values}; remove_component/remove_widget {id}. "
     "Use game_observe view=schema for the exact current syntax."
 )
@@ -131,7 +131,7 @@ def summary(world):
     obs = observation(world)
     return {"body":world["body_id"], "version":world["version"], "position":obs["position"],
             "upright":obs["upright"], "contacts":world.get("contacts"), "running":world["life"]["running"],
-            "body_control":world["body_control"], "energy":world["energy"], "rope_count":len(world["ropes"]), "joint_count":len(world["mechanisms"]), "policy":world["active_policy"], "project":world["active_project"], "project_error":world["project_error"], "direction":{k:v for k,v in world["direction"].items() if k!="draw"}, "appendages":world["appendages"], "failed_policy":world.get("failed_policy"), "error":world["policy_error"],
+            "character":world["character"],"art":({**world["art"],"layers":[{k:v for k,v in layer.items() if k!="commands"}|{"command_count":len(layer["commands"])} for layer in world["art"]["layers"]]} if world["art"] else None),"visual_schema":"view=schema,path=visual for character/art and vector layer edits", "body_control":world["body_control"], "energy":world["energy"], "rope_count":len(world["ropes"]), "joint_count":len(world["mechanisms"]), "policy":world["active_policy"], "project":world["active_project"], "project_error":world["project_error"], "direction":{k:v for k,v in world["direction"].items() if k!="draw"}, "appendages":world["appendages"], "failed_policy":world.get("failed_policy"), "error":world["policy_error"],
             "intent":world["life"]["intent"], "objects":[{k:o[k] for k in ("id","kind","shape","x","y","vx","vy","radius","width","height") if k in o} for o in world["objects"]],
             "last_change": world["evolution"][-1] if world["evolution"] else None}
 

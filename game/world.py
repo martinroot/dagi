@@ -69,7 +69,8 @@ def upgrade(world):
 
 
 def links(world):
-    return PAIRS+[(side+"_foot",side+"_toe") for side in ("left","right") if side+"_toe" in world["nodes"]]
+    from .character import bone_pairs
+    return bone_pairs(world)
 
 
 def frame(world, presentation=True):
@@ -135,7 +136,7 @@ def observation(world):
         "body_control":copy.deepcopy(world["body_control"]), "energy":copy.deepcopy(world["energy"]),
         "active_project":world.get("active_project"), "project_error":copy.deepcopy(world.get("project_error")), "appendages":copy.deepcopy(world.get("appendages",[])),
         "active_policy": world.get("active_policy"), "policy_error": world.get("policy_error"),
-        "appearance": copy.deepcopy(world.get("appearance", {})),
+        "appearance": copy.deepcopy(world.get("appearance", {})), "character":copy.deepcopy(world["character"]), "art":copy.deepcopy(world["art"]),
         "contacts": copy.deepcopy(world.get("contacts", {})), "emotion": copy.deepcopy(world.get("emotion", {})),
     }
 

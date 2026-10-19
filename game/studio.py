@@ -12,7 +12,7 @@ from uuid import uuid4
 from .living import design, trial
 from .world import act, evolve, keys, number, observation, text, validate_action
 
-LIVE_FIELDS = ("nodes", "tick", "gravity", "controller", "objects", "behaviors", "goal", "widgets", "components", "theme", "policies", "active_policy", "policy_state", "appearance", "material", "mechanisms", "projects", "active_project", "project_started", "project_state", "appendages", "body_control", "substances", "ropes", "environment")
+LIVE_FIELDS = ("physics_engine", "nodes", "tick", "gravity", "controller", "objects", "behaviors", "goal", "widgets", "components", "theme", "policies", "active_policy", "policy_state", "appearance", "material", "mechanisms", "projects", "active_project", "project_started", "project_state", "appendages", "body_control", "substances", "ropes", "environment", "character", "art")
 TOOL_NAMES = {"game_inspect", "game_act", "game_evolve", "game_goal", "game_reflect", "game_build", "game_visual", "game_review"}
 
 
@@ -196,6 +196,9 @@ def visual_edit(world, args):
 def edit(world, change):
     if not isinstance(change, dict):
         raise ValueError("change must be an object")
+    if change.get("operation") in {"character","art"}:
+        from .character import edit as character_edit
+        return character_edit(world,change)
     if change.get("operation") in {"body_control","substance","rope","remove_rope","environment"}:
         from .workshop import edit as workshop_edit
         return workshop_edit(world,change)
@@ -373,6 +376,7 @@ def activate(world, args):
     old_objects = {o["id"]: copy.deepcopy(o) for o in world["objects"]}
     old_ropes={r["id"]:copy.deepcopy(r) for r in world["ropes"]}
     old_joints={j["id"]:copy.deepcopy(j) for j in world["mechanisms"]}
+    old_character=copy.deepcopy(world.get("character"))
     same_policy = world["active_policy"]==draft["candidate"]["active_policy"] and world["policies"]==draft["candidate"]["policies"]
     same_project = world["active_project"]==draft["candidate"]["active_project"] and world["projects"]==draft["candidate"]["projects"]
     project_state,project_started = copy.deepcopy(world["project_state"]),world["project_started"]
@@ -386,6 +390,9 @@ def activate(world, args):
             foot=live_nodes[side+"_foot"]
             candidate_nodes[name]={k:foot[k]+(13 if k in ("x","px") else 0) for k in foot}
     world["nodes"], world["tick"] = candidate_nodes, live_tick
+    from .character import reshape,physical_shape
+    if world.get("character") and physical_shape(old_character)!=physical_shape(world["character"]):
+        reshape(world)
     world["rope_state"]={k:v for k,v in world["rope_state"].items() if any(r["id"]==k and old_ropes.get(k)==r for r in world["ropes"])}
     world["mechanics_state"]={k:v for k,v in world["mechanics_state"].items() if any(j["id"]==k and old_joints.get(k)==j for j in world["mechanisms"])}
     if same_policy: world["policy_state"] = memory

@@ -6,7 +6,7 @@ function viewer(reduced=false){
  const elements=new Map(['shot-state','camera-overview','project-signal'].map(id=>[id,{}]));
  const calls=[];
  const c={document:{getElementById:id=>elements.get(id)},sessionId:1,sceneData:{scene:{version:2,active_project:'custom'}},matchMedia:()=>({matches:reduced}),api:(...args)=>{calls.push(args);return Promise.resolve()},error(){}};
- vm.runInNewContext(fs.readFileSync(new URL('../game/static/direction.js',import.meta.url),'utf8'),c);
+ for(const f of ['vector.js','direction.js'])vm.runInNewContext(fs.readFileSync(new URL('../game/static/'+f,import.meta.url),'utf8'),c);
  const body={nodes:{head:[200,350]},objects:[['wheel',600,400,0]],appendages:[['extra',[200,360],[240,340]]],direction:{camera:{target:'head',zoom:3,ease:.05},beat:'notice'}};
  return {c,elements,calls,body};
 }

@@ -23,7 +23,7 @@ HELP = {
     "return": "{control?,state?,camera?,expression?,draw?,caption?,beat?,hide_body?}; all omitted channels reset to neutral each tick except state. control uses existing drive/jump/pose/forces/object_forces/grip, plus appendage_pose:{id:absolute_angle_radians}. Physical output is validated and applied to real motors.",
     "camera": "{target:'head'|'hip'|joint_name|object_id|appendage_id|[world_x,world_y],zoom:.65..4,offset:[x,y],ease:.05..3,shake:0..5,letterbox:0...18}; target tracks live physics. Default overview center [500,300], zoom1. Framing is presentation, never a physical teleport.",
     "expression": "{valence:-1..1,arousal:0..1,focus:0..1,surprise:0..1,mouth:0..1,squint:0..1,tilt:-.5...5,gaze:[x,y]}; cues are authored expression, not claims of felt emotion.",
-    "draw": "<=120 vector commands, each {type:line|circle|ellipse|rect|text|path,x,y,...,fill?:#RRGGBB,stroke?:#RRGGBB,width?:line_width,alpha?:0..1,space?:world|screen,layer?:background|foreground}. line:x2,y2; circle:radius; ellipse:rx,ry,angle?; rect:w,h,radius?; text:text,size?; path:points[[x,y],...],closed?. World commands share the camera; screen commands stay fixed. hide_body:true lets you draw a complete custom visual body using real joint positions.",
+    "draw": "Gradients, Bezier curves, transforms, blend and shadows: exact extended contract view=schema,path=visual. <=120 vector commands, each {type:line|circle|ellipse|rect|text|path,x,y,...,fill?:#RRGGBB,stroke?:#RRGGBB,width?:line_width,alpha?:0..1,space?:world|screen,layer?:background|foreground}. line:x2,y2; circle:radius; ellipse:rx,ry,angle?; rect:w,h,radius?; text:text,size?; path:points[[x,y],...],closed?. World commands share the camera; screen commands stay fixed. hide_body:true lets you draw a complete custom visual body using real joint positions.",
     "anatomy": "appendage {part:{id,parent:existing_joint_or_previously_defined_appendage_id,length:8..90,angle:-6.3..6.3,radius:2..10,mass:.05..3,color:#RRGGBB}}; adds/updates a real capsule limb with pivot and rotary motor. appendage_pose sets its angle. remove_appendage{id} removes its descendant chain. Body appendages participate in collisions. Physical mode uses internal muscles and joint limits; assisted mode retains its explicitly labelled posture aids.",
     "human_controls": "widget or component event target:{type:'project',name:project_name,event?:your_event_id} runs locally without API. Your program receives input.event once; generic viewer button sends human_attention. Use event-driven reactions, not only timed choreography.",
     "world_edits": "body{body},joint{joint},remove_body{id},remove_joint{id},controller{values},physics{values},appearance{values},theme{values},component{component},widget{widget},project{...},appendage{part} can be submitted together in one game_iteration. Up to24 changes. No built-in scene sequence.",
@@ -119,22 +119,61 @@ def define(world, args):
     return {"kind":"design", "operation":"project", "name":name}
 
 
+def validate_paint(paint):
+    from .world import keys,number
+    if isinstance(paint,str):
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}",paint):raise ValueError("draw colors use#RRGGBB")
+        return
+    keys(paint,("type","from","to","radius","stops"))
+    if paint.get("type") not in ("linear","radial"):raise ValueError("paint is color or linear/radial gradient")
+    for key in ("from","to"):
+        p=paint.get(key)
+        if not isinstance(p,list) or len(p)!=2:raise ValueError("gradient points use[x,y]")
+        for v in p:number(v,-3000,3000,"gradient coordinate")
+    if paint["type"]=="radial":number(paint.get("radius"),.1,3000,"gradient radius")
+    stops=paint.get("stops")
+    if not isinstance(stops,list) or not 2<=len(stops)<=8:raise ValueError("gradient needs2..8 stops")
+    previous=-1
+    for stop in stops:
+        if not isinstance(stop,list) or len(stop)!=2:raise ValueError("gradient stop is[position,color]")
+        number(stop[0],0,1,"gradient stop")
+        if stop[0]<previous:raise ValueError("gradient stops must be ordered")
+        previous=stop[0]
+        if not isinstance(stop[1],str) or not re.fullmatch(r"#[0-9a-fA-F]{6}",stop[1]):raise ValueError("gradient colors use#RRGGBB")
+
+
 def validate_draw(commands):
     from .world import number, text
     if not isinstance(commands,list) or len(commands)>120:
         raise ValueError("draw supports up to120 commands")
     for c in commands:
-        if not isinstance(c,dict) or c.get("type") not in ("line","circle","ellipse","rect","text","path"):
+        if not isinstance(c,dict) or c.get("type") not in ("line","circle","ellipse","rect","text","path","bezier"):
             raise ValueError("unknown project drawing primitive")
         if c.get("space","world") not in ("world","screen") or c.get("layer","foreground") not in ("foreground","background"):
             raise ValueError("drawing space/layer is invalid")
         for key in ("fill","stroke"):
-            if key in c and (not isinstance(c[key],str) or not re.fullmatch(r"#[0-9a-fA-F]{6}",c[key])):
-                raise ValueError("draw colors use#RRGGBB")
+            if key in c:validate_paint(c[key])
+        if c.get("blend","source-over") not in ("source-over","multiply","screen","overlay"):raise ValueError("invalid vector blend")
+        if "transform" in c:
+            m=c["transform"]
+            if not isinstance(m,list) or len(m)!=6:raise ValueError("transform requires six matrix coefficients")
+            for i,v in enumerate(m):number(v,-3000 if i>3 else -10,3000 if i>3 else 10,"transform")
+        if "shadow" in c:
+            from .world import keys
+            sh=c["shadow"];keys(sh,("color","blur","x","y"))
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}",str(sh.get("color",""))):raise ValueError("shadow color must be#RRGGBB")
+            for k,d,lo,hi in (("blur",0,0,30),("x",0,-40,40),("y",0,-40,40)):number(sh.get(k,d),lo,hi,k)
         number(c.get("alpha",1),0,1,"draw alpha")
         number(c.get("width",2),.1,30,"draw line width")
         for k in ("x","y"):
-            number(c.get(k,0) if c["type"]=="path" else c.get(k),-2000,3000,k)
+            number(c.get(k,0) if c["type"] in ("path","bezier") else c.get(k),-2000,3000,k)
+        if c["type"]=="bezier":
+            segments=c.get("segments")
+            counts={"M":2,"L":2,"Q":4,"C":6,"Z":0}
+            if not isinstance(segments,list) or not 2<=len(segments)<=64 or not isinstance(segments[0],list) or not segments[0] or segments[0][0]!="M":raise ValueError("bezier requires2..64 segments starting M")
+            for part in segments:
+                if not isinstance(part,list) or not part or not isinstance(part[0],str) or part[0] not in counts or len(part)!=counts[part[0]]+1:raise ValueError("invalid bezier segment")
+                for value in part[1:]:number(value,-2000,3000,"bezier coordinate")
         if c["type"]=="path":
             points=c.get("points")
             if not isinstance(points,list) or not 2<=len(points)<=64:

@@ -1,3 +1,5 @@
+Current visual authoring: [Vector Character Studio (v7)](VISUAL.md) — anatomy, real proportions, muscle surfaces, vector layers and shared lighting.
+
 # Dagi Physical Workshop
 
 A bare physical stickman, editable scene and general mechanism construction.
