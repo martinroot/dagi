@@ -13,6 +13,13 @@ to be *tested*, not merely run.
 shows the instrument, not intelligence: a rope over a wheel to a weight, a cart
 with motors, and a body that must earn its stance.)*
 
+![Dagi vector character — v7 render test: muscle-surface anatomy, vector materials and layered scenery under shared light](docs/examples/vector-motion-loop.gif)
+
+*(7.6 s loop. Scripted render fixture — «Тест рендера: торс закреплён, движения
+заданы кодом.» Muscle/skin/bone surfaces, gradient wood-metal-stone materials,
+sun, clouds, parallax mountains; the camera closes on the body mid-motion. It
+shows the rendering surface of the instrument, not learned standing.)*
+
 ## Why a physical world is the right instrument
 
 An LLM agent is normally debugged through prose: it says what it did, and you
@@ -65,7 +72,7 @@ local events, no LLM round-trip.
 Scripted fixtures that prove the instrument executes; each link opens the raw
 recording:
 
-- [`vector-character-fixture.webm`](docs/examples/vector-character-fixture.webm) — v7 vector character: editable anatomy and muscle surfaces, shared vector scenery and materials, physical arm movement, body/face camera framing. The torso is explicitly supported; a rendering fixture, not learned standing.
+- [`vector-character-fixture.webm`](docs/examples/vector-character-fixture.webm) — v7 vector character (source of the second loop above): muscle-surface anatomy, vector materials and layered scenery under shared light, physical arm movement, body/face camera framing. The torso is explicitly supported; a rendering fixture, not learned standing.
 - [`physical-workshop-fixture.mp4`](docs/examples/physical-workshop-fixture.mp4) — rope → wheel → weight, cart with motors, editable scenery, the «торс закреплён. Ходьба не обучена.» bench banner.
 - [`workshop-physical-test-bench.webm`](docs/examples/workshop-physical-test-bench.webm) — the physical test bench: unassisted start, joint force controls, mechanism measurements (the source of the loop above).
 - [`workshop-unassisted-start.webm`](docs/examples/workshop-unassisted-start.webm) — a clean session without controller assistance.
@@ -263,7 +270,7 @@ game/embodiment.py     unassisted muscles, joint limits and appendages
 game/mechanics.py      ropes, joints, springs, gears and materials
 game/workshop.py       skill panel, controls and editable scenery
 game/static/           canvas renderer, scene and workshop UI
-docs/examples/         example recordings and the inline debug-loop GIF
+docs/examples/         example recordings and the inline debug-loop GIFs
 ```
 
 ## Provenance
