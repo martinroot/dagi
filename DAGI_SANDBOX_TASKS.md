@@ -125,6 +125,10 @@ live model) and states that boundary explicitly. The layout section gained the
 workshop modules (`game/rigid.py`, `game/embodiment.py`, `game/mechanics.py`,
 `game/workshop.py`, `game/director.py`) and `docs/examples/`.
 
+## Vector Character Studio v7 integration (2026-10-19)
+
+Operator archive `dagi-vector-character-v7-20261019.zip` on base `1fd30e3`, package 0.6.0. Conflict check: `git apply --3way` clean on 25 of 26 files; only README.md conflicted (the incoming patch targeted the pre-instrument README while HEAD carried the debugging-instrument rewrite) — resolved by keeping the instrument framing and merging the v7 additions (fixture link + Vector Character Studio section). New surface: ribs/spine/pelvis/skull with real shoulder/hip attachments on a rigid torso where bone length, capsule radius and mass actually change physics; fully vector Canvas2D rendering (muscle/skin/bone/metal surfaces, shared lighting, gradient materials, shadows, atmospheric parallax, wind/grass) with one vector API shared by scene layers and agent JS projects; body/face camera framing decoupled from the physics clock. Debugger contract: cosmetic edits verified to preserve motion, geometry edits remap the pose and are re-tested; no gait or stance holding is shipped. Gate 333 pytest / 46 Node UI / wheel 0.6.0. Deployed `7075457` (PID 450471) with protected backup; README statements recorded in issue #60.
+
 ## Genesis v4 integration (2026-10-19)
 
 Source: operator archive `dagi-genesis-v4-20261018.zip` (snapshot `2de5d6c4989a0d6b5fadf1a1feb538d3cf4f9de4`, base `69ce1e3`) plus `dagi-genesis-v4.patch` and Chromium verification materials (scripted provider; not a live LLM).
