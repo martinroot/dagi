@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dagi-core"
-version = "0.3.0"
+version = "0.4.0"
 description = "A minimal Hermes-inspired terminal agent core"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -13,6 +13,7 @@ license-files = ["LICENSE"]
 dependencies = [
     "openai==2.24.0",
     "pymunk==7.2.0",
+    "python-quickjs-ng==0.12.1.1",
 ]
 
 [project.scripts]

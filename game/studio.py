@@ -12,7 +12,7 @@ from uuid import uuid4
 from .living import design, trial
 from .world import act, evolve, keys, number, observation, text, validate_action
 
-LIVE_FIELDS = ("nodes", "tick", "gravity", "controller", "objects", "behaviors", "goal", "widgets", "components", "theme", "policies", "active_policy", "policy_state", "appearance", "material", "mechanisms")
+LIVE_FIELDS = ("nodes", "tick", "gravity", "controller", "objects", "behaviors", "goal", "widgets", "components", "theme", "policies", "active_policy", "policy_state", "appearance", "material", "mechanisms", "projects", "active_project", "project_started", "project_state", "appendages")
 TOOL_NAMES = {"game_inspect", "game_act", "game_evolve", "game_goal", "game_reflect", "game_build", "game_visual", "game_review"}
 
 
@@ -22,7 +22,7 @@ def snapshot(world):
 
 def configuration(world):
     result = snapshot(world)
-    for key in ("nodes", "tick", "policy_state"):
+    for key in ("nodes", "tick", "policy_state", "project_state", "project_started"):
         result.pop(key, None)
     result["objects"] = [copy.deepcopy(o.get("definition",o)) if o["kind"]=="body" else copy.deepcopy(o) for o in result["objects"]]
     for obj in result["objects"]:
@@ -37,9 +37,13 @@ def digest(value):
 
 
 def validate_target(target, world):
-    keys(target, ("type", "name", "action", "frames", "text"))
+    keys(target, ("type", "name", "action", "frames", "text", "event"))
     kind = target.get("type")
-    if kind == "policy":
+    if kind == "project":
+        keys(target,("type","name","event"))
+        if target.get("name") not in world["projects"]:raise ValueError("unknown project")
+        if "event" in target:text(target["event"],60,"project event")
+    elif kind == "policy":
         keys(target,("type","name"))
         if target.get("name") not in world["policies"]:raise ValueError("unknown feedback policy")
     elif kind == "behavior":
@@ -190,6 +194,12 @@ def visual_edit(world, args):
 def edit(world, change):
     if not isinstance(change, dict):
         raise ValueError("change must be an object")
+    if change.get("operation") == "project":
+        from .director import define
+        return define(world, change)
+    if change.get("operation") in {"appendage","remove_appendage","remove_body","remove_joint"}:
+        from .director import anatomy
+        return anatomy(world,change)
     if change.get("operation") in {"policy", "appearance", "material", "body", "joint"}:
         return design(world, change)
     if change.get("operation") in ("component", "remove_component", "widget", "remove_widget", "todo", "theme"):
@@ -285,8 +295,8 @@ def build(world, args, cancelled=lambda: False):
         if not draft or draft["state"] == "scheduled":
             raise ValueError("begin a draft before editing")
         changes = args.get("changes")
-        if not isinstance(changes, list) or not 1 <= len(changes) <= 8 or draft["edits"] + len(changes) > 24:
-            raise ValueError("use 1..8 changes per call, at most 24 per draft")
+        if not isinstance(changes, list) or not 1 <= len(changes) <= 24 or draft["edits"] + len(changes) > 24:
+            raise ValueError("use 1..24 changes per call, at most 24 per draft")
         candidate = copy.deepcopy(world)
         candidate.update(copy.deepcopy(draft["candidate"]))
         for change in changes:
@@ -356,10 +366,19 @@ def activate(world, args):
     live_nodes, live_tick = copy.deepcopy(world["nodes"]), world["tick"]
     old_objects = {o["id"]: copy.deepcopy(o) for o in world["objects"]}
     same_policy = world["active_policy"]==draft["candidate"]["active_policy"] and world["policies"]==draft["candidate"]["policies"]
+    same_project = world["active_project"]==draft["candidate"]["active_project"] and world["projects"]==draft["candidate"]["projects"]
+    project_state,project_started = copy.deepcopy(world["project_state"]),world["project_started"]
     memory = copy.deepcopy(world["policy_state"])
     world.update(copy.deepcopy(draft["candidate"]))
     world["nodes"], world["tick"] = live_nodes, live_tick
     if same_policy: world["policy_state"] = memory
+    if same_project:
+        world["project_state"],world["project_started"]=project_state,project_started
+    else:
+        world["project_state"],world["project_started"]={},live_tick
+        world["direction"]={}
+        world["event_queue"]=[]
+    world["project_error"]=None
     for i,obj in enumerate(world["objects"]):
         old=old_objects.get(obj["id"])
         if old and old.get("definition")==obj.get("definition") and obj["kind"]=="body":
@@ -371,7 +390,7 @@ def activate(world, args):
     world["motion"] = []
     world["last_release"] = {"id": draft["id"], "version": world["version"], "objective": draft["objective"],
                              "activated_at": time.time(), "checks": draft["report"]["checks"], "report": copy.deepcopy(draft["report"])}
-    world["evolution"] = (world["evolution"] + [{"version": world["version"], "objective": draft["objective"], "at": time.time(), "policy": world["active_policy"], "trial": copy.deepcopy(draft["report"].get("feedback_trial"))}])[-30:]
+    world["evolution"] = (world["evolution"] + [{"version": world["version"], "objective": draft["objective"], "at": time.time(), "policy": world["active_policy"], "project":world["active_project"], "trial": copy.deepcopy(draft["report"].get("feedback_trial"))}])[-30:]
     world["browser_report"], world["draft"] = None, None
     return {"kind": "release", "version": world["version"], "build_id": args["id"]}
 

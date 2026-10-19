@@ -68,8 +68,10 @@ def upgrade(world):
     return living_upgrade(world)
 
 
-def frame(world):
-    return {"tick": world["tick"], "objects": [[o["id"],round(o["x"],2),round(o["y"],2),round(o.get("angle",0),3)] for o in world["objects"] if o["kind"]=="body"], "nodes": {name: [round(p["x"], 2), round(p["y"], 2)] for name, p in world["nodes"].items()}}
+def frame(world, presentation=True):
+    result = {"tick": world["tick"], "direction":copy.deepcopy(world.get("direction",{})), "emotion":copy.deepcopy(world.get("emotion",{})), "appendages":copy.deepcopy(world.get("appendage_frames",[])), "objects": [[o["id"],round(o["x"],2),round(o["y"],2),round(o.get("angle",0),3)] for o in world["objects"] if o["kind"]=="body"], "nodes": {name: [round(p["x"], 2), round(p["y"], 2)] for name, p in world["nodes"].items()}}
+    if not presentation:result.pop("direction",None)
+    return result
 
 
 def avatar_state(world):
@@ -126,6 +128,7 @@ def observation(world):
         "autonomy_execution": copy.deepcopy(world.get("autonomy_execution")),
         "version": world.get("version", 0), "widget_count": len(world.get("widgets", [])),
         "life": copy.deepcopy(world.get("life", {})),
+        "active_project":world.get("active_project"), "project_error":copy.deepcopy(world.get("project_error")), "appendages":copy.deepcopy(world.get("appendages",[])),
         "active_policy": world.get("active_policy"), "policy_error": world.get("policy_error"),
         "appearance": copy.deepcopy(world.get("appearance", {})),
         "contacts": copy.deepcopy(world.get("contacts", {})), "emotion": copy.deepcopy(world.get("emotion", {})),

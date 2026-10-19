@@ -15,12 +15,12 @@ ITERATION_PROMPT = """Continue your own development in this living world.
 Choose the next useful experiment yourself, guided by the human's latest request
 and actual observations. Keep a coherent activity; you may improve body control,
 physical interaction, appearance, a useful invented instrument or world mechanics.
-Write and test real feedback code rather than longer canned action sequences.
+Write and test a coherent JavaScript project coordinating physical feedback, camera, expression and invented graphics. Use real sensors for outcomes.
 If a previous draft exists, inspect and repair or discard it before beginning another.
 Check the previous outcome, fix actual errors, and publish one coherent change if
 evidence supports it. A failed attempt is useful evidence; no fake success score.
 Do not stop at a plan or apology when a concrete repair is possible. Preserve the
-human's controls. Leave an active policy that can continue locally between turns.
+human's controls. Leave an active project or policy that continues locally between turns.
 """
 
 
@@ -78,9 +78,13 @@ class LifeRuntime:
                     if action == "select":
                         if world["draft"]:
                             raise ValueError("finish or discard the draft before selecting a program")
-                        if args.get("name") not in world["policies"]:
+                        if args.get("name") not in world["policies"] and args.get("name") not in world["projects"]:
                             raise ValueError("unknown feedback policy")
-                        world["active_policy"] = args["name"]
+                        if args["name"] in world["projects"]:
+                            world.update(active_project=args["name"],active_policy=None,project_state={},project_started=world["tick"],project_error=None)
+                        else:
+                            world.update(active_policy=args["name"],active_project=None)
+                        world["direction"]={};world["event_queue"]=[]
                         world["policy_state"] = {}
                         world["policy_error"] = None
                     elif action == "pause":
@@ -96,7 +100,7 @@ class LifeRuntime:
                     elif action in {"start", "play"}:
                         if session_id in self._pending:
                             raise ValueError("wait for the current iteration to finish before restarting")
-                        if action == "play" and not world["active_policy"]:
+                        if action == "play" and not (world["active_policy"] or world["active_project"]):
                             raise ValueError("no feedback policy saved yet; start development or ask the agent to create one")
                         life.update(running=True, error=None, status="observing", thinking=False,
                                     iteration=0, limit=iterations if action == "start" else 0, run_id=None)
@@ -201,7 +205,7 @@ class LifeRuntime:
                 if not world["life"]["running"] or session_id not in self._active:
                     return
                 data = {"iteration": life["iteration"] + 1, "limit": life["limit"],
-                        "world_version": world["version"], "active_policy": world["active_policy"],
+                        "world_version": world["version"], "active_policy": world["active_policy"], "active_project":world["active_project"], "project_error":world["project_error"],
                         "position": observation(world)["position"], "error": world["policy_error"],
                         "last_change": world["evolution"][-1]["objective"] if world["evolution"] else None}
                 try:

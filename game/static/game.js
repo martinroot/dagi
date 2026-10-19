@@ -246,7 +246,14 @@ function drawAvatarExpression(ctx, head, state, now) {
 function draw(now) {
   if(frameLive&&frameQueue.length){displayed=interpolatedFrame(now);animation=null;}
   if(typeof resizeScene==="function")resizeScene(canvas,ctx);
-  if(typeof paintScene==="function"){paintScene(ctx,now,sceneData,displayed);if(typeof drawStudio==="function")drawStudio(ctx,now,sceneData,displayed);requestAnimationFrame(draw);return;}
+  if(typeof paintScene==="function"){
+    ctx.fillStyle=sceneData?.theme?.background||"#e9eff5";ctx.fillRect(0,0,1000,600);
+    if(typeof prepareDirection==="function")prepareDirection(now,sceneData,displayed);
+    ctx.save();if(typeof applyDirectionCamera==="function")applyDirectionCamera(ctx);
+    paintScene(ctx,now,sceneData,displayed);if(typeof drawStudio==="function")drawStudio(ctx,now,sceneData,displayed);ctx.restore();
+    if(typeof drawDirectionScreen==="function")drawDirectionScreen(ctx,now,sceneData,displayed);
+    requestAnimationFrame(draw);return;
+  }
   if (animation) {
     const fraction = animation.duration ? Math.min(1, (now - animation.start) / animation.duration) : 1;
     const first = animation.frames[0].tick, last = animation.frames.at(-1).tick;
@@ -324,7 +331,9 @@ function interpolatedFrame(now){
   const nodes=Object.fromEntries(Object.keys(b.nodes).map(k=>[k,[a.nodes[k][0]+(b.nodes[k][0]-a.nodes[k][0])*t,a.nodes[k][1]+(b.nodes[k][1]-a.nodes[k][1])*t]]));
   const prior=new Map((a.objects||[]).map(o=>[o[0],o]));
   const objects=(b.objects||[]).map(o=>{const p=prior.get(o[0])||o;return[o[0],p[1]+(o[1]-p[1])*t,p[2]+(o[2]-p[2])*t,p[3]+(o[3]-p[3])*t];});
-  return{tick:a.tick+(b.tick-a.tick)*t,nodes,objects};
+  const oldParts=new Map((a.appendages||[]).map(p=>[p[0],p]));
+  const appendages=(b.appendages||[]).map(p=>{const old=oldParts.get(p[0])||p;return[p[0],...p.slice(1).map((v,i)=>v.map((x,j)=>old[i+1][j]+(x-old[i+1][j])*t))];});
+  return{tick:a.tick+(b.tick-a.tick)*t,nodes,objects,appendages,direction:b.direction,emotion:b.emotion};
 }
 async function lifeAction(action,name) {
   if(!sessionId)return;
@@ -337,20 +346,21 @@ async function lifeAction(action,name) {
   if(token===generation)await refreshWorld(token);
 }
 function lifeRefresh(data){
-  const life=data.life||{}, policies=data.policies||[];
+  const life=data.life||{}, policies=[...(data.projects||[]),...(data.policies||[])];
   const working=!!life.thinking;
   const blocked=!!data.scene.policy_error;
   $("life-status").textContent=life.running?(blocked?"Контроллер требует исправления":working?`Развивается · итерация ${life.iteration}/${life.limit}`:life.iteration>=life.limit&&life.limit?`Занимается своим делом · попыток завершено: ${life.iteration}`:"Живёт · локальный контроллер"):"На паузе";
   $("life-intent").textContent=data.scene.policy_error||life.error||life.intent||"Чистый скелет. Следующее занятие выберет агент.";
   $("life-pause").disabled=!life.running;
-  $("life-play").disabled=!data.scene.active_policy||!!data.build||!!life.running;
+  const signal=document.getElementById("project-signal");if(signal)signal.disabled=!data.scene.active_project||!!data.build;
+  $("life-play").disabled=!(data.scene.active_policy||data.scene.active_project)||!!data.build||!!life.running;
   $("improve-self").disabled=working||!!runId;
   if(life.running)$("status").textContent=working?"● Развивается":"● Живёт";
-  const key=JSON.stringify([policies,data.scene.active_policy,!!data.build]);
+  const key=JSON.stringify([policies,data.scene.active_policy,data.scene.active_project,!!data.build]);
   if(key!==policyControlsKey){
     policyControlsKey=key;$("policy-controls").replaceChildren();
     for(const p of policies){
-      const button=document.createElement("button");button.type="button";button.textContent=`${p.name===data.scene.active_policy?"● ":"▷ "}${p.name}`;button.title=p.description||p.name;button.disabled=!!data.build;
+      const button=document.createElement("button");button.type="button";button.textContent=`${(p.name===data.scene.active_policy||p.name===data.scene.active_project)?"● ":"▷ "}${p.name}`;button.title=p.description||p.name;button.disabled=!!data.build;
       button.onclick=()=>lifeAction("select",p.name).then(()=>lifeAction("play")).catch(error);$("policy-controls").append(button);
     }
     if(!policies.length)$("policy-controls").textContent="Здесь появятся программы, созданные агентом. Их можно запускать без обращения к модели.";

@@ -1,3 +1,5 @@
+> Historical v4 architecture. Current code/project/vision contracts: [DIRECTOR.md](DIRECTOR.md).
+
 # Genesis runtime (game v4)
 
 Base: martinroot/dagi main `69ce1e3`. This replaces the bottlenecks observed in

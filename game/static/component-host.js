@@ -127,7 +127,8 @@ async function authoredEvent(componentId,eventId){
   }
 }
 canvas.addEventListener('click',(event)=>{
-  const box=canvas.getBoundingClientRect(),x=(event.clientX-box.left)*1000/box.width,y=(event.clientY-box.top)*600/box.height;
+  const box=canvas.getBoundingClientRect(),screen=[(event.clientX-box.left)*1000/box.width,(event.clientY-box.top)*600/box.height];
+  const [x,y]=typeof screenToWorld==="function"?screenToWorld(screen):screen;
   for(const record of [...authored.values()].reverse()){
     const c=record.component;
     const button=record.commands.findLast(p=>p.type==='button'&&x>=c.x+p.x&&x<=c.x+p.x+p.width&&y>=c.y+p.y&&y<=c.y+p.y+p.height);

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import copy
 import time
@@ -61,6 +62,10 @@ def clock_tick(database, session_id):
         except (ValueError, KeyError) as exc:
             world["policy_error"] = str(exc)[:240]
             world["failed_policy"] = world["active_policy"]
+            if world.get("active_project"):
+                world["project_error"]={"name":world["active_project"],"detail":str(exc)[:240]}
+                world["active_project"]=None
+                world["direction"]={}
             world["active_policy"] = None
             world["life"]["error"] = str(exc)[:240]
             world["life"]["intent"] = "Контроллер отключён после ошибки; сохраняю устойчивость"
@@ -89,6 +94,7 @@ class GameStore:
 
     def create(self, session_id):
         world = fresh_world(session_id)
+        world["project_scope"]=hashlib.sha256(f"{self.key}:{session_id}".encode()).hexdigest()
         if self.key in _DATABASES:
             world["physics_engine"] = "chipmunk"
         self.db.execute("INSERT INTO game_worlds VALUES (?, ?)", (session_id, json.dumps(world)))
@@ -105,6 +111,8 @@ class GameStore:
                 return copy.deepcopy(slot.world)
         row = self.db.execute("SELECT world_json FROM game_worlds WHERE session_id=?", (session_id,)).fetchone()
         world = upgrade(json.loads(row[0])) if row else None
+        if world and not world.get("project_scope"):
+            world["project_scope"]=hashlib.sha256(f"{self.key}:{session_id}".encode()).hexdigest()
         if world and self.key in _DATABASES:
             with _GUARD:
                 _LIVE.setdefault((self.key, session_id), LiveSlot(copy.deepcopy(world)))
@@ -159,7 +167,7 @@ class GameStore:
                     json.dumps(world, allow_nan=False, separators=(",", ":")), session_id))
                 self.db.commit()
                 old = slot.world
-                if old["nodes"] != world["nodes"] or old["objects"] != world["objects"] or old["material"] != world["material"] or old.get("mechanisms")!=world.get("mechanisms"):
+                if old["nodes"] != world["nodes"] or old["objects"] != world["objects"] or old["material"] != world["material"] or old.get("mechanisms")!=world.get("mechanisms") or old.get("appendages")!=world.get("appendages"):
                     slot.simulator = None
                 elif slot.simulator:
                     slot.simulator.world = world

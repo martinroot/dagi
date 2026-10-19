@@ -421,7 +421,7 @@ class WebApp:
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
-                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/component-host.js"}:
+                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/direction.js", "/game/component-host.js"}:
                         self._static(path)
                     elif path == "/api/auth/session":
                         if app._is_authenticated(self.headers):
@@ -491,6 +491,7 @@ class WebApp:
                             "scene": game_observation(world), "frame": game_frame(world),
                             "links": PAIRS, "motion": world["motion"], "history": world["history"],
                             "reflections": world["reflections"], "widgets": world["widgets"], "components": world["components"], "theme": world["theme"],
+                            "direction":world["direction"], "appendages":world["appendages"], "projects":[{"name":k,"version":v["version"],"description":v["description"]} for k,v in world["projects"].items()],
                             "life": world["life"], "policies": [{"name": k, "version": v["version"], "description": v["description"]} for k,v in world["policies"].items()], "appearance": world["appearance"], "evolution": world["evolution"],
                             "build": build_summary(world), "preview": {k: world["draft"]["candidate"][k] for k in ("widgets", "objects", "components")} if world["draft"] else None,
                             "last_release": world["last_release"], "activity": activity, "server_time": time.time(),
@@ -598,6 +599,16 @@ class WebApp:
                         with GameStore(app.config.database) as game:
                             game.create(session_id)
                         self._send_json(201, {"session_id": session_id})
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/project-event", parsed.path):
+                        session_id=int(match.group(1))
+                        from game.world import keys as game_keys
+                        game_keys(body,("version","id"))
+                        if not isinstance(body.get("id"),str) or not 1<=len(body["id"])<=60:raise ValueError("event id must be1..60 characters")
+                        with GameStore(app.config.database) as game:
+                            with game.transient(session_id) as world:
+                                if type(body.get("version")) is not int or body["version"]!=world["version"] or not world["active_project"]:raise ValueError("project changed; refresh before sending event")
+                                world["event_queue"]=(world["event_queue"]+[{"id":body["id"],"tick":world["tick"]}])[-8:]
+                        self._send_json(200,{"queued":True,"local":True})
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)/vision", parsed.path):
                         session_id=int(match.group(1))
                         with GameStore(app.config.database) as game:
@@ -649,7 +660,17 @@ class WebApp:
                                 component=next((c for c in world["components"] if c["id"]==body["component_id"]),None)
                                 event=next((e for e in component.get("events",[]) if e["id"]==body.get("event_id")),None) if component else None
                                 target=event.get("target") if event else None
-                        if target and target.get("type")=="policy":
+                        if target and target.get("type")=="project":
+                            if world["active_project"]!=target["name"]:
+                                app.life.control(session_id,{"action":"select","name":target["name"]})
+                            if target.get("event"):
+                                with GameStore(app.config.database) as game:
+                                    with game.transient(session_id) as world:
+                                        if body["version"]!=world["version"] or world["active_project"]!=target["name"]:raise ValueError("project changed; refresh before sending event")
+                                        world["event_queue"]=(world["event_queue"]+[{"id":target["event"],"tick":world["tick"]}])[-8:]
+                            app.life.ensure_clock(session_id)
+                            self._send_json(200,{"local":True,"project":target["name"]})
+                        elif target and target.get("type")=="policy":
                             app.life.control(session_id,{"action":"select","name":target["name"]})
                             app.life.ensure_clock(session_id)
                             self._send_json(200,{"local":True,"policy":target["name"]})
@@ -1194,6 +1215,7 @@ class WebApp:
 
     def _execute_run(self, run_id: str, session_id: int, message: str, control: _RunControl) -> None:
         state = StateStore(self.config.database)
+        is_game = False
         try:
             provider = self.provider_factory(self.config.model, self.config.api_key, self.config.base_url)
             compression_provider = self.provider_factory(
@@ -1213,6 +1235,10 @@ class WebApp:
             workspace = resolve_session_workspace(self.config.workspace, session["workspace"])
             tools = ToolRegistry(workspace, state, session_id, shell_enabled=False)
             is_game = register_game(tools, self.life)
+            if is_game:
+                with GameStore(self.config.database) as game:
+                    with game.transient(session_id) as world:
+                        world["life"].update(thinking=True,run_id=run_id)
             delegation = DelegationManager(
                 state,
                 self.config.workspace,
@@ -1269,6 +1295,14 @@ class WebApp:
                     state.append_run_event(session_id, run_id, event)
                 state.finish_run(run_id, "error", error_text)
         finally:
+            if is_game:
+                with GameStore(self.config.database) as game:
+                    try:
+                        with game.transient(session_id) as world:
+                            if world["life"].get("run_id")==run_id:
+                                world["life"]["thinking"]=False
+                    except ValueError:
+                        pass  # Runtime closed while the cancelled turn was unwinding.
             state.close()
             with self._lock:
                 self._runs.pop(run_id, None)

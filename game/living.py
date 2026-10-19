@@ -14,9 +14,11 @@ import math
 import operator
 import re
 from functools import lru_cache
+from uuid import uuid4
 
 
 DEFAULTS = {
+    "projects": {}, "active_project": None, "project_state": {}, "project_started": 0, "project_error": None, "direction": {}, "event_queue": [], "appendages": [], "appendage_frames": [],
     "physics_engine": "legacy", "mechanisms": [], "contacts": {}, "emotion": {"valence": 0, "arousal": .25, "focus": .4}, "human": {}, "policies": {}, "active_policy": None, "policy_state": {}, "policy_error": None,
     "appearance": {"stroke": "#282d23", "accent": "#e6703a", "fill": "#ffffff",
                    "line_width": 5, "head_radius": 12, "joint_radius": 3.5, "trail": 0},
@@ -29,8 +31,13 @@ DEFAULTS = {
 
 
 def upgrade(world):
+    world.setdefault("project_scope","")
     for key, value in DEFAULTS.items():
         world.setdefault(key, copy.deepcopy(value))
+    for saved in (world.get("previous"), *(world.get("draft",{}).get(k) for k in ("candidate","seed") if world.get("draft"))):
+        if saved:
+            for key in ("projects","active_project","project_state","project_started","appendages"):
+                saved.setdefault(key,copy.deepcopy(DEFAULTS[key]))
     for obj in world.get("objects",[]):
         if obj["kind"]=="body" and "definition" not in obj:
             obj["definition"] = {k:copy.deepcopy(v) for k,v in obj.items() if k not in ("vx","vy","angle","angular_velocity","kind")}
@@ -147,15 +154,23 @@ def sensors(world):
             "grounded": obs["grounded"], "upright": obs["upright"],
             "goal": obs["goal"], "objects": copy.deepcopy(world["objects"]),
             "joints": {k: [p["x"], p["y"]] for k, p in world["nodes"].items()},
+            "contact_evidence":copy.deepcopy(world.get("contacts",{})),
             "contacts": {k: _on_surface(world, p, 8) for k, p in world["nodes"].items()}}
 
 
 def command(world):
+    if world.get("active_project"):
+        from .director import command as project_command
+        return project_command(world)
     name = world.get("active_policy")
     if not name:
         return {}
     result = evaluate(world["policies"][name]["code"], {"s": sensors(world), "m": world["policy_state"], "p": world["policies"][name].get("params", {})})
-    if not isinstance(result, dict) or set(result) - {"drive", "jump", "pose", "forces", "memory", "intent", "object_forces", "emotion", "gaze", "grip"}:
+    return validate_control(world, result)
+
+
+def validate_control(world, result):
+    if not isinstance(result, dict) or set(result) - {"drive", "jump", "pose", "forces", "memory", "intent", "object_forces", "emotion", "gaze", "grip", "appendage_pose"}:
         raise ValueError("policy returns {drive,jump,pose,forces,memory,intent,object_forces}")
     from .world import number
     number(result.get("drive", 0), -1, 1, "drive")
@@ -180,11 +195,15 @@ def command(world):
     intent = result.get("intent", "")
     if not isinstance(intent, str) or len(intent) > 100:
         raise ValueError("policy intent must be text <=100 characters")
+    poses = result.get("appendage_pose", {})
+    if not isinstance(poses,dict) or set(poses)-{p["id"] for p in world["appendages"]}:
+        raise ValueError("appendage_pose references unknown part")
+    for value in poses.values():number(value,-6.3,6.3,"appendage angle")
     emotion = result.get("emotion", {})
-    if not isinstance(emotion, dict) or set(emotion) - {"valence", "arousal", "focus"}:
+    if not isinstance(emotion, dict) or set(emotion) - {"valence", "arousal", "focus", "surprise", "mouth", "squint", "tilt"}:
         raise ValueError("emotion uses valence -1..1, arousal/focus 0..1")
     for key,value in emotion.items():
-        number(value, -1 if key=="valence" else 0, 1, key)
+        number(value, -.5 if key=="tilt" else -1 if key=="valence" else 0, .5 if key=="tilt" else 1, key)
     world["emotion"].update(emotion)
     grip = result.get("grip")
     if grip is not None:
@@ -207,6 +226,7 @@ def design(world, args):
     if operation == "policy":
         keys(args, ("operation", "name", "code", "description", "activate", "params"))
         name = text(args.get("name"), 40, "policy name")
+        if name in world["projects"]:raise ValueError("use a policy name distinct from saved project names")
         parse(args.get("code"))
         description = text(args.get("description"), 200, "description")
         if name not in world["policies"] and len(world["policies"]) >= 12:
@@ -222,6 +242,8 @@ def design(world, args):
                                    "version": hashlib.sha256(args["code"].encode()).hexdigest()[:12]}
         if args.get("activate", True):
             world["active_policy"] = name
+            world["active_project"] = None
+            world["direction"] = {}
             world["policy_state"] = {}
             world["policy_error"] = None
         # Exercise the real initial input now; tests also run subsequent states.
@@ -280,6 +302,7 @@ def design(world, args):
         obj = copy.deepcopy(args.get("body"))
         keys(obj, ("id", "shape", "x", "y", "width", "height", "radius", "mass", "restitution", "color", "label"))
         text(obj.get("id"), 40, "body id")
+        if obj["id"] in world["nodes"] or obj["id"] in {p["id"] for p in world["appendages"]}:raise ValueError("body id must be distinct from skeleton joints and appendages")
         if obj.get("shape") not in ("rect", "circle"):
             raise ValueError("physical shape must be rect or circle")
         for key, lo, hi in (("x", 20, 980), ("y", 30, 520), ("mass", .2, 50), ("restitution", 0, .85)):
@@ -313,7 +336,7 @@ def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostic
     if simulator is None and world.get("physics_engine")=="chipmunk":
         from .rigid import RigidSimulator
         simulator = RigidSimulator(world)
-    frames_out = [frame(world)]
+    frames_out = [frame(world,presentation=False)] if diagnostics else []
     samples = []
     for i in range(frames):
         if cancelled():
@@ -327,8 +350,8 @@ def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostic
         else:
             _step(world, output.get("drive", 0), control=output)
         if i % 6 == 0 or i == frames - 1:
-            frames_out.append(frame(world))
             if not diagnostics: continue
+            frames_out.append(frame(world,presentation=False))
             sample = observation(world)
             hip = world["nodes"]["hip"]
             from .world import LINKS, _on_surface
@@ -337,7 +360,7 @@ def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostic
             sample["foot_slip"] = sum(abs(world["nodes"][name]["x"] - world["nodes"][name]["px"]) / DT
                                       for name in ("left_foot", "right_foot") if _on_surface(world, world["nodes"][name], 7))
             samples.append(sample)
-    world["motion"] = (world["motion"] + frames_out)[-122:]
+    if diagnostics:world["motion"] = (world["motion"] + frames_out)[-122:]
     return samples
 
 
@@ -431,8 +454,10 @@ def collide_body(obj, point, radius):
         obj["vy"] += ny * approach * (1 - share) * .2
 
 
-def trial(world, frames=240, cancelled=lambda: False):
+def trial(world, frames=None, cancelled=lambda: False):
+    frames = frames if frames is not None else (720 if world.get("active_project") else 240)
     clone = copy.deepcopy(world)
+    clone["project_scope"] = uuid4().hex  # Offline trials never share mutable JS globals with the live world.
     clone["draft"] = None
     start = sensors(clone)
     try:

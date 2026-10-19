@@ -1,3 +1,3 @@
 """Minimal Dagi agent core, based on current Hermes architecture."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

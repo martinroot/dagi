@@ -114,9 +114,9 @@ def test_fresh_canvas_frame_is_version_bound_and_optional(tmp_path):
         slot.vision={"image":"data:image/jpeg;base64,"+"a"*15000,"version":0,"at":time.time()}
         with closing(StateStore(app.config.database)) as state:
             state.append_message(sid,{"role":"user","content":"Inspect my actual appearance"})
-            context=GameContext(state,max_tokens=2000)
+            context=GameContext(state,max_tokens=4000)
             messages=context.build(sid,"run","Observe truthfully.",[])
-            assert messages[-1]["content"][1]["image_url"]["detail"]=="low"
+            assert messages[-1]["content"][1]["image_url"]["detail"]=="auto"
             slot.vision["version"]=99
             assert not isinstance(context.build(sid,"run","Observe truthfully.",[])[-1]["content"],list)
             slot.vision["version"]=0

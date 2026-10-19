@@ -84,6 +84,27 @@ class RigidSimulator:
             spring = pymunk.DampedRotarySpring(self.space.static_body, body, -body.angle, body.moment * frequency, body.moment * 90)
             self.space.add(spring)
             self.springs[name] = spring
+        self.appendages = {}
+        self.extra_ends = {}
+        previous = {part[0]:part for part in world.get("appendage_frames",[])}
+        for part in world.get("appendages",[]):
+            parent, anchor = (self.extra_ends | self.ends)[part["parent"]]
+            start = parent.local_to_world(anchor)
+            old = previous.get(part["id"])
+            angle = math.atan2(old[2][1]-old[1][1],old[2][0]-old[1][0]) if old else part["angle"]
+            length, mass, radius = part["length"],part["mass"],part["radius"]
+            body = pymunk.Body(mass,pymunk.moment_for_segment(mass,(-length/2,0),(length/2,0),radius))
+            body.position = start+pymunk.Vec2d(math.cos(angle),math.sin(angle))*length/2
+            body.angle = angle
+            body.velocity = parent.velocity_at_world_point(start)
+            shape = pymunk.Segment(body,(-length/2,0),(length/2,0),radius)
+            shape.filter=pymunk.ShapeFilter(group=1,categories=1);shape.friction=.65
+            pivot=pymunk.PivotJoint(parent,body,anchor,(-length/2,0))
+            motor=pymunk.DampedRotarySpring(self.space.static_body,body,-angle,body.moment*450,body.moment*35)
+            self.space.add(body,shape,pivot,motor)
+            self.appendages[part["id"]]=(body,length,motor,part)
+            self.extra_ends[part["id"]]=(body,(length/2,0))
+            self._shape_joints[shape]=part["id"]
         for obj in world["objects"]:
             if obj["kind"] == "body":
                 mass = obj["mass"]
@@ -129,7 +150,7 @@ class RigidSimulator:
             self.joint_contacts.add(name)
             if name.endswith("foot"):
                 # Contact must support the foot from below, not be a side wall.
-                p = self.ends[name][0].local_to_world(self.ends[name][1])
+                p = (self.ends | self.extra_ends)[name][0].local_to_world((self.ends | self.extra_ends)[name][1])
                 if other.point_query((p.x, p.y + 5)).distance < 2:
                     self.ground_contacts.add(name)
             if other in self._shape_objects:
@@ -164,6 +185,10 @@ class RigidSimulator:
             spring.rest_angle = -angle
             spring.stiffness = body.moment * (1800 if name == "hip" else 2800 if "knee" in name or "foot" in name else 500) * strength * w["material"]["stiffness"]
             spring.damping = body.moment * 90 * min(1, strength)
+        for name,(body,length,motor,part) in self.appendages.items():
+            angle=control.get("appendage_pose",{}).get(name,part["angle"])
+            angle+=round((body.angle-angle)/(2*math.pi))*2*math.pi
+            motor.rest_angle=-angle
         torso = self.segments["hip"][0]
         total_mass = sum(b.mass for b in self.space.bodies if b.body_type == pymunk.Body.DYNAMIC and b not in self.objects.values())
         grounded = bool(self.ground_contacts) or any(p["y"] > 530 for key, p in w["nodes"].items() if key.endswith("foot"))
@@ -221,6 +246,7 @@ class RigidSimulator:
                 b = self.objects[obj["id"]]
                 obj.update(x=b.position.x, y=b.position.y, vx=b.velocity.x, vy=b.velocity.y,
                            angle=b.angle, angular_velocity=b.angular_velocity)
+        w["appendage_frames"] = [[name,list(body.local_to_world((-length/2,0))),list(body.local_to_world((length/2,0)))] for name,(body,length,_,_) in self.appendages.items()]
         w["contacts"] = {"objects": sorted(self.contact_ids), "support": sorted(self.ground_contacts),
                          "joints": sorted(self.joint_contacts), "grip": self.grip[0] if self.grip else None}
         w["tick"] += 1
