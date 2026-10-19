@@ -60,6 +60,17 @@ This is the single repository-level status map for the sandbox roadmap and cross
 - World-12 loop/goal reliability: [#47 closed](https://github.com/martinroot/dagi/issues/47), code `1f1f268`; configured provider budget now sets a compatible tool-round ceiling and goal feedback carries signed direction/progress. Its original read-only diagnosis was preserved; a later operator-authorized test-session reset is recorded under #48.
 - Embodied self-improvement and session audit export: [#48 open](https://github.com/martinroot/dagi/issues/48), code `cf993cb` (deployed with docs commit `cdabb01`); guarded physical-skill progression, two local execution cycles, replayable motion/avatar cues, and authenticated session JSON export are live. All 18 test sessions were reset on the operator's request; post-reset DB integrity, counts, auth gate, and public assets were verified. The protected rollback backup still holds pre-reset data; no live model-driven smoke has been run.
 
+## Genesis turn-cap burn-down (2026-10-19)
+
+Two identical failures after Genesis v4 went live, both ending `provider call limit reached` before the task finished:
+
+| Issue | Session | Cause | Fix commit |
+|---|---|---|---|
+| [#56](https://github.com/martinroot/dagi/issues/56) | 24 | `game_iteration` change errors surfaced legacy `game_evolve` field unions, inviting legacy-shaped retries; description lacked exact schemas; cap was `min(8, operator)` with no discovery headroom | `c197a1a` — schema-first change rejection, inline schemas in the description, shared `game_call_cap` helper (12-call headroom) |
+| [#57](https://github.com/martinroot/dagi/issues/57) | 25 | The schema view taught the ambiguity (field groups without the `operation` key); the parser rejected recognizable encodings (JSON string, `type` alias, `{"policy":{...}}` wrapper, flattened policy fields) one call at a time | `35bde92` — `_normalize_changes` accepts the four encodings and canonicalizes them; schema view and description document the per-change `operation` key with examples |
+
+Both slices are RED/GREEN with regression tests in `tests/test_game_genesis.py`; the full gate ran before each push (263 then 270 pytest, 35 Node UI, wheel/sdist, syntax/diff). Deployments restarted only after live runs reached idle, with protected backups. Unknown change shapes still fail with the design/visual operation list — tolerance is for recognizable encodings, not for skipping validation.
+
 ## Genesis v4 integration (2026-10-19)
 
 Source: operator archive `dagi-genesis-v4-20261018.zip` (snapshot `2de5d6c4989a0d6b5fadf1a1feb538d3cf4f9de4`, base `69ce1e3`) plus `dagi-genesis-v4.patch` and Chromium verification materials (scripted provider; not a live LLM).
