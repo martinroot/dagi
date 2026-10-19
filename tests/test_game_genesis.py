@@ -244,10 +244,10 @@ def test_schema_view_documents_the_operation_key_on_every_change():
 
 def test_game_turn_cap_grants_discovery_headroom():
     from game.turns import game_call_cap, GAME_TURN_CALL_CAP
-    assert GAME_TURN_CALL_CAP == 12
-    assert game_call_cap(25) == 12
+    assert GAME_TURN_CALL_CAP == 16
+    assert game_call_cap(25) == 16
     assert game_call_cap(6) == 6
-    assert game_call_cap(100) == 12
+    assert game_call_cap(100) == 16
 
 
 def test_failed_atomic_change_does_not_publish_or_replace_working_world(tmp_path):

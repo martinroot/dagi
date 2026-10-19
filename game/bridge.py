@@ -562,7 +562,7 @@ def register_game(tools, life=None):
             path=args.get("path","")
             if not path:return learning_summary(world,details=True)
             id,_,file=path.partition("/");skill=world["learning"]["skills"].get(id)
-            if not skill:raise ValueError("unknown skill")
+            if not skill:raise ValueError("unknown skill; available: "+(', '.join(sorted(world["learning"]["skills"])) or "none"))
             if file:
                 source=skill.get("working",{}).get("files",{}).get(file)
                 if source is None and file=="policy":source=skill.get("working",{}).get("code")

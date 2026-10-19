@@ -24,7 +24,12 @@ HELP = {
 def _expr(value,name):
     from .world import text
     from .living import parse
-    text(value,600,name);parse(value);return value
+    text(value,600,name)
+    try:
+        parse(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} expression: " + str(exc)[:180]) from exc
+    return value
 
 
 def plan(world,args):
@@ -309,7 +314,7 @@ def handle(database,sid,args,cancelled=lambda:False):
         candidate=copy.deepcopy(original);result=plan(candidate,args)
     elif action=='evaluate':
         keys(args,('action','skill','world_version','contract'));id=args.get('skill')
-        if id not in original['learning']['skills']:raise ValueError('unknown skill')
+        if id not in original['learning']['skills']:raise ValueError('unknown skill; available: '+(', '.join(sorted(original['learning']['skills'])) or 'none'))
         if 'world_version' in args and args['world_version']!=original['version']:raise ValueError('world changed; refresh before evaluating')
         if 'contract' in args and args['contract']!=original['learning']['skills'][id]['version']:raise ValueError('skill contract changed; refresh before evaluating')
         if statuses(original)[id]['status']=='blocked':raise ValueError(statuses(original)[id]['reason'])
@@ -317,7 +322,7 @@ def handle(database,sid,args,cancelled=lambda:False):
         result={'attempt':receipt,'learning':summary(candidate)}
     elif action=='note':
         keys(args,('action','skill','attempt','hypothesis','next_change'));id=args.get('skill')
-        if id not in original['learning']['skills']:raise ValueError('unknown skill')
+        if id not in original['learning']['skills']:raise ValueError('unknown skill; available: '+(', '.join(sorted(original['learning']['skills'])) or 'none'))
         if not any(a['id']==args.get('attempt') for a in original['learning']['skills'][id]['attempts']):raise ValueError('note must cite an existing attempt')
         for k in ('hypothesis','next_change'):text(args.get(k),500,k)
         candidate=copy.deepcopy(original);candidate['learning']['lessons']=(candidate['learning']['lessons']+[{**args,'at':time.time(),'kind':'hypothesis'}])[-24:];result={'saved':True}

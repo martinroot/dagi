@@ -16,7 +16,7 @@ from .studio import build, activate, configuration, digest, snapshot
 from .store import GameStore, live_slot
 from .world import observation
 
-GAME_TURN_CALL_CAP = 12
+GAME_TURN_CALL_CAP = 16
 DESIGN_CHANGE_OPERATIONS = {"character","art","policy", "appearance", "material", "body", "joint",
                             "body_control", "substance", "rope", "remove_rope", "environment", "project", "appendage", "remove_appendage", "remove_body", "remove_joint", "controller", "physics", "component", "remove_component", "widget", "remove_widget", "todo", "theme"}
 CHANGE_SCHEMA_HINT = (
