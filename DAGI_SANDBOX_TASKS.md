@@ -71,6 +71,21 @@ Two identical failures after Genesis v4 went live, both ending `provider call li
 
 Both slices are RED/GREEN with regression tests in `tests/test_game_genesis.py`; the full gate ran before each push (263 then 270 pytest, 35 Node UI, wheel/sdist, syntax/diff). Deployments restarted only after live runs reached idle, with protected backups. Unknown change shapes still fail with the design/visual operation list — tolerance is for recognizable encodings, not for skipping validation.
 
+## Repository concept description (2026-10-19)
+
+The README now leads with the project concept instead of the implementation
+inventory: the agent's sandbox is a physical world — the body is the agent, the
+world is craftable (mechanisms, materials, scenery), abilities are
+craftable/tested/versioned (controllers, trials, countdown publication), memory
+is visible and bounded (policy memory, transcripts, skills, passport), and tools
+are exercised on physics rather than mocked payloads (`game_observe` /
+`game_iteration` / `game_life`). An example section embeds the operator's
+workshop fixture video (`docs/examples/physical-workshop-fixture.mp4`, scripted
+physics fixture — torso fixed, walking not learned; execution evidence only, no
+live model) and states that boundary explicitly. The layout section gained the
+workshop modules (`game/rigid.py`, `game/embodiment.py`, `game/mechanics.py`,
+`game/workshop.py`, `game/director.py`) and `docs/examples/`.
+
 ## Genesis v4 integration (2026-10-19)
 
 Source: operator archive `dagi-genesis-v4-20261018.zip` (snapshot `2de5d6c4989a0d6b5fadf1a1feb538d3cf4f9de4`, base `69ce1e3`) plus `dagi-genesis-v4.patch` and Chromium verification materials (scripted provider; not a live LLM).

@@ -1,9 +1,56 @@
-# Dagi Core — minimal Hermes-inspired agent
+# Dagi Core — an agent whose sandbox is a physical world
 
-The optional [Physical Workshop](game/PHYSICS.md) combines unassisted articulation, agent-authored JS behavior, physical mechanisms, editable scenery and a game skill interface.
+A compact agent core with a visual physical workshop attached to it. One session
+streams chat, tool traces and provider evidence **and** contains a body in a 2D
+world. The idea is simple: the agent's abilities are mechanisms it authors,
+tests and publishes; its memory is visible, bounded state; its tools are
+exercised against real physics rather than mocked payloads.
 
+The optional [Physical Workshop](game/PHYSICS.md) combines unassisted
+articulation, agent-authored JS behavior, physical mechanisms, editable scenery
+and a game skill interface.
 
-A compact terminal agent, not a reduced copy of the full Hermes platform. This implementation is aligned with the upstream `NousResearch/hermes-agent` architecture at commit [`848fc0a`](https://github.com/NousResearch/hermes-agent/commit/848fc0ad8be766b9dc10fe42bd80b5fc2d45d95c). The core is a clean implementation of selected invariants, not copied upstream source.
+## The concept in one screen
+
+- **The body is the agent.** One stickman per game session. What the human sees
+  on canvas is the actual simulation state — joints, contacts, objects — not a
+  decorative avatar. The agent perceives structured geometry and contacts, not
+  screenshot pixels, unless the operator enables the world-frame observation.
+- **The world is craftable.** Objects, mechanisms (ropes over wheels to weights,
+  carts with motors, gears and joints), materials with density and friction,
+  editable sky/ground/sun/mountains, and body appearance are authored by the
+  agent or the human. A clean session is an empty world with a bare skeleton:
+  no activity ladder, prop curriculum or story is installed.
+- **Abilities are craftable, tested and versioned.** Controllers (feedback
+  policies) and saved programs are the agent's skills: authored as code,
+  executed locally at 60 Hz without per-frame model calls, measured in
+  baseline/candidate trials, and published only when their checks pass. A skill
+  button is a control surface, never a claim of mastery.
+- **Memory is visible and bounded.** Policy memory, session transcripts, skills,
+  reflections and the self-passport persist and are inspectable. Reloading the
+  page or restarting the service preserves them; a hard crash can lose at most
+  the last checkpoint of motion, and nothing auto-replays or auto-spends.
+- **Tools are exercised on physics.** `game_observe` reads state and schemas,
+  `game_iteration` submits one coherent edit package, runs real trials and
+  publishes through a countdown, and `game_life` executes or pauses locally
+  without model calls. A failing measurement blocks publication instead of
+  trusting a claim.
+
+### Example: the workshop fixture
+
+[`docs/examples/physical-workshop-fixture.mp4`](docs/examples/physical-workshop-fixture.mp4)
+(~12 s, 2112×1266) shows the mechanism side of the concept: a stickman holding a
+flexible rope that runs over a wheel down to a weight (*гибкая цепь → колесо →
+груз*), a wheeled cart labelled *шарниры + моторы + трение*, and editable
+mountains, sun and clouds. The caption states *«Проверочный стенд: торс
+закреплён. Ходьба не обучена.»* — the torso is fixed and walking is not learned,
+which is the point: standing, balance and gait are abilities the agent authors
+and verifies itself, not features shipped in the engine.
+
+Honest scope of this recording: it is a **scripted physics fixture with no live
+model**. It proves that mechanisms execute and are observable; it does not
+demonstrate live-model inventiveness, and passing checks establish execution
+evidence, not general intelligence or aesthetic quality.
 
 ## Core features
 
@@ -22,7 +69,7 @@ A compact terminal agent, not a reduced copy of the full Hermes platform. This i
 - A terminal CLI with session listing/resume plus a separate loopback visual sandbox.
 - Interrupted tool actions are recovered by state: safe pending calls may resume, while unknown outcomes are never replayed automatically. Legacy tool-result text without an explicit persisted outcome remains uncertain; new tool completion commits the result message, outcome, and run event atomically.
 
-The runtime has one direct dependency, `openai`; SQLite and the CLI use the Python standard library. There is no messaging gateway, MCP, cron, voice, profile, or remote-backend integration in this version.
+The runtime has one direct dependency, `openai`; SQLite and the CLI use the Python standard library. There is no messaging gateway, MCP, cron, voice, profile, or remote-backend integration in this version. The physical workshop additionally uses `pymunk` (Chipmunk rigid bodies) and `python-quickjs-ng` (server-side agent JavaScript), both installed by `uv sync`.
 
 ## Safety
 
@@ -114,7 +161,8 @@ browser. Chat and bounded autonomous development use the normal configured
 provider. The browser streams physical state and can supply chronological canvas
 observations. Passing checks establish execution evidence, not autonomous
 intelligence or aesthetic improvement. See [game/DIRECTOR.md](game/DIRECTOR.md)
-for setup, project contracts and validation boundaries.
+for setup, project contracts and validation boundaries, and
+[game/PHYSICS.md](game/PHYSICS.md) for the unassisted embodiment rules.
 
 ## Custom tools
 
@@ -160,7 +208,7 @@ Python-only example:
 bash scripts/test-focused.sh tests/test_core_tools.py::test_read_file_returns_structured_path_size_line_count_and_truncation
 ```
 
-Use the focused gate during small iterations; do not remove or weaken tests. Run the full acceptance gate once at the issue-closure checkpoint. Tests do not require an API key and do not make model requests.
+Use the focused gate during small iterations; do not remove or weaken tests. Run the full acceptance gate once at the issue-closure checkpoint. Tests do not require an API key and do not make model requests. The workshop suites additionally execute real trials (Chipmunk physics and agent JavaScript), so they measure behavior instead of trusting claims.
 
 ## Layout
 
@@ -175,6 +223,15 @@ dagi_core/web.py       loopback web sandbox and HTTP API
 dagi_core/static/      sandbox HTML and event-driven UI
 dagi_core/config.py    environment-based configuration
 dagi_core/cli.py       terminal interface
+game/world.py          physical world: embodiment, objects, mechanics
+game/rigid.py          Chipmunk rigid-body simulator
+game/living.py         feedback policies and sensors
+game/director.py       agent-owned JavaScript scene projects (quickjs)
+game/embodiment.py     unassisted muscles, joint limits and appendages
+game/mechanics.py      ropes, joints, springs, gears and materials
+game/workshop.py       skill panel, controls and editable scenery
+game/static/           canvas renderer, scene and workshop UI
+docs/examples/         example recordings (scripted fixtures, no live model)
 ```
 
 ## Provenance
