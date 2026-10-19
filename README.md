@@ -72,6 +72,7 @@ local events, no LLM round-trip.
 Scripted fixtures that prove the instrument executes; each link opens the raw
 recording:
 
+- [`hello-dagi-storyboard.gif`](docs/examples/hello-dagi-storyboard.gif) — v9 cinema storyboard: the first authored short beat by beat (source frames from the operator's verification capture; the raw MP4 was not shipped in the archive).
 - [`vector-character-fixture.webm`](docs/examples/vector-character-fixture.webm) — v7 vector character (source of the second loop above): muscle-surface anatomy, vector materials and layered scenery under shared light, physical arm movement, body/face camera framing. The torso is explicitly supported; a rendering fixture, not learned standing.
 - [`physical-workshop-fixture.mp4`](docs/examples/physical-workshop-fixture.mp4) — rope → wheel → weight, cart with motors, editable scenery, the «торс закреплён. Ходьба не обучена.» bench banner.
 - [`workshop-physical-test-bench.webm`](docs/examples/workshop-physical-test-bench.webm) — the physical test bench: unassisted start, joint force controls, mechanism measurements (the source of the loop above).
@@ -286,7 +287,7 @@ game/embodiment.py     unassisted muscles, joint limits and appendages
 game/mechanics.py      ropes, joints, springs, gears and materials
 game/workshop.py       skill panel, controls and editable scenery
 game/static/           canvas renderer, scene and workshop UI
-docs/examples/         example recordings and the inline debug-loop GIFs
+docs/examples/         example recordings and the inline loops/storyboard
 ```
 
 ## Provenance
@@ -295,8 +296,14 @@ The first `main` commit (`b14b0ba`) was a prototype based on `Mohamedhasbini/her
 
 ## Cinema v9 — authored animation in the vector world
 
-[Watch the first short](docs/examples/hello-dagi-cinema-v9.mp4) — local authored
-playback, no live model; the flip uses the labelled powered stage rig.
+![Dagi cinema v9 — storyboard of the first authored short, beat by beat](docs/examples/hello-dagi-storyboard.gif)
+
+*(Inline 22 s loop, drawn from the operator verification frames: wide → figure
+→ waist → wink → "Hello I'm Dagi" → material reveal → transform → portrait →
+assisted flip → landing → guard stance. Local authored playback, no live
+model; the flip uses the labelled powered stage rig, recorded as external
+support in fitness guards. The footage itself was not shipped inside the
+archive — these are the captured stills of each beat, not invented motion.)*
 
 **▷ Новый мультфильм** opens a separate short: camera shot progression, wink,
 smile, “Hello I'm Dagi”, looping material reveals, changing scenery, detailed
