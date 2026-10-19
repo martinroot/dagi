@@ -29,6 +29,7 @@ class RigidSimulator:
         self.contact_ids = set()
         self.ground_contacts = set()
         self.joint_contacts = set()
+        self.support_points=[];self.contact_impulse=0;self.external_contact=set()
         self.grip = None
         self._shape_objects = {}
         self._shape_joints = {}
@@ -148,6 +149,9 @@ class RigidSimulator:
         parts=[(body,{a,b}) for body,length,a,b in self.segments.values()]+[(head,{"head","neck"})]+[(body,{part["parent"],part["id"]}) for body,length,motor,part in self.appendages.values()]
         self.adjacent={frozenset((a,b)) for i,(a,nodes) in enumerate(parts) for b,other in parts[i+1:] if nodes&other}
         self.space.on_collision(None,None,pre_solve=self._filter_contact,post_solve=self._contact)
+        self.substeps=world["body_control"].get("solver_substeps",4)
+        from .dynamics import measure
+        measure(self,1/60)
 
     def _filter_contact(self,arbiter,space,data):
         a,b=arbiter.shapes
@@ -160,17 +164,23 @@ class RigidSimulator:
             if actor not in self._shape_joints:
                 continue
             name = self._shape_joints[actor]
+            if other not in self._shape_joints:
+                self.external_contact.add(name)
+                self.contact_impulse+=abs(arbiter.total_impulse.y)
             self.joint_contacts.add(name)
             if name.endswith("foot") or name.endswith("toe"):
                 # Contact must support the foot from below, not be a side wall.
                 p = (self.ends | self.extra_ends)[name][0].local_to_world((self.ends | self.extra_ends)[name][1])
                 if other.point_query((p.x, p.y + 5)).distance < 2:
                     self.ground_contacts.add(name)
+                    for point in arbiter.contact_point_set.points:self.support_points.append((point.point_a.x+point.point_b.x)/2)
             if other in self._shape_objects:
                 self.contact_ids.add(self._shape_objects[other])
 
-    def step(self, control):
+    def step(self, control, dt=None):
         from .world import OFFSETS, DT
+        dt=DT if dt is None else dt
+        self.substeps=self.world["body_control"].get("solver_substeps",4) if self.physical or self.world["ropes"] else 2
         w = self.world
         self.space.gravity = (0, w["gravity"])
         self.space.damping = w["body_control"]["air_damping"] if self.physical else clamp(w["material"]["damping"]**4,.5,.999)
@@ -258,17 +268,18 @@ class RigidSimulator:
         if pointer and grabbed:
             f = (pymunk.Vec2d(*pointer) - grabbed.position) * 65 - grabbed.velocity * 9
             grabbed.apply_force_at_world_point((clamp(f.x, -8000, 8000), clamp(f.y, -8000, 8000)), grabbed.position)
+        self.support_points=[];self.contact_impulse=0;self.external_contact=set()
         self.contact_ids.clear()
         self.ground_contacts.clear()
         self.joint_contacts.clear()
         self.mechanics.begin_step()
-        for _ in range(4 if self.physical or w["ropes"] else 2):
-            self.muscle_system.apply()
-            apply_rig(self,control.get("rig"),DT / (4 if self.physical or w["ropes"] else 2))
-            self.space.step(DT / (4 if self.physical or w["ropes"] else 2))
+        for _ in range(self.substeps):
+            self.muscle_system.apply(dt/self.substeps)
+            apply_rig(self,control.get("rig"),dt/self.substeps)
+            self.space.step(dt/self.substeps)
             self.mechanics.after_substep()
-        self.muscle_system.record(DT)
-        self.mechanics.record(DT)
+        self.muscle_system.record(dt)
+        self.mechanics.record(dt)
         for name, (body, local) in self.ends.items():
             p = body.local_to_world(local)
             velocity = body.velocity_at_world_point(p)
@@ -281,4 +292,6 @@ class RigidSimulator:
         w["appendage_frames"] = [[name,list(body.local_to_world((-length/2,0))),list(body.local_to_world((length/2,0)))] for name,(body,length,_,_) in self.appendages.items()]
         w["contacts"] = {"objects": sorted(self.contact_ids), "support": sorted(self.ground_contacts),
                          "joints": sorted(self.joint_contacts), "grip": self.grip[0] if self.grip else None}
-        w["tick"] += 1
+        from .dynamics import measure
+        measure(self,dt)
+        w["tick"] += 1 if dt==DT else dt/DT

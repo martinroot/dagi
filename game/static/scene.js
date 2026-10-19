@@ -151,10 +151,24 @@ async function captureVision(){
   const target=current.getContext("2d");target.drawImage(canvas,0,0,384,230);
   target.fillStyle="#172a3e";target.fillRect(0,0,384,18);target.fillStyle="#eff7ff";target.font="11px monospace";target.fillText(`v${version} · ${(displayed?.tick/60||0).toFixed(1)}s`,8,13);
   if(!visionFrames.length||performance.now()-visionLast>800){visionLast=performance.now();visionFrames.push(current);visionFrames=visionFrames.slice(-3);}
-  const preview=document.createElement("canvas");preview.width=384*visionFrames.length;preview.height=230;
-  visionFrames.forEach((frame,i)=>preview.getContext("2d").drawImage(frame,i*384,0));
-  const image=preview.toDataURL("image/jpeg",.5);
-  if(image.length<60000)await api(`game/sessions/${id}/vision`,"POST",{image,version}).catch(()=>{});
+  const preview=document.createElement("canvas");preview.width=960;preview.height=640;
+  const review=preview.getContext("2d");review.fillStyle='#edf0eb';review.fillRect(0,0,960,640);
+  review.drawImage(canvas,0,24,640,384);review.fillStyle='#25434a';review.font='12px monospace';review.fillText(`WORLD · v${version} · ${(displayed?.tick/60||0).toFixed(2)}s`,12,16);
+  // Re-render the same physical head as vectors; no upscaled tiny face crop.
+  const detail=document.createElement('canvas');detail.width=256;detail.height=288;
+  const close=detail.getContext('2d'),data=typeof mergeLook==='function'?mergeLook(sceneData,directionData(sceneData,displayed).look):sceneData;
+  close.fillStyle='#edf0eb';close.fillRect(0,0,256,288);
+  if(displayed?.nodes?.head&&data.character){
+   const h=displayed.nodes.head,scale=6;close.setTransform(scale,0,0,scale,128-h[0]*scale,155-h[1]*scale);
+   if(data.character.style==='sticks')artEllipse(close,...h,data.character.head_radius,data.character.head_radius,'#ffffff','#2e3740',1.7);
+   else anatomicalHead(close,data,displayed,(displayed.tick||0)/60*1000);
+  }
+  review.drawImage(detail,672,24);review.fillStyle='#25434a';review.fillText('DETAIL · SAME FRAME',672,16);
+  visionFrames.slice(-2).forEach((frame,i)=>review.drawImage(frame,672,330+i*155,256,153));
+  review.fillStyle='#25434a';review.fillText('RECENT PHYSICAL FRAMES',672,322);
+  const d=displayed?.dynamics;if(d){review.fillText(`COM ${d.com.map(v=>v.toFixed(1)).join(', ')} · ${d.airborne?'AIR':'CONTACT'}`,12,436);review.fillText(`MUSCLE ${(displayed.energy?.muscle_work||0).toFixed(2)} · STAGE ${(displayed.energy?.stage_work||0).toFixed(2)}`,12,456);}
+  let image='';for(const quality of [.7,.58,.45,.32]){image=preview.toDataURL('image/jpeg',quality);if(image.length<128000)break;}
+  if(image.length<128000&&id===sessionId)await api(`game/sessions/${id}/vision`,"POST",{image,version}).catch(()=>{});
 }
 $("vision-enabled").onchange=()=>{$("vision-enabled").checked?captureVision().catch(()=>{}):api(`game/sessions/${sessionId}/vision`,"POST",{enabled:false}).catch(()=>{});};
 setInterval(()=>{if(!document.hidden&&sessionId)captureVision().catch(()=>{});},2500);

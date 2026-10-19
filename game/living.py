@@ -34,6 +34,8 @@ def upgrade(world):
     from .learning import DEFAULT as LEARNING
     world.setdefault("learning",copy.deepcopy(LEARNING))
     world.setdefault("project_scope","")
+    world.setdefault("dynamics",{})
+    world.setdefault("muscle_state",{})
     from .workshop import DEFAULTS as WORKSHOP
     for key,value in WORKSHOP.items():world.setdefault(key,copy.deepcopy(value))
     for key, value in DEFAULTS.items():
@@ -160,7 +162,7 @@ def sensors(world):
             "grounded": obs["grounded"], "upright": obs["upright"],
             "goal": obs["goal"], "objects": copy.deepcopy(world["objects"]),
             "joints": {k: [p["x"], p["y"]] for k, p in world["nodes"].items()},
-            "articulation":copy.deepcopy(world["articulation"]),"mechanisms":copy.deepcopy(world["mechanics_state"]),"energy":copy.deepcopy(world["energy"]),"body_control":copy.deepcopy(world["body_control"]),"ropes":[{k:r[k] for k in ("id","tension","length","broken")} for r in world["rope_frames"]],
+            "body_model":{"bones":copy.deepcopy(world.get("character",{}).get("bones",{})) if world.get("character") else {},"gravity":world["gravity"]},"dynamics":copy.deepcopy(world.get("dynamics",{})),"muscles":copy.deepcopy(world.get("muscle_state",{})),"articulation":copy.deepcopy(world["articulation"]),"mechanisms":copy.deepcopy(world["mechanics_state"]),"energy":copy.deepcopy(world["energy"]),"body_control":copy.deepcopy(world["body_control"]),"ropes":[{k:r[k] for k in ("id","tension","length","broken")} for r in world["rope_frames"]],
             "contact_evidence":copy.deepcopy(world.get("contacts",{})),
             "support":{n:n in world.get("contacts",{}).get("support",[]) for n in world["nodes"]},
             "contacts": {k: (k in world.get("contacts",{}).get("joints",[]) if world.get("physics_engine")=="chipmunk" else _on_surface(world,p,8)) for k,p in world["nodes"].items()}}
@@ -295,7 +297,7 @@ def design(world, args):
     return {"kind": "design", "operation": operation}
 
 
-def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostics=True, observer=None, before_step=None):
+def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostics=True, observer=None, before_step=None, time_scale=1):
     from .world import DT, _step, frame, observation
     if simulator is None and world.get("physics_engine")=="chipmunk":
         from .rigid import RigidSimulator
@@ -306,12 +308,14 @@ def advance(world, frames=6, cancelled=lambda: False, simulator=None, diagnostic
         if cancelled():
             raise ValueError("physical trial cancelled")
         if before_step:before_step(world,simulator,i)
+        scale=world.get("direction",{}).get("playback",{}).get("speed",1) if time_scale is None else time_scale
+        world["step_dt"]=DT*scale
         output = command(world)
         if simulator is None and output.get("jump") and observation(world)["grounded"]:
             for p in world["nodes"].values():
                 p["py"] = p["y"] + world["controller"]["jump"] * DT
         if simulator is not None:
-            simulator.step(output)
+            simulator.step(output,dt=world["step_dt"])
         else:
             _step(world, output.get("drive", 0), control=output)
         if observer:observer(world)
@@ -422,7 +426,7 @@ def collide_body(obj, point, radius):
         obj["vy"] += ny * approach * (1 - share) * .2
 
 
-def trial(world, frames=None, cancelled=lambda: False, observer=None, before_step=None):
+def trial(world, frames=None, cancelled=lambda: False, observer=None, before_step=None, time_scale=1):
     frames = frames if frames is not None else (720 if world.get("active_project") else 240)
     clone = copy.deepcopy(world)
     clone["project_scope"] = uuid4().hex  # Offline trials never share mutable JS globals with the live world.

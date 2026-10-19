@@ -42,7 +42,7 @@ function workshopRefresh(data,body,now){
   const physical=data.body_control?.mode==='physical'||data.scene?.body_control?.mode==='physical';
   const mode=document.getElementById('physics-mode');if(mode){mode.textContent=data.body_control?.stage_rig?'СЦЕНА · СИЛОВАЯ СТРАХОВКА':physical?'МЫШЦЫ · БЕЗ АВТОБАЛАНСА':'ASSISTED · УДЕРЖАНИЕ ПОЗЫ';mode.dataset.mode=data.body_control?.stage_rig?'assisted':physical?'physical':'assisted';}
   const energy=body?.energy||data.scene?.energy||{};const work=document.getElementById('physical-work');if(work)work.textContent=`Мышцы ${(energy.muscle_work||0).toFixed(2)} Дж · моторы ${(energy.motor_work||0).toFixed(2)} Дж${data.body_control?.stage_rig?` · сцена ${(energy.stage_work||0).toFixed(2)} Дж`:""}`;
-  const films=document.getElementById('film-controls');if(films)films.hidden=!data.body_control?.stage_rig;
+  const films=document.getElementById('film-controls');if(films)films.hidden=!(data.body_control?.stage_rig||data.scene?.active_project==='Matter / Dagi');
   const ropes=body?.ropes||[],tension=document.getElementById('rope-load');if(tension)tension.textContent=ropes.map(r=>`${r.id}: ${(r.tension/100).toFixed(1)} Н${r.broken?' · ОБРЫВ':''}`).join(' · ');
   const control=document.getElementById('muscle-console');if(control)control.hidden=!physical;
   const select=document.getElementById('muscle-joint'),joints=Object.keys(body?.articulation||{});

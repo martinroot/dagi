@@ -1,6 +1,13 @@
 /* Resolution-independent landscape. All marks are paths, gradients or ellipses. */
 "use strict";
+function distantPlane(ctx){
+ if(typeof shot==='undefined'||!shot.zoom)return;
+ // A distant plane has its own optical scale; the physical floor keeps the true camera.
+ ctx.translate(shot.x,shot.y);ctx.scale(1/shot.zoom,1/shot.zoom);ctx.translate(-500,-300);
+ const z=1+(shot.zoom-1)*.12;ctx.translate(500,300);ctx.scale(z,z);ctx.translate(-500-(shot.x-500)*.08,-300-(shot.y-300)*.05);
+}
 function vectorLandscapeStatic(ctx,env,art){
+ ctx.save();distantPlane(ctx);
  const data={art},at=art.atmosphere||{},depth=at.depth??.7,haze=at.haze??.3;
  const sky=ctx.createLinearGradient(0,-300,0,540);sky.addColorStop(0,artTone(artMix(env.sky_top,'#203f58',.2),data));sky.addColorStop(.63,artTone(env.sky_top,data));sky.addColorStop(1,artTone(env.sky_bottom,data));ctx.fillStyle=sky;ctx.fillRect(-2000,-2000,5000,4600);
  const sun=env.sun,light=art.key;
@@ -35,6 +42,7 @@ function vectorLandscapeStatic(ctx,env,art){
    for(let j=0;j<7;j++){const yy=y-height+j*height*.12,w=spread*(.15+j*.13);ctx.beginPath();ctx.moveTo(x-w,yy+height*.13);ctx.quadraticCurveTo(x-w*.3,yy,x,yy-height*.03);ctx.quadraticCurveTo(x+w*.5,yy,x+w,yy+height*.13);ctx.strokeStyle=col;ctx.lineWidth=1.7;ctx.stroke();}
   }ctx.restore();
  }
+ ctx.restore();
  const ground=ctx.createLinearGradient(0,540,0,650);ground.addColorStop(0,artTone(artMix(env.ground_top,light.color,.15*light.intensity),data));ground.addColorStop(.05,artTone(env.ground_top,data));ground.addColorStop(1,artTone(env.ground_bottom,data));ctx.fillStyle=ground;ctx.fillRect(-2000,540,5000,2000);
  // Grouped river pebbles, fine soil and botanical marks stay vector at any zoom.
  for(let i=0;i<80;i++){
@@ -53,6 +61,7 @@ function vectorLandscapeStatic(ctx,env,art){
 
 function vectorLandscapeLive(ctx,env,art,t){
  const data={art},at=art.atmosphere||{},light=art.key;
+ ctx.save();distantPlane(ctx);
  const clouds=env.clouds||[];
  for(let i=0;i<clouds.length;i++){
   const cloud=clouds[i],wind=(at.wind||0)*t*2,x=((cloud.x+wind+160)%1320)-160;
@@ -61,6 +70,7 @@ function vectorLandscapeLive(ctx,env,art,t){
   const g=ctx.createLinearGradient(0,-35,0,25);g.addColorStop(0,artTone('#fff9e8',data)+'d0');g.addColorStop(.4,artTone(env.sky_bottom,data)+'b0');g.addColorStop(1,artTone(artMix(env.sky_top,'#657988',.2),data)+'50');ctx.fillStyle=g;ctx.fill();
   ctx.restore();
  }
+ ctx.restore();
  const vegetation=at.vegetation??.5;
  if(vegetation>.01){
   for(let group=0;group<3;group++){

@@ -606,7 +606,7 @@ class WebApp:
                             game.create(session_id,mode=mode)
                             if film:
                                 from game.cinema import premiere
-                                with game.mutation(session_id) as world:premiere(world)
+                                with game.mutation(session_id) as world:premiere(world,physical=True)
                         self._send_json(201, {"session_id": session_id})
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)/learning/evaluate", parsed.path):
                         from game.world import keys as game_keys

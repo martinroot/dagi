@@ -206,7 +206,7 @@ def command(world):
     ctx, main = _compiled(project, scope, budget)
     sensor=sensors(world)
     sensor.update(appendages=copy.deepcopy(world["appendage_frames"]), runtime={k:world["life"].get(k) for k in ("thinking","status")})
-    data={"t":(world["tick"]-world["project_started"])/60,"dt":1/60,"s":sensor,
+    data={"t":(world["tick"]-world["project_started"])/60,"dt":world.get("step_dt",1/60),"s":sensor,
           "state":world["project_state"],"params":project.get("params",{}),"event":world["event_queue"][0] if world["event_queue"] else None}
     try:
         output=json.loads(main(_encode(data)))
@@ -227,7 +227,7 @@ def command(world):
             finally:
                 world.pop("js_budget",None)
         raise ValueError("project runtime: "+str(exc)[:240]) from exc
-    if not isinstance(output,dict) or set(output)-{"control","state","camera","expression","draw","caption","beat","hide_body","look","speech"}:
+    if not isinstance(output,dict) or set(output)-{"control","state","camera","expression","draw","caption","beat","hide_body","look","speech","playback"}:
         raise ValueError("project returns control,state,camera,expression,draw,caption,beat,hide_body,look,speech")
     state=output.get("state",world["project_state"])
     if not isinstance(state,dict) or len(_encode(state))>8192:
@@ -254,6 +254,9 @@ def command(world):
     from .cinema import validate_look,validate_speech
     look=validate_look(world,output["look"]) if "look" in output else {}
     speech=validate_speech(output["speech"]) if "speech" in output else None
+    playback=output.get("playback",{})
+    if not isinstance(playback,dict) or set(playback)-{"speed"}:raise ValueError("playback uses {speed:.1..1}")
+    number(playback.get("speed",1),.1,1,"playback speed")
     draw=validate_draw(output.get("draw",[]))
     control=copy.deepcopy(output.get("control",{}))
     if not isinstance(control,dict):raise ValueError("control must be object")
@@ -266,7 +269,7 @@ def command(world):
     validate_control(world,control)
     world["project_state"]=copy.deepcopy(state)
     if world["event_queue"]:world["event_queue"].pop(0)
-    world["direction"]={"look":look,"speech":speech,"camera":camera,"draw":draw,"caption":output.get("caption",""),"beat":output.get("beat",""),"hide_body":output.get("hide_body",False)}
+    world["direction"]={"playback":playback,"look":look,"speech":speech,"camera":camera,"draw":draw,"caption":output.get("caption",""),"beat":output.get("beat",""),"hide_body":output.get("hide_body",False)}
     world["life"]["intent"]=output.get("caption") or output.get("beat", "")
     return control
 

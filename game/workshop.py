@@ -10,13 +10,13 @@ SUBSTANCES = {
     "stone": {"density":2600,"friction":.8,"restitution":.05,"color":"#8c9295"},
     "rubber": {"density":1100,"friction":1.4,"restitution":.55,"color":"#384651"},
 }
-BODY_CONTROL = {"mode":"assisted","muscle_scale":1,"air_damping":.999,"joint_damping":12,"self_collision":False,"stage_rig":False}
+BODY_CONTROL = {"mode":"assisted","muscle_scale":1,"air_damping":.999,"joint_damping":12,"self_collision":False,"stage_rig":False,"muscle_dynamics":False,"solver_substeps":4}
 ENVIRONMENT = {"sky_top":"#a9d4ee","sky_bottom":"#eff8ed","ground_top":"#9bb384","ground_bottom":"#597b67","sun":{"x":780,"y":105,"radius":38,"color":"#fff0ba"},"clouds":[],"mountains":[]}
 DEFAULTS = {"body_control":BODY_CONTROL,"substances":SUBSTANCES,"ropes":[],"rope_frames":[],"rope_state":{},"mechanics_state":{},"articulation":{},"energy":{"muscle_work":0,"motor_work":0,"power":0},"environment":None,"character":None,"art":None}
 
 HELP = {
- "body_control":"body_control {values:{mode:'physical'|'assisted',muscle_scale:.1..3,air_damping:.95..1,joint_damping:0..100,self_collision:bool,stage_rig?:bool}}. stage_rig defaults false; explicit powered cinematic support, see schema path=cinema. New browser sessions are physical. No automatic stance, drive, jump, pose or global limb springs in physical mode. Original assisted worlds retain their mode and are labelled. Physical feet include ankle/toe links.",
- "muscles":"control.muscles:{joint_name:effort -1..1}; equal/opposite internal torque, capped by strength. control.servos:{joint_name:{angle:relative radians,stiffness?:0..30000,damping?:0..3000,max_torque?:positive}} supplies an explicit relative PD muscle servo; no world-aligned posture. Use s.articulation[name]{angle,velocity,min,max,max_torque,torque}; shoulders=left/right_elbow, elbows=left/right_hand, hips=left/right_knee,knees=left/right_foot,ankles=left/right_toe,neck=head; appendage IDs are joints too. Learn balance/walking from physical feedback, never claim a predefined drive is learned walking.",
+ "body_control":"body_control {values:{mode:'physical'|'assisted',muscle_scale:.1..6,air_damping:.95..1,joint_damping:0..100,self_collision:bool,stage_rig?:bool,muscle_dynamics?:bool,solver_substeps?:2..12}}. stage_rig defaults false; explicit powered cinematic support, see schema path=cinema. New browser sessions are physical. No automatic stance, drive, jump, pose or global limb springs in physical mode. Original assisted worlds retain their mode and are labelled. Physical feet include ankle/toe links.",
+ "muscles":"control.muscles:{joint_name:effort -1..1}; equal/opposite internal torque, capped by strength. control.servos:{joint_name:{angle:relative radians,stiffness?:0..300000,damping?:0..10000,max_torque?:positive}} supplies an explicit relative PD muscle servo; no world-aligned posture. Use s.articulation[name]{angle,velocity,min,max,max_torque,torque}; shoulders=left/right_elbow, elbows=left/right_hand, hips=left/right_knee,knees=left/right_foot,ankles=left/right_toe,neck=head; appendage IDs are joints too. Learn balance/walking from physical feedback, never claim a predefined drive is learned walking.",
  "body":"body {body:{id,shape:'circle'|'rect'|'polygon',x,y,motion?:'dynamic'|'static',material?:name,mass?:.02..100,depth?:.005..1,friction?:0..2,restitution?:0..1,color?,angle?,radius OR width,height OR vertices:[[x,y],...]}}. Position is center, vertices local convex polygon. Material density computes mass from area/(100px per meter)^2*depth unless mass is explicit. Materials are illustrative configurable coefficients. Max64 objects.",
  "substance":"substance {name,values:{density:10..30000,friction:0..2,restitution:0..1,color:'#RRGGBB'}}. Define arbitrary named materials; edits update existing bodies referring to that material, preserving explicit overrides.",
  "joint":"joint {joint:{id,type:'pivot'|'pin'|'slide'|'spring'|'motor'|'gear'|'rotary_limit'|'rotary_spring'|'weld',a,b,anchor_a?:[x,y],anchor_b?:[x,y],anchor?:[world_x,world_y],length?,min?,max?,rate?,ratio?,phase?,stiffness?,damping?,max_force?,break_force?,collide?}}. Endpoints are body IDs, 'world', 'self:right_hand' or any skeleton/appendage joint name. Local anchors offset that endpoint; world anchors are world coordinates. Legacy pivot anchor is one shared world point. Slide is a distance limiter; gear couples rotations; weld fixes relative rotation. Motor max_force is torque, not linear force. Max96 joints.",
@@ -141,10 +141,14 @@ def edit(world,args):
     if operation=="body_control":
         keys(args,("operation","values"));values=args.get("values");keys(values,BODY_CONTROL)
         if "mode" in values and values["mode"] not in ("physical","assisted"):raise ValueError("mode is physical or assisted")
-        for k,lo,hi in (("muscle_scale",.1,3),("air_damping",.95,1),("joint_damping",0,100)):
+        for k,lo,hi in (("muscle_scale",.1,6),("air_damping",.95,1),("joint_damping",0,100)):
             if k in values:number(values[k],lo,hi,k)
         if "self_collision" in values and type(values["self_collision"]) is not bool:raise ValueError("self_collision is boolean")
         if "stage_rig" in values and type(values["stage_rig"]) is not bool:raise ValueError("stage_rig is boolean")
+        if "muscle_dynamics" in values and type(values["muscle_dynamics"]) is not bool:raise ValueError("muscle_dynamics is boolean")
+        if "solver_substeps" in values:
+            number(values["solver_substeps"],2,12,"solver_substeps")
+            if type(values["solver_substeps"]) is not int:raise ValueError("solver_substeps must be an integer")
         world["body_control"].update(values)
         if world["body_control"]["mode"]=="physical":add_feet(world)
     elif operation=="substance":

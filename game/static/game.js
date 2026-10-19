@@ -251,7 +251,7 @@ function draw(now) {
     ctx.fillStyle=sceneData?.theme?.background||"#e9eff5";ctx.fillRect(0,0,1000,600);
     if(typeof prepareDirection==="function")prepareDirection(now,sceneData,displayed);
     ctx.save();if(typeof applyDirectionCamera==="function")applyDirectionCamera(ctx);
-    paintScene(ctx,now,sceneData,displayed);if(typeof drawStudio==="function")drawStudio(ctx,now,sceneData,displayed);ctx.restore();
+    paintScene(ctx,now,sceneData,displayed);if(typeof paintDynamicsEvidence==="function")paintDynamicsEvidence(ctx,sceneData,displayed);if(typeof drawStudio==="function")drawStudio(ctx,now,sceneData,displayed);ctx.restore();
     if(typeof drawDirectionScreen==="function")drawDirectionScreen(ctx,now,sceneData,displayed);
     if(typeof workshopRefresh==="function")workshopRefresh(sceneData,displayed,now);
     requestAnimationFrame(draw);return;
@@ -338,7 +338,7 @@ function interpolatedFrame(now){
   const appendages=(b.appendages||[]).map(p=>{const old=oldParts.get(p[0])||p;return[p[0],...p.slice(1).map((v,i)=>v.map((x,j)=>old[i+1][j]+(x-old[i+1][j])*t))];});
   const oldRopes=new Map((a.ropes||[]).map(r=>[r.id,r]));
   const ropes=(b.ropes||[]).map(r=>{const prior=oldRopes.get(r.id);if(!prior||prior.segments.length!==r.segments.length)return r;return{...r,segments:r.segments.map((pair,i)=>pair.map((p,j)=>p.map((v,k)=>prior.segments[i][j][k]+(v-prior.segments[i][j][k])*t)))};});
-  return{tick:a.tick+(b.tick-a.tick)*t,nodes,objects,appendages,ropes,mechanisms:b.mechanisms,articulation:b.articulation,energy:b.energy,direction:b.direction,emotion:b.emotion};
+  return{tick:a.tick+(b.tick-a.tick)*t,nodes,objects,appendages,ropes,dynamics:b.dynamics,muscles:b.muscles,mechanisms:b.mechanisms,articulation:b.articulation,energy:b.energy,direction:b.direction,emotion:b.emotion};
 }
 async function lifeAction(action,name) {
   if(!sessionId)return;

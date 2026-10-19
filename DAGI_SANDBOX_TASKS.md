@@ -125,6 +125,12 @@ live model) and states that boundary explicitly. The layout section gained the
 workshop modules (`game/rigid.py`, `game/embodiment.py`, `game/mechanics.py`,
 `game/workshop.py`, `game/director.py`) and `docs/examples/`.
 
+## Dynamics v10 integration (2026-10-19, experimental)
+
+Operator archive `dagi-dynamics-v10-experimental-20261019.zip`, patch from their v9 `dbdf0c7`, 0.9.0. Only `game/bridge.py` conflicted (SOURCE_FILES for the new physics-film files vs mine); resolved to theirs plus my unknown-skill listing. Focused gate only (per operator): 77 pytest across dynamics/game/cinema/learning (3× stable), 13 Node UI. Full suite deferred.
+
+Honest state (operator's own words and measurements): continuous landing **fails**; on screen the source is marked as a failed attempt. What works: lift via internal joint drives, support hold before the jump, free flight without a rig, slow motion via the physical timestep, COM/contact/impulse measurement, gradual vector detailing and camera. Physics is simplified 2D capsules with bounded PD servo drives; self-collision and activation delay are off in this episode — not credible human biomechanics. New: `game/physical_film.py` + `game/dynamics.py`, examples `body-controller.js`/`matter.js`, `game/DYNAMICS.md`. The controller is authored, not trained; a single reconstructed trial passing did not repeat in the continuous run — sensitivity cause unresolved.
+
 ## Cinema v9 integration (2026-10-19)
 
 Operator archive `dagi-cinema-v9-20261019.zip` with `dagi-cinema-v9-with-fitness-from-f3b0ef9.patch` (base f3b0ef9, 0.8.0). Conflicts in 7 files: `pyproject.toml`, `uv.lock`, `dagi_core/web.py`, `game/static/index.html` (took theirs — adds the film toolbar, cinema.js allowlist, 0.8.0), `game/learning.py` + `tests/test_game_learning.py` (took theirs, re-applied the session-32 `_expr` field-naming and available-skills listing on top), `game/bridge.py` (took theirs + kept the improved unknown-skill message). Their stale task map merged additively — no records lost.
@@ -246,3 +252,12 @@ Verification for this local slice: 371 Python / 52 Node UI tests; Chromium
 film/replay/mobile, zero JS errors/overflow/external images/model calls; about
 60 Hz server physics; wheel and sdist built. Recorded preview is
 `docs/examples/hello-dagi-cinema-v9.mp4`.
+
+## Dynamics v10 — experimental local checkpoint (2026-10-19)
+
+User requested muscle-driven dynamics, white folded origin, measured free flight,
+slow motion, vector detail and intermediate-frame review. This slice removes
+stage assistance from the new film and adds substep feedback/physical evidence.
+Full continuous landing fails; the requested polished cartoon is not complete.
+376 Python and 52 Node UI checks pass; those checks do not certify landing or
+visual quality. Local ZIP handoff only; remote tracking/integration stays pending.

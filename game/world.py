@@ -74,7 +74,7 @@ def links(world):
 
 
 def frame(world, presentation=True):
-    result = {"tick": world["tick"], "ropes":copy.deepcopy(world["rope_frames"]),"articulation":copy.deepcopy(world["articulation"]),"mechanisms":copy.deepcopy(world["mechanics_state"]),"energy":copy.deepcopy(world["energy"]), "direction":copy.deepcopy(world.get("direction",{})), "emotion":copy.deepcopy(world.get("emotion",{})), "appendages":copy.deepcopy(world.get("appendage_frames",[])), "objects": [[o["id"],round(o["x"],2),round(o["y"],2),round(o.get("angle",0),3)] for o in world["objects"] if o["kind"]=="body"], "nodes": {name: [round(p["x"], 2), round(p["y"], 2)] for name, p in world["nodes"].items()}}
+    result = {"dynamics":copy.deepcopy(world.get("dynamics",{})),"muscles":copy.deepcopy(world.get("muscle_state",{})),"tick": world["tick"], "ropes":copy.deepcopy(world["rope_frames"]),"articulation":copy.deepcopy(world["articulation"]),"mechanisms":copy.deepcopy(world["mechanics_state"]),"energy":copy.deepcopy(world["energy"]), "direction":copy.deepcopy(world.get("direction",{})), "emotion":copy.deepcopy(world.get("emotion",{})), "appendages":copy.deepcopy(world.get("appendage_frames",[])), "objects": [[o["id"],round(o["x"],2),round(o["y"],2),round(o.get("angle",0),3)] for o in world["objects"] if o["kind"]=="body"], "nodes": {name: [round(p["x"], 2), round(p["y"], 2)] for name, p in world["nodes"].items()}}
     if not presentation:result.pop("direction",None)
     return result
 

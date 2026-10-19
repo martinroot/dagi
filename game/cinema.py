@@ -81,8 +81,11 @@ def apply_rig(sim, value, dt):
     sim.world['energy']['stage_work']=sim.world['energy'].get('stage_work',0)+work*dt/10000
 
 
-def premiere(world):
+def premiere(world,physical=False):
     """Install authored example only in a newly requested, dedicated session."""
+    if physical:
+        from .physical_film import install
+        return install(world)
     from .workshop import edit
     from .character import edit as character_edit, initialize
     from .director import define

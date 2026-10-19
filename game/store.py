@@ -57,7 +57,7 @@ def clock_tick(database, session_id):
         if slot.simulator is None and world.get("physics_engine") == "chipmunk":
             slot.simulator = RigidSimulator(world)
         try:
-            advance(world, 1, simulator=slot.simulator, diagnostics=False)
+            advance(world, 1, simulator=slot.simulator, diagnostics=False,time_scale=None)
             world["revision"] += 1
         except (ValueError, KeyError) as exc:
             world["policy_error"] = str(exc)[:240]

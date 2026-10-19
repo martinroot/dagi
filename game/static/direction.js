@@ -39,6 +39,7 @@ function drawDirectionScreen(ctx,now,data,body){
   if(bars>.3){ctx.fillStyle="#142238";ctx.fillRect(0,0,1000,bars);ctx.fillRect(0,600-bars,1000,bars);}
   drawProject(ctx,data,body,"screen","foreground");
   if(typeof paintSpeech==="function")paintSpeech(ctx,typeof mergeLook==="function"?mergeLook(data,directionData(data,body).look):data,body);
+  if(typeof paintPlaybackRate==="function")paintPlaybackRate(ctx,data,body);
   const caption=directionData(data,body).caption;
   if(caption){ctx.save();ctx.font="14px system-ui";const width=Math.min(920,ctx.measureText(caption).width+36),y=565-Math.max(0,bars-20);ctx.fillStyle="#172a3ee6";ctx.beginPath();ctx.roundRect((1000-width)/2,y-21,width,34,12);ctx.fill();ctx.textAlign="center";ctx.fillStyle="#f0f7ff";ctx.fillText(caption,500,y);ctx.restore();}
 }

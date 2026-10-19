@@ -110,7 +110,7 @@ def test_film_api_creates_separate_session_and_playback_does_not_initialize_prov
         status,_,raw=_request(base+'/api/game/sessions','POST',{'title':'Film','film':True})
         assert status==201;id=json.loads(raw)['session_id']
         with GameStore(config.database) as store:
-            w=store.get(id);assert w['active_project']=='Hello Dagi' and w['body_control']['stage_rig']
+            w=store.get(id);assert w['active_project']=='Matter / Dagi' and not w['body_control']['stage_rig']
         status,_,raw=_request(base+f'/api/game/sessions/{id}/life','POST',{'action':'play'})
         assert status==200
         _request(base+f'/api/game/sessions/{id}/life','POST',{'action':'pause'})

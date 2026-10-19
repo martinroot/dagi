@@ -64,8 +64,13 @@ function anatomicalHead(ctx,data,body,now){
  ctx.save();ctx.translate(...h);ctx.rotate(tilt);ctx.scale(s.head_width,1);ctx.translate(-h[0],-h[1]);
  if(typeof paintHair==="function")paintHair(ctx,h,r,data,true);
  const base=skeleton||c.style==='ceramic'?s.bone:s.skin;
- ctx.beginPath();ctx.moveTo(h[0]-r*.77,h[1]+r*.3);ctx.bezierCurveTo(h[0]-r*1.05,h[1]-r*.35,h[0]-r*.65,h[1]-r,h[0],h[1]-r);ctx.bezierCurveTo(h[0]+r*.9,h[1]-r,h[0]+r*1.04,h[1]-.2*r,h[0]+r*.77,h[1]+r*.3);ctx.lineTo(h[0]+r*.5,h[1]+r*.9);ctx.quadraticCurveTo(h[0],h[1]+r*1.02,h[0]-r*.5,h[1]+r*.9);ctx.closePath();
+ ctx.beginPath();ctx.moveTo(h[0]-r*.77,h[1]+r*.3);ctx.bezierCurveTo(h[0]-r*1.05,h[1]-r*.35,h[0]-r*.65,h[1]-r,h[0],h[1]-r);ctx.bezierCurveTo(h[0]+r*.9,h[1]-r,h[0]+r*1.04,h[1]-.2*r,h[0]+r*.77,h[1]+r*.3);ctx.bezierCurveTo(h[0]+r*.62,h[1]+r*.67,h[0]+r*.35,h[1]+r*.99,h[0],h[1]+r*.98);ctx.bezierCurveTo(h[0]-r*.35,h[1]+r*.99,h[0]-r*.62,h[1]+r*.67,h[0]-r*.77,h[1]+r*.3);ctx.closePath();
  ctx.fillStyle=artGradient(ctx,h[0]-r,h[1]-r,h[0]+r,h[1]+r,base,data,s.roughness,1,s.metallic);ctx.fill();ctx.strokeStyle=artMix(base,'#20343b',.5);ctx.lineWidth=s.outline*.75;ctx.stroke();
+ if(!skeleton&&c.features?.detail>.45){
+  ctx.save();ctx.clip();
+  const g=ctx.createRadialGradient(h[0]-r*.35,h[1]-r*.48,r*.04,h[0]-r*.25,h[1]-r*.35,r*.95);g.addColorStop(0,artTone(artMix(base,'#fff3df',.45),data)+'bb');g.addColorStop(1,base+'00');ctx.fillStyle=g;ctx.fillRect(h[0]-r,h[1]-r,r*2,r*2);
+  ctx.beginPath();ctx.moveTo(h[0]+r*.7,h[1]-r*.5);ctx.bezierCurveTo(h[0]+r*.9,h[1]+r*.2,h[0]+r*.55,h[1]+r*.8,h[0],h[1]+r*.98);ctx.bezierCurveTo(h[0]+r*.5,h[1]+r*1.02,h[0]+r*1.2,h[1]+r*.4,h[0]+r*.7,h[1]-r*.5);ctx.fillStyle=artTone(artMix(base,'#614c4f',.35),data)+'55';ctx.fill();ctx.restore();
+ }
  if(skeleton){
   for(const side of [-1,1])artEllipse(ctx,h[0]+side*r*.36,h[1]-r*.04,r*.27,r*.3,'#30403e');
   ctx.beginPath();ctx.moveTo(h[0],h[1]+r*.15);ctx.lineTo(h[0]-r*.13,h[1]+r*.4);ctx.lineTo(h[0]+r*.13,h[1]+r*.4);ctx.closePath();ctx.fillStyle='#5b655b';ctx.fill();
@@ -80,6 +85,13 @@ function anatomicalHead(ctx,data,body,now){
  ctx.restore();
 }
 function paintAnatomy(ctx,now,data,body){
+ if(data.character?.style==='sticks'){
+  const n=body.nodes;ctx.save();ctx.lineCap='round';ctx.lineJoin='round';
+  for(const [a,b] of data.links){if(a==='head')continue;sceneLine(ctx,[n[a],n[b]],'#2e3740',2.1);}
+  for(const [k,p] of Object.entries(n)){if(k==='head')continue;artEllipse(ctx,...p,1.7,1.7,'#fbfcfc','#2e3740',.65);}
+  artEllipse(ctx,...n.head,data.character.head_radius,data.character.head_radius,'#ffffff','#2e3740',1.7);ctx.restore();return true;
+ }
+
  if(data.art?.mode==="noir"&&data.character){const c=data.character,surface={...c.surface};for(const key of ["skin","muscle","bone","accent","eye"])surface[key]=artTone(surface[key],data);data={...data,character:{...c,surface}};}
  const c=data.character;if(!c)return false;const s=c.surface,n=body.nodes,skeleton=c.style==='skeleton',ink=c.style==='ink';
  const links=data.links.filter(([a,b])=>a!=='head'&&b!=='hip');
@@ -88,7 +100,7 @@ function paintAnatomy(ctx,now,data,body){
   if(skeleton){
    const paired=b.endsWith('hand')||b.endsWith('foot'),vx=n[b][0]-n[a][0],vy=n[b][1]-n[a][1],len=Math.hypot(vx,vy)||1;
    for(const side of paired?[-1,1]:[0]){const offset=paired?r*.3*side:0;artLimb(ctx,[n[a][0]-vy/len*offset,n[a][1]+vx/len*offset],[n[b][0]-vy/len*offset,n[b][1]+vx/len*offset],r*(paired?.28:.44),color,data,{bone:true,back});}
-  }else artLimb(ctx,n[a],n[b],r*(.75+s.muscles*.25),color,data,{back});
+  }else artLimb(ctx,n[a],n[b],r*(.72+s.muscles*.18+Math.min(1,body.muscles?.[b]?.activation||0)*.1),color,data,{back});
   const jr=r*(skeleton?.48:.6);artEllipse(ctx,...n[b],jr,jr,artGradient(ctx,n[b][0]-jr,n[b][1]-jr,n[b][0]+jr,n[b][1]+jr,color,data,s.roughness,1,s.metallic),artMix(color,'#243b41',.5),s.outline*.4);
   if(b.endsWith('hand')){
    const angle=Math.atan2(n[b][1]-n[a][1],n[b][0]-n[a][0]);ctx.save();ctx.translate(...n[b]);ctx.rotate(angle);if((body.emotion?.clench||0)>.4){artEllipse(ctx,r*.12,0,r*.85,r*.72,artGradient(ctx,0,-r,0,r,color,data,s.roughness),artMix(color,'#233f48',.4),.45);for(let i=0;i<3;i++)sceneLine(ctx,[[r*.1,(i-1)*r*.32],[r*.55,(i-1)*r*.32]],artMix(color,'#233f48',.3),.45);}else for(let i=0;i<4;i++){const y=(i-1.5)*r*.32;ctx.beginPath();ctx.moveTo(-r*.3,y);ctx.quadraticCurveTo(r*.6,y,r*.7+Math.sin(i+1)*r*.15,y+r*.15);ctx.strokeStyle=artMix(color,'#2a3b40',.15);ctx.lineWidth=skeleton?.75:1.1;ctx.stroke();}ctx.restore();

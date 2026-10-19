@@ -1,5 +1,10 @@
 # Dagi — a debugging instrument for an AI agent
 
+**v10 experimental checkpoint:** the new physical film disables the stage rig,
+adds per-substep muscle feedback, measured COM/contact/momentum and time-scaled
+slow motion. Continuous landing is still unstable; this is not a finished short
+or learned locomotion. See [game/DYNAMICS.md](game/DYNAMICS.md).
+
 **This repository is not a game.** The physical workshop is a *debugger for an
 agent*: a sandbox where every claim the agent makes becomes a measurement, every
 change is versioned and replayable, and every failure is isolated instead of
