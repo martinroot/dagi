@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .media_audio import FAL_QUEUE, MediaError, _await, _download, _queue, fal_key
+from .media_audio import FAL_QUEUE, MediaError, _await, _download, _queue, _queue_is_closed, fal_key
 
 VIDEO_MODEL = 'fal-ai/kling-video/v1/standard/image-to-video'
 VIDEO_TIMEOUT = 600
@@ -44,8 +44,14 @@ def generate_video(workspace: Path, source: str, prompt: str,
     if duration:
         payload['duration'] = str(duration)
     model = video_model()
-    status_url, response_url = _queue(model, payload)
-    answer = _await(status_url, response_url, VIDEO_TIMEOUT)
+    try:
+        status_url, response_url = _queue(model, payload)
+        answer = _await(status_url, response_url, VIDEO_TIMEOUT)
+    except MediaError as error:
+        if not _queue_is_closed(error):
+            raise
+        raise MediaError(
+            'the video provider is closed for now, it is topped up later') from error
     video = answer.get('video') or {}
     url = video.get('url') if isinstance(video, dict) else video
     if not url:

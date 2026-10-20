@@ -106,8 +106,28 @@ def _queue(model: str, payload: dict[str, Any]) -> tuple[str, str]:
     return status_url, response_url
 
 
+def _queue_is_closed(error: Exception) -> bool:
+    """Tell whether the queue is closed for lack of money.
+
+    The queue of fal closes the account when the money is gone. That is not
+    a broken call but a closed road, so the core takes the other one.
+    """
+    text = str(error).lower()
+    return 'exhausted balance' in text or 'user is locked' in text
+
+
+def _queue_is_open() -> bool:
+    """Tell whether the queue of fal can be used at all."""
+    return bool(fal_key())
+
+
 def music(workspace: Path, lyrics: str, prompt: str, filename: str = 'music.mp3') -> dict[str, Any]:
-    """Write a song with a voice over a production."""
+    """Write a song with a voice over a production.
+
+    The queue of fal is the only road for a song. When it is closed for
+    lack of money, the agent is told so instead of being given a broken
+    file.
+    """
     text = str(lyrics or '').strip()
     style = str(prompt or '').strip()
     if not text or not style:
@@ -119,8 +139,16 @@ def music(workspace: Path, lyrics: str, prompt: str, filename: str = 'music.mp3'
             '[intro]': '[Intro]', '[hook]': '[Hook]', '[inst]': '[Inst]', '[solo]': '[Solo]'}
     for old, new in tags.items():
         text = text.replace(old, new).replace(old.lower(), new)
-    status_url, response_url = _queue(MUSIC_MODEL, {'prompt': style[:2000], 'lyrics': text[:3500]})
-    answer = _await(status_url, response_url, MUSIC_TIMEOUT)
+    if not _queue_is_open():
+        raise MediaError('the music provider is closed for now, it is topped up later')
+    try:
+        status_url, response_url = _queue(MUSIC_MODEL, {'prompt': style[:2000], 'lyrics': text[:3500]})
+        answer = _await(status_url, response_url, MUSIC_TIMEOUT)
+    except MediaError as error:
+        if not _queue_is_closed(error):
+            raise
+        raise MediaError(
+            'the music provider is closed for now, it is topped up later') from error
     audio = answer.get('audio') or answer.get('audio_file')
     url = audio.get('url') if isinstance(audio, dict) else audio
     if not url:
@@ -134,12 +162,25 @@ def music(workspace: Path, lyrics: str, prompt: str, filename: str = 'music.mp3'
 
 
 def transcribe(workspace: Path, source: str, filename: str = 'transcript.txt') -> dict[str, Any]:
-    """Write the words of an audio file."""
+    """Write the words of an audio file.
+
+    The queue of fal is the first road. When it is closed for lack of
+    money, the provider of the core reads the file instead.
+    """
     path = Path(source)
     if not path.is_file():
         raise MediaError(f'not a file: {source!r}')
-    status_url, response_url = _queue_audio(TRANSCRIBE_MODEL, path)
-    answer = _await(status_url, response_url, MUSIC_TIMEOUT)
+    try:
+        status_url, response_url = _queue_audio(TRANSCRIBE_MODEL, path)
+        answer = _await(status_url, response_url, MUSIC_TIMEOUT)
+    except MediaError as error:
+        if _queue_is_open() and not _queue_is_closed(error):
+            raise
+        from .voice import VoiceError, transcribe as core_transcribe
+        try:
+            return core_transcribe(workspace, str(path), filename)
+        except VoiceError as other:
+            raise MediaError(str(other)) from other
     text = str(answer.get('text') or answer.get('transcription') or '').strip()
     if not text:
         raise MediaError('the provider returned no text')
@@ -151,15 +192,28 @@ def transcribe(workspace: Path, source: str, filename: str = 'transcript.txt') -
 
 
 def speak(workspace: Path, text: str, voice: str = '', filename: str = 'speech.mp3') -> dict[str, Any]:
-    """Read a text out loud."""
+    """Read a text out loud.
+
+    The queue of fal is the first road. When it is closed for lack of
+    money, the provider of the core speaks instead.
+    """
     words = str(text or '').strip()
     if not words:
         raise MediaError('there is no text to read')
     payload: dict[str, Any] = {'text': words}
     if voice:
         payload['voice'] = str(voice)
-    status_url, response_url = _queue(SPEECH_MODEL, payload)
-    answer = _await(status_url, response_url, MUSIC_TIMEOUT)
+    try:
+        status_url, response_url = _queue(SPEECH_MODEL, payload)
+        answer = _await(status_url, response_url, MUSIC_TIMEOUT)
+    except MediaError as error:
+        if _queue_is_open() and not _queue_is_closed(error):
+            raise
+        from .voice import VoiceError, speak as core_speak
+        try:
+            return core_speak(workspace, words, filename, voice or 'alloy')
+        except VoiceError as other:
+            raise MediaError(str(other)) from other
     audio = answer.get('audio') or {}
     url = audio.get('url') if isinstance(audio, dict) else audio
     if not url:
