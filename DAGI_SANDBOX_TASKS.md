@@ -240,6 +240,44 @@ Execution order from the proposal: prerequisites #34, #35, and #23 are closed. S
 5. Add delegation/command renderers with explicit policy and structured diagnostics (done in `b9f91e2` and `dd96a3d`).
 6. Keep generic fallback and make original tool text available for transformed renderers; metadata size/shape, legacy extension compatibility, and safe text rendering are covered (`084af5f`).
 
+## Core and chat slice (2026-10-20) — live chat truthfulness and cost provenance
+
+The game direction is folded away: the game surface stays deployed as-is, and
+the uncommitted route/approach work is parked on the side branch
+`wip/game-route-approach` (not merged, not deployed). Work moved back to the
+core and the chat.
+
+Live-data findings that drove this slice:
+
+- Every provider call in the live database (583 rows) had `cost_usd = NULL`
+  because no model price is configured, and the inspector showed a bare
+  `cost_usd: null` with no explanation.
+- The persisted transcript of session 37 stored three assistant messages with
+  empty content (tool-only rounds), which is correct persistence but was never
+  verified as a transcript-rendering rule.
+
+Delivered:
+
+- Live chat renders safe Markdown: bold, italic, inline code, fenced code
+  blocks with a working copy button, headings, lists, quotes and pipe tables.
+  Untrusted HTML is never turned into live nodes, `javascript:` links stay
+  literal text, and links are emitted with `rel="noopener noreferrer"`.
+- Message input is IME-aware: Enter sends, Shift+Enter inserts a newline, and
+  an IME composition Enter is left to the input method. A second submit while
+  a run is starting is ignored, and a failed request restores the draft.
+- Drafts are stored per session and survive session switches and failed
+  requests.
+- New chat content no longer force-scrolls a reader who is reading history;
+  the view only follows new content when the reader is already at the bottom.
+- The run inspector now explains cost provenance: `priced`, `partial`,
+  `unavailable` and `unknown` are distinct, the unpriced models are named, and
+  the fix points at `DAGI_MODEL_PRICES`. A missing cost is never shown as
+  zero.
+
+Verification: 17 Node UI checks for the chat and the cost inspector, 13 DOM
+checks against a real DOM implementation, 5 cost-status state tests, 1 API
+contract test; full agent gate: 394 pytest + 61 Node UI.
+
 ## Operational constraints
 
 ### Fast issue-level testing (DX)

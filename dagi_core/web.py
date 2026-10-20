@@ -780,11 +780,14 @@ class WebApp:
                         call for call in state.list_tool_calls(run["session_id"])
                         if call["run_id"] == run_id
                     ]
+                    prices = app.config.usage_policy.prices
                     self._send_json(200, {
                         "run": run,
                         "parent": state.get_run(run["parent_run_id"]) if run["parent_run_id"] else None,
                         "usage": state.usage_summary(run_id),
                         "budget_usage": state.usage_summary_for_budget(run_id),
+                        "cost_status": state.cost_status(run_id, prices),
+                        "budget_cost_status": state.cost_status(run_id, prices, group=True),
                         "provider_calls": provider_calls,
                         "requests": requests,
                         "tool_calls": tool_calls,

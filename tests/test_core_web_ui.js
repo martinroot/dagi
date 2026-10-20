@@ -4,13 +4,21 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 function fakeElement() {
+  const listeners = new Map();
   return {
     children: [], textContent: "", disabled: false, value: "", hidden: false, dataset: {},
-    scrollTop: 0, scrollHeight: 0, className: "",
+    scrollTop: 0, scrollHeight: 0, clientHeight: 0, className: "",
     classList: {toggle() {}},
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { this.children = children; },
     querySelector() { return {disabled: false}; },
+    addEventListener(type, handler) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(handler);
+    },
+    dispatch(type, event = {}) {
+      for (const handler of listeners.get(type) || []) handler(event);
+    },
   };
 }
 

@@ -788,6 +788,75 @@ class StateStore:
             "input_tokens": input_tokens, "output_tokens": output_tokens, "cost_usd": cost_usd,
         }
 
+    def cost_status(self, run_id: str, prices: dict[str, Any], *, group: bool = False) -> dict[str, Any]:
+        """Explain cost provenance for a run or its budget group.
+
+        `priced` means every model in scope has a configured price and a cost
+        was recorded; `partial` means some models are priced and others are
+        not; `unavailable` means no price is configured for a model that was
+        used; `unknown` means there is nothing to price yet. A missing cost is
+        never reported as zero.
+        """
+        from decimal import Decimal
+        if group:
+            run = self.get_run(run_id)
+            if run is None:
+                raise ValueError(f"run does not exist: {run_id}")
+            group_id = run["budget_group_id"] or run_id
+            rows = self._db.execute(
+                """SELECT pc.model, pc.usage_source, pc.cost_usd
+                   FROM provider_calls AS pc JOIN runs AS r ON r.run_id=pc.run_id
+                   WHERE r.budget_group_id=? ORDER BY pc.id""",
+                (group_id,),
+            ).fetchall()
+        else:
+            rows = self._db.execute(
+                "SELECT model, usage_source, cost_usd FROM provider_calls WHERE run_id=? ORDER BY id",
+                (run_id,),
+            ).fetchall()
+        known_prices = set(prices or {})
+        used_models = sorted({row["model"] for row in rows if row["model"]})
+        unpriced = [model for model in used_models if model not in known_prices]
+        priced = [model for model in used_models if model in known_prices]
+        costs = [row["cost_usd"] for row in rows if row["cost_usd"] is not None]
+        if not rows:
+            status = "unknown"
+            cost_usd = None
+        elif not unpriced and len(costs) == len(rows):
+            status = "priced"
+            cost_usd = sum((Decimal(value) for value in costs), Decimal("0"))
+        elif unpriced and costs:
+            status = "partial"
+            cost_usd = None
+        else:
+            status = "unavailable"
+            cost_usd = None
+        if status == "priced":
+            explanation = f"All {len(used_models)} model(s) in scope have a configured price."
+        elif status == "partial":
+            explanation = (
+                "Cost is unavailable because no price is configured for: "
+                + ", ".join(unpriced)
+                + ". Set DAGI_MODEL_PRICES in the server environment to price these models."
+            )
+        elif status == "unavailable":
+            explanation = (
+                "Cost is unavailable because no price is configured for: "
+                + ", ".join(unpriced)
+                + ". Set DAGI_MODEL_PRICES in the server environment to price these models; "
+                "a USD budget cannot be enforced for an unpriced model."
+            )
+        else:
+            explanation = "No provider calls were recorded for this scope yet, so there is no cost to report."
+        return {
+            "status": status,
+            "cost_usd": str(cost_usd) if cost_usd is not None else None,
+            "priced_models": priced,
+            "unpriced_models": unpriced,
+            "explanation": explanation,
+            "provider_calls": len(rows),
+        }
+
     def save_tool_round(
         self,
         session_id: int,

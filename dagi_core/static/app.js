@@ -7,6 +7,8 @@ let streamingAssistantBody = null;
 let sessionGeneration = 0;
 let inspectionGeneration = 0;
 const sessionUiStates = new Map();
+const sessionDrafts = new Map();
+let submitting = false;
 
 function getSessionUiState(sessionId) {
   const key = String(sessionId);
@@ -487,6 +489,41 @@ async function refreshRuntimeStatus() {
   }
 }
 
+function costStatusText(status) {
+  if (!status || typeof status !== "object") return "Cost status unavailable.";
+  const explanation = typeof status.explanation === "string" ? status.explanation : "";
+  if (status.status === "priced") {
+    return `Cost ${status.cost_usd} USD — every model in scope has a configured price.`;
+  }
+  return explanation || "Cost unavailable.";
+}
+
+function renderCostStatus(runStatus, groupStatus) {
+  const root = $("cost-status");
+  if (!root) return;
+  root.replaceChildren();
+  const run = document.createElement("div");
+  run.className = "cost-status-row";
+  run.dataset.scope = "run";
+  const runName = document.createElement("strong");
+  runName.textContent = "Run cost";
+  const runText = document.createElement("span");
+  runText.textContent = costStatusText(runStatus);
+  run.append(runName, runText);
+  root.append(run);
+  if (groupStatus && runStatus && groupStatus.status !== runStatus.status) {
+    const group = document.createElement("div");
+    group.className = "cost-status-row";
+    group.dataset.scope = "budget-group";
+    const groupName = document.createElement("strong");
+    groupName.textContent = "Shared tree cost";
+    const groupText = document.createElement("span");
+    groupText.textContent = costStatusText(groupStatus);
+    group.append(groupName, groupText);
+    root.append(group);
+  }
+}
+
 function resetRunInspector() {
   renderRuntimeStatus(null);
   $("run-status").textContent = "Select a saved run or start one.";
@@ -494,6 +531,7 @@ function resetRunInspector() {
   $("tools").textContent = "[]";
   $("usage").textContent = "{}";
   $("budget-usage").textContent = "{}";
+  $("cost-status").textContent = "Select a saved run or start one.";
   $("children").textContent = "No parent or child runs.";
 }
 
@@ -570,6 +608,250 @@ $("logout").onclick = async () => {
   }
 };
 
+const SAFE_LINK_PATTERN = /^(https?):\/\//i;
+
+function looksLikeMarkdown(text) {
+  const value = String(text || "");
+  return /\*\*[^*\n]+\*\*/.test(value)
+    || /__[^_\n]+__/.test(value)
+    || /~~[^~\n]+~~/.test(value)
+    || /`[^`\n]+`/.test(value)
+    || /\[[^\]\n]+\]\([^)\n]*\)/.test(value)
+    || /^#{1,6}\s+\S/m.test(value)
+    || /^\s*[-*+]\s+\S/m.test(value)
+    || /^\s*\d+\.\s+\S/m.test(value)
+    || /^\s*>\s?\S/m.test(value)
+    || /^\s*```/m.test(value)
+    || /^\s*\|.*\|\s*$/m.test(value);
+}
+
+function textNode(text) {
+  if (typeof document.createTextNode === "function") return document.createTextNode(text);
+  const fallback = document.createElement("span");
+  fallback.textContent = text;
+  return fallback;
+}
+
+function elementNode(tag, text) {
+  const node = document.createElement(tag);
+  if (text !== undefined && text !== null) node.textContent = text;
+  return node;
+}
+
+function anchorNode(label, href) {
+  const node = document.createElement("a");
+  node.textContent = label;
+  node.setAttribute("href", href);
+  node.setAttribute("rel", "noopener noreferrer");
+  node.setAttribute("target", "_blank");
+  return node;
+}
+
+function inlineNodes(text) {
+  const nodes = [];
+  const pattern = /(`[^`\n]+`)|(\[[^\]\n]+\]\([^)\n]*\))|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(~~[^~\n]+~~)|(\*[^*\n]+\*)|(_[^_\n]+_)/g;
+  let cursor = 0;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > cursor) nodes.push(textNode(text.slice(cursor, match.index)));
+    const token = match[0];
+    if (token.startsWith("`")) {
+      nodes.push(elementNode("code", token.slice(1, -1)));
+    } else if (token.startsWith("[")) {
+      const parsed = /^\[([^\]\n]+)\]\(([^)\n]*)\)$/.exec(token);
+      const href = parsed ? parsed[2].trim() : "";
+      if (parsed && SAFE_LINK_PATTERN.test(href)) nodes.push(anchorNode(parsed[1], href));
+      else nodes.push(textNode(token));
+    } else if (token.startsWith("**") || token.startsWith("__")) {
+      nodes.push(elementNode("strong", token.slice(2, -2)));
+    } else if (token.startsWith("~~")) {
+      nodes.push(elementNode("del", token.slice(2, -2)));
+    } else {
+      nodes.push(elementNode("em", token.slice(1, -1)));
+    }
+    cursor = match.index + token.length;
+  }
+  if (cursor < text.length) nodes.push(textNode(text.slice(cursor)));
+  return nodes;
+}
+
+function splitTableRow(line) {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+function codeBlock(code, language) {
+  const pre = document.createElement("pre");
+  const codeNode = document.createElement("code");
+  codeNode.textContent = code;
+  pre.append(codeNode);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Copy";
+  button.title = language ? `Copy ${language} block` : "Copy block";
+  button.onclick = () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    if (typeof navigator.clipboard.writeText === "function") navigator.clipboard.writeText(code);
+  };
+  return [pre, button];
+}
+
+function tableBlock(header, rows) {
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const cell of header) {
+    const th = document.createElement("th");
+    th.textContent = cell;
+    headRow.append(th);
+  }
+  head.append(headRow);
+  const body = document.createElement("tbody");
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    for (const cell of row) {
+      const td = document.createElement("td");
+      td.textContent = cell;
+      tr.append(td);
+    }
+    body.append(tr);
+  }
+  table.append(head, body);
+  return [table];
+}
+
+function listNode(tag, items) {
+  const list = document.createElement(tag);
+  for (const item of items) {
+    const li = document.createElement("li");
+    for (const node of inlineNodes(item)) li.append(node);
+    list.append(li);
+  }
+  return [list];
+}
+
+function blockNode(tag, parts) {
+  const node = document.createElement(tag);
+  for (const part of parts) {
+    if (typeof part === "string") node.append(textNode(part));
+    else node.append(part);
+  }
+  return [node];
+}
+
+function markdownBlocks(text) {
+  const lines = String(text).split(/\r?\n/);
+  const blocks = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (/^\s*```/.test(line)) {
+      const language = (/^\s*```(\w*)/.exec(line) || [])[1] || "";
+      const code = [];
+      index += 1;
+      while (index < lines.length && !/^\s*```/.test(lines[index])) {
+        code.push(lines[index]);
+        index += 1;
+      }
+      index += 1;
+      blocks.push(...codeBlock(code.join("\n"), language));
+      continue;
+    }
+    if (/^\s*\|.*\|\s*$/.test(line) && index + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[index + 1])) {
+      const header = splitTableRow(line);
+      index += 2;
+      const rows = [];
+      while (index < lines.length && /^\s*\|.*\|\s*$/.test(lines[index])) {
+        rows.push(splitTableRow(lines[index]));
+        index += 1;
+      }
+      blocks.push(...tableBlock(header, rows));
+      continue;
+    }
+    const heading = /^\s*(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) {
+      const node = document.createElement(`h${heading[1].length}`);
+      for (const child of inlineNodes(heading[2])) node.append(child);
+      blocks.push(node);
+      index += 1;
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      const parts = [];
+      while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+        parts.push((/^\s*>\s?(.*)$/.exec(lines[index]) || [])[1] || "");
+        index += 1;
+      }
+      blocks.push(...blockNode("blockquote", parts.map((part) => inlineNodes(part))));
+      continue;
+    }
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items = [];
+      while (index < lines.length) {
+        const match = /^\s*[-*+]\s+(.*)$/.exec(lines[index]);
+        if (!match) break;
+        items.push(match[1]);
+        index += 1;
+      }
+      blocks.push(...listNode("ul", items));
+      continue;
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items = [];
+      while (index < lines.length) {
+        const match = /^\s*\d+\.\s+(.*)$/.exec(lines[index]);
+        if (!match) break;
+        items.push(match[1]);
+        index += 1;
+      }
+      blocks.push(...listNode("ol", items));
+      continue;
+    }
+    const paragraph = [];
+    while (index < lines.length) {
+      const current = lines[index];
+      if (/^\s*```/.test(current)
+        || /^\s*#{1,6}\s+/.test(current)
+        || /^\s*[-*+]\s+/.test(current)
+        || /^\s*\d+\.\s+/.test(current)
+        || /^\s*>\s?/.test(current)
+        || /^\s*\|.*\|\s*$/.test(current)) break;
+      paragraph.push(current);
+      index += 1;
+    }
+    if (paragraph.length) {
+      const node = document.createElement("p");
+      for (const child of inlineNodes(paragraph.join("\n"))) node.append(child);
+      blocks.push(node);
+    } else index += 1;
+  }
+  return blocks;
+}
+
+function renderAssistantBody(body, text) {
+  const value = String(text || "");
+  if (!looksLikeMarkdown(value)) {
+    body.replaceChildren();
+    body.textContent = value;
+    return;
+  }
+  body.replaceChildren();
+  for (const node of markdownBlocks(value)) body.append(node);
+}
+
+function isChatNearBottom() {
+  const chat = $("chat");
+  if (!chat) return true;
+  const height = chat.clientHeight || 0;
+  if (!height) return true;
+  return chat.scrollHeight - chat.scrollTop - height < 40;
+}
+
+function scrollChatToBottom(force = false) {
+  const chat = $("chat");
+  if (!chat) return;
+  if (force || isChatNearBottom()) chat.scrollTop = chat.scrollHeight;
+}
+
 function addChatLine(role, text, extra = "", messageId = null) {
   const item = document.createElement("div");
   item.className = `message ${role}`;
@@ -579,10 +861,11 @@ function addChatLine(role, text, extra = "", messageId = null) {
   const label = document.createElement("strong");
   label.textContent = extra || role;
   const body = document.createElement("div");
-  body.textContent = text || "";
+  if (role === "assistant") renderAssistantBody(body, text || "");
+  else body.textContent = text || "";
   item.append(label, body);
   $("chat").append(item);
-  $("chat").scrollTop = $("chat").scrollHeight;
+  scrollChatToBottom();
   return body;
 }
 
@@ -591,9 +874,12 @@ function resetAssistantStream() {
 }
 
 function appendAssistantText(text) {
-  if (!streamingAssistantBody) streamingAssistantBody = addChatLine("assistant", "", "Assistant");
+  if (!streamingAssistantBody) {
+    streamingAssistantBody = addChatLine("assistant", "", "Assistant");
+    streamingAssistantBody.textContent = "";
+  }
   streamingAssistantBody.textContent += text || "";
-  $("chat").scrollTop = $("chat").scrollHeight;
+  scrollChatToBottom();
 }
 
 function addEvent(event, scope = null) {
@@ -667,16 +953,30 @@ function renderRuns(runs) {
   }
 }
 
+function storeDraft(value) {
+  if (selectedSession === null) return;
+  const text = String(value || "");
+  if (text) sessionDrafts.set(String(selectedSession), text);
+  else sessionDrafts.delete(String(selectedSession));
+}
+
+function loadDraft(sessionId) {
+  return sessionDrafts.get(String(sessionId)) || "";
+}
+
 async function selectSession(sessionId) {
   const generation = ++sessionGeneration;
   inspectionGeneration += 1;
   detachRunStream();
+  const previousSession = selectedSession;
+  if (previousSession !== null) storeDraft($("message")?.value || "");
   selectedSession = sessionId;
   const data = await api(`/api/sessions/${sessionId}`);
   if (!isCurrentSession(sessionId, generation)) return;
   applySessionSnapshot(sessionId, data);
   renderRuntimeStatus(data.runtime_status);
   $("session-title").textContent = `${data.session.title || "Untitled session"} · #${sessionId}`;
+  $("message").value = loadDraft(sessionId);
   $("chat").replaceChildren();
   for (const message of data.messages) {
     if (message.tool_calls) {
@@ -784,6 +1084,7 @@ async function inspectRun(runId, generation = sessionGeneration, sessionId = sel
   $("tools").textContent = JSON.stringify(detail.tool_calls, null, 2);
   $("usage").textContent = JSON.stringify(detail.usage, null, 2);
   $("budget-usage").textContent = JSON.stringify(detail.budget_usage, null, 2);
+  renderCostStatus(detail.cost_status, detail.budget_cost_status);
   const hierarchy = $("children");
   hierarchy.replaceChildren();
   const related = [
@@ -805,17 +1106,19 @@ $("new-session").onclick = async () => {
   await selectSession(session.session_id);
 };
 
-$("chat-form").onsubmit = async (event) => {
-  event.preventDefault();
-  if (selectedSession === null || activeRunId !== null) return;
+async function submitChatMessage(event) {
+  if (event && typeof event.preventDefault === "function") event.preventDefault();
+  if (selectedSession === null || activeRunId !== null || submitting) return;
   const sessionId = selectedSession;
   const generation = sessionGeneration;
   const input = $("message");
   const message = input.value.trim();
   if (!message) return;
+  submitting = true;
   resetAssistantStream();
   addChatLine("user", message, "You");
   input.value = "";
+  storeDraft("");
   try {
     const started = await api(`/api/sessions/${sessionId}/runs`, {
       method: "POST", body: JSON.stringify({message}),
@@ -824,9 +1127,29 @@ $("chat-form").onsubmit = async (event) => {
     connectRun(started.run_id, 0, sessionId, generation);
     await refreshSessions(generation);
   } catch (error) {
-    if (isCurrentSession(sessionId, generation)) addChatLine("error", String(error), "Request error");
+    if (isCurrentSession(sessionId, generation)) {
+      addChatLine("error", String(error), "Request error");
+      input.value = message;
+      storeDraft(message);
+    }
+  } finally {
+    submitting = false;
   }
-};
+}
+
+$("chat-form").onsubmit = submitChatMessage;
+
+$("message").addEventListener("input", (event) => {
+  storeDraft(event.target?.value ?? $("message").value);
+});
+
+$("message").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  if (event.shiftKey) return;
+  if (event.isComposing || event.keyCode === 229) return;
+  event.preventDefault();
+  submitChatMessage();
+});
 
 $("refresh-runtime").onclick = refreshRuntimeStatus;
 

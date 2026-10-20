@@ -270,6 +270,34 @@ def test_web_run_inspector_exposes_provider_error_and_unavailable_usage(tmp_path
         _stop(server, thread)
 
 
+def test_run_inspector_explains_unavailable_cost_and_names_the_unpriced_model(tmp_path):
+    class UnpricedProvider:
+        model = "main-model"
+
+        def stream(self, *_args):
+            yield StreamEvent(kind="text", text="hello")
+            yield StreamEvent(kind="finish", finish_reason="stop")
+
+    app = WebApp(_config(tmp_path), provider_factory=lambda *_args: UnpricedProvider())
+    server, thread, base = _start(app)
+    try:
+        _, _, created = _request(f"{base}/api/sessions", "POST", {"title": "cost test"})
+        session_id = json.loads(created)["session_id"]
+        _, _, started = _request(
+            f"{base}/api/sessions/{session_id}/runs", "POST", {"message": "hello"}
+        )
+        run_id = json.loads(started)["run_id"]
+        detail = _wait_for_status(base, run_id, "completed")
+
+        assert detail["cost_status"]["status"] in {"unavailable", "partial"}
+        assert detail["cost_status"]["unpriced_models"] == ["main-model"]
+        assert "DAGI_MODEL_PRICES" in detail["cost_status"]["explanation"]
+        assert detail["cost_status"]["cost_usd"] is None
+        assert detail["budget_cost_status"]["unpriced_models"] == ["main-model"]
+    finally:
+        _stop(server, thread)
+
+
 def test_web_inspector_exposes_parent_child_runs_and_child_model(tmp_path):
     from copy import deepcopy
 
