@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     title TEXT,
     created_at TEXT NOT NULL,
     parent_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
-    workspace TEXT NOT NULL DEFAULT ''
+    workspace TEXT NOT NULL DEFAULT '',
+    profile_json TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS session_templates (
     id TEXT PRIMARY KEY,
@@ -303,6 +304,8 @@ class StateStore:
             self._db.execute("ALTER TABLE sessions ADD COLUMN workspace TEXT NOT NULL DEFAULT ''")
         if "brief" not in session_columns:
             self._db.execute("ALTER TABLE sessions ADD COLUMN brief TEXT NOT NULL DEFAULT ''")
+        if "profile_json" not in session_columns:
+            self._db.execute("ALTER TABLE sessions ADD COLUMN profile_json TEXT NOT NULL DEFAULT ''")
         self._db.execute("CREATE INDEX IF NOT EXISTS sessions_parent_id ON sessions(parent_id)")
         run_columns = {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}
         if "agent_id" not in run_columns:
@@ -351,11 +354,25 @@ class StateStore:
         parent_id: int | None = None,
         workspace: str = "",
         brief: str = "",
+        profile: dict[str, Any] | None = None,
     ) -> int:
         if title is not None and not isinstance(title, str):
             raise ValueError("session title must be text")
         if not isinstance(brief, str) or len(brief) > 8000:
             raise ValueError("session brief must be text of at most 8000 characters")
+        profile_json = ""
+        if profile is not None:
+            if not isinstance(profile, dict):
+                raise ValueError("session profile must be a mapping")
+            system_prompt = profile.get("system_prompt") or ""
+            if not isinstance(system_prompt, str) or len(system_prompt) > 16000:
+                raise ValueError("session profile system prompt must be text of at most 16000 characters")
+            tools = profile.get("tools") or []
+            if not isinstance(tools, list) or any(not isinstance(item, str) for item in tools):
+                raise ValueError("session profile tools must be a list of names")
+            profile_json = json.dumps(
+                {"system_prompt": system_prompt, "tools": list(tools)}, ensure_ascii=False
+            )
         if parent_id is not None:
             if isinstance(parent_id, bool) or not isinstance(parent_id, int) or self.get_session(parent_id) is None:
                 raise ValueError("parent session does not exist")
@@ -365,8 +382,9 @@ class StateStore:
         if workspace_path.is_absolute() or ".." in workspace_path.parts:
             raise ValueError("session workspace must stay inside the configured root")
         cursor = self._db.execute(
-            "INSERT INTO sessions(title, created_at, parent_id, workspace, brief) VALUES(?, ?, ?, ?, ?)",
-            (title, _now(), parent_id, workspace, brief),
+            "INSERT INTO sessions(title, created_at, parent_id, workspace, brief, profile_json)"
+            " VALUES(?, ?, ?, ?, ?, ?)",
+            (title, _now(), parent_id, workspace, brief, profile_json),
         )
         self._db.commit()
         return int(cursor.lastrowid)
@@ -1019,6 +1037,10 @@ class StateStore:
             f"{template['name']} · clone",
             brief=template["brief"],
             workspace=f"sessions/{uuid.uuid4().hex}",
+            profile={
+                "system_prompt": template["brief"],
+                "tools": list(template["tools"]),
+            },
         )
         return {
             "session_id": session_id,
@@ -1248,9 +1270,25 @@ class StateStore:
 
     def get_session(self, session_id: int) -> dict[str, Any] | None:
         row = self._db.execute(
-            "SELECT id, title, created_at, parent_id, workspace, brief FROM sessions WHERE id=?", (session_id,)
+            "SELECT id, title, created_at, parent_id, workspace, brief, profile_json"
+            " FROM sessions WHERE id=?", (session_id,)
         ).fetchone()
-        return dict(row) if row is not None else None
+        if row is None:
+            return None
+        session = dict(row)
+        profile: dict[str, Any] = {}
+        raw = session.pop("profile_json", "") or ""
+        if raw:
+            try:
+                loaded = json.loads(raw)
+            except ValueError:
+                loaded = {}
+            if isinstance(loaded, dict):
+                profile = loaded
+        session["profile"] = profile
+        session["system_prompt"] = str(profile.get("system_prompt") or "")
+        session["profile_tools"] = [str(item) for item in (profile.get("tools") or [])]
+        return session
 
     def session_snapshot(self, session_id: int) -> dict[str, Any] | None:
         """Read session history, run state, tools, goals, and event cursors atomically."""

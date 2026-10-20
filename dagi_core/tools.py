@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from .state import StateStore
 
@@ -197,6 +197,21 @@ class ToolRegistry:
         if context.session_id != self.session_id:
             raise ValueError("tool execution context must use the registry session")
         self._execution_context = context
+
+    def restrict_to(self, names: Iterable[str] | None) -> set[str]:
+        """Offer the model only the named tools.
+
+        Unknown names are ignored. When the resulting set is empty the
+        restriction is dropped, so a profile that lists nothing usable leaves
+        the model with the full registry instead of no tools at all.
+        """
+        if names is None:
+            self.model_tool_names = None
+            return {name for name in self._tools}
+        known = set(self._tools)
+        selected = {str(name) for name in names} & known
+        self.model_tool_names = selected if selected else None
+        return selected if selected else known
 
     def specs(self) -> list[Tool]:
         return [tool for name,tool in self._tools.items() if self.model_tool_names is None or name in self.model_tool_names]

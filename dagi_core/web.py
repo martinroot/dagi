@@ -1157,6 +1157,10 @@ class WebApp:
                     )
                 ) if self.config.web_enable_shell else None,
             )
+            profile_prompt = str(session.get("system_prompt") or "")
+            profile_tools = [str(item) for item in (session.get("profile_tools") or [])]
+            if profile_tools:
+                tools.restrict_to(profile_tools)
             delegation = DelegationManager(
                 state,
                 self.config.workspace,
@@ -1185,7 +1189,7 @@ class WebApp:
                 tools,
                 state,
                 session_id,
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=profile_prompt or SYSTEM_PROMPT,
                 usage_policy=self.config.usage_policy,
                 context_builder=context,
                 agent_id=self.agent_id,
