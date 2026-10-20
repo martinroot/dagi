@@ -66,7 +66,7 @@ requires fresh full-rollout validation. Repeated manual jumps are experimental.
 
 ## Source and launch
 
-`physical_film.py` installs geometry, solver settings and editable project params.
+The old physical film preset was removed. The generic solver remains for saved projects.
 `examples/body-controller.js` provides internal feedback; `examples/matter.js`
 provides timing, look, camera, expressions, material events and gates.
 `dynamics.py` measures physics. Read these through the source allowlist.

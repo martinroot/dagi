@@ -176,7 +176,7 @@ def test_project_events_and_controls_are_local_and_version_bound(tmp_path):
         time.sleep(.1)
         with GameStore(app.config.database) as game:assert game.get(sid)['project_state']['last']=='hello'
         with closing(StateStore(app.config.database)) as state:assert state.list_runs(sid)==[]
-        assert _request(base,'/game/direction.js')[0]==200
+        assert _request(base,'/game/agent-renderer.js')[0]==200
     finally:_stop(server,thread)
 
 

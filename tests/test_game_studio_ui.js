@@ -45,8 +45,8 @@ test("development control starts the bounded living mechanism without prescribin
   await ui.elements.get("improve-self").onclick();
   assert.equal(action,"start");
   const html=fs.readFileSync(new URL("../game/static/index.html",import.meta.url),"utf8");
-  assert.match(html,/id="life-pause"/);
-  assert.match(html,/id="life-iterations"/);
+  assert.match(html,/id="stop-motion"/);
+  assert.match(html,/id="practice"/);
   assert.doesNotMatch(html,/data-prompt=/);
 });
 

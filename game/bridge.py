@@ -17,14 +17,8 @@ from .studio import activate, abort_release, build, build_summary, digest, revie
 SOURCE_FILES = {
 
     "game/DYNAMICS.md":Path(__file__).with_name("DYNAMICS.md"),
-    "game/physical_film.py":Path(__file__).with_name("physical_film.py"),
     "game/dynamics.py":Path(__file__).with_name("dynamics.py"),
-    "game/examples/body-controller.js":Path(__file__).parent/"examples"/"body-controller.js",
-    "game/examples/matter.js":Path(__file__).parent/"examples"/"matter.js",
     "game/cinema.py":Path(__file__).with_name("cinema.py"),
-    "game/examples/story-kit.js":Path(__file__).parent / "examples" / "story-kit.js",
-    "game/examples/hello-dagi.js":Path(__file__).parent / "examples" / "hello-dagi.js",
-    "game/static/cinema.js":Path(__file__).parent / "static" / "cinema.js",
 
     "game/WALKING_FITNESS.json":Path(__file__).with_name("WALKING_FITNESS.json"),
     "game/learning.py":Path(__file__).with_name("learning.py"),
@@ -37,7 +31,6 @@ SOURCE_FILES = {
     "game/workshop.py":Path(__file__).with_name("workshop.py"),
     "game/director.py": Path(__file__).with_name("director.py"),
     "game/static/scene.js": Path(__file__).parent / "static" / "scene.js",
-    "game/static/direction.js": Path(__file__).parent / "static" / "direction.js",
     "game/rigid.py": Path(__file__).with_name("rigid.py"),
     "game/turns.py": Path(__file__).with_name("turns.py"),
     "game/living.py": Path(__file__).with_name("living.py"),
@@ -216,6 +209,9 @@ def render_game_context(database, session_id, workspace, model):
     from .turns import summary
     with GameStore(database) as store:
         world = store.get(session_id)
+    if world and "agent_runtime" in world:
+        from .agent_runtime import passport
+        return passport(database, session_id, model)
     data = summary(world)
     data.update({"workspace":str(workspace),"model":model,"code":{"body":"game/rigid.py","policy":"game/living.py","brain":"dagi_core/agent.py","context":"game/turns.py","viewer":"game/static/scene.js","director":"game/director.py","boundary":"you own multi-file JS project code, physical constructions, body appendages, camera, expression and vector rendering; installed host engine/auth/billing are inspectable, not project files"},"brain":"LLM JSON API -> registry -> executable policy -> measured evidence", "engine":("Chipmunk unassisted articulated body" if world["body_control"]["mode"]=="physical" else "Chipmunk assisted body") if world["physics_engine"]=="chipmunk" else "legacy Verlet",
                  "human_sees":"live body, objects, expression, tools, chat; a fresh chronological browser canvas filmstrip may be supplied separately",
@@ -295,8 +291,12 @@ CATALOG = {
 def register_game(tools, life=None):
     """Return whether this is a game session; ordinary sessions get no game tools."""
     with GameStore(tools.state.path) as store:
-        if store.get(tools.session_id) is None:
+        existing = store.get(tools.session_id)
+        if existing is None:
             return False
+        if "agent_runtime" in existing:
+            from .agent_runtime import register
+            return register(tools)
     tools.memory_session_scope = True
 
     def inspect(args):

@@ -92,17 +92,20 @@ class GameStore:
     def __exit__(self, *exc):
         self.close()
 
-    def create(self, session_id, mode=None):
+    def create(self, session_id, mode=None, agent=False):
         world = fresh_world(session_id)
         world["project_scope"]=hashlib.sha256(f"{self.key}:{session_id}".encode()).hexdigest()
-        if self.key in _DATABASES:
+        if self.key in _DATABASES and not agent:
             world["physics_engine"] = "chipmunk"
             if mode!="assisted":
                 from .workshop import initialize_physical
                 initialize_physical(world)
                 world["gravity"]=981
+        if agent:
+            from .agent_runtime import initialize
+            initialize(world)
         simulator=None
-        if self.key in _DATABASES and world["body_control"]["mode"]=="physical":
+        if not agent and self.key in _DATABASES and world["body_control"]["mode"]=="physical":
             from .rigid import RigidSimulator
             simulator=RigidSimulator(world)
         self.db.execute("INSERT INTO game_worlds VALUES (?, ?)", (session_id, json.dumps(world)))

@@ -125,6 +125,16 @@ live model) and states that boundary explicitly. The layout section gained the
 workshop modules (`game/rigid.py`, `game/embodiment.py`, `game/mechanics.py`,
 `game/workshop.py`, `game/director.py`) and `docs/examples/`.
 
+## Agent v12 integration (2026-10-20) — new main line
+
+Operator archive `dagi-agent-v12.zip`: a full-source snapshot (0.12.0), no patch, no START_HERE; BUILD marker absent. Their diff against our tree was the only possible review path — 46 files, +788/−968, and the file deletions ARE the point of this version: the operator ordered the demo media out of the repository.
+
+**Removed from the repo (per operator order):** every demo recording and inline loop in `docs/examples/` (workshop bench + debug loops, workshop fixture MP4, vector character fixture, vector-motion loop, director scripted demo, unassisted start, cinema storyboard), the cinema/director front ends (`cinema.js`, `direction.js`), the cinema/director/physical-film presets (`game/examples/*.js`, `game/physical_film.py`), `CINEMA.md`, stale pytest output, and the two UI suites that tested removed surfaces.
+
+**New line:** six executed contact-animation skills (`somersault`, `wall_flip`, `vault`, `ladder`, `mantle`, `drive`) driven by `game_skill` from chat and buttons; per-session SQLite queue, results and notes; server-side completion and checks, browser draws only a shared executable trajectory; agent-renderer/agent-ui/motion front ends; AGENT.md, AGENT_VERIFICATION.md, agent_runtime.py, THIRD_PARTY_MOTION.txt, scripts/verify_agent_browser.cjs. Parkour skills are authored contact animations with ballistic COM flight and angular-momentum conservation, explicitly NOT trained muscle controllers; every skill switch stages its own yard, continuous map navigation is not implemented; buttons/queue/practice make no model calls.
+
+Gate: 386 pytest (one load-flake on the first run, clean on re-run) + 43 Node UI. `uv.lock` from the operator is correct this time (annotated-types pinned to 0.8.0 — the v10/v11 lock defect is not carried here). My task map preserved; only the v12 section was added by the operator's snapshot.
+
 ## Matter v11 integration (2026-10-19)
 
 Operator archive `dagi-matter-v11-20261019.zip`, patch from their v10 base `0b4e43c`, 0.10.0. Conflicts: `game/bridge.py` (SOURCE_FILES) — theirs + our unknown-skill listing; `uv.lock` — kept our locked file (their lock is the same malformed one that crash-looped the service under v10; pyproject changes only the version string). Focused gate: 80 pytest over dynamics/game/cinema/learning + 13 Node UI.

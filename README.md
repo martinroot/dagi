@@ -1,124 +1,34 @@
-# Dagi — a debugging instrument for an AI agent
+# Dagi — агентская среда
 
-**v11 physical film preset:** revised vector anatomy, hands, portrait, materials
-and shot sequence, plus a continuous jump/landing regression with no stage rig.
-This is authored behavior for a fixed body/world, not autonomous learning or
-validated human biomechanics. See [game/DYNAMICS.md](game/DYNAMICS.md).
+Новая рабочая поверхность `/game/`: один 2D-персонаж, чат с Core и шесть базовых навыков. Старые видеоролики, кино-премьера, раскадровка и режиссёрские пресеты удалены.
 
-**This repository is not a game.** The physical workshop is a *debugger for an
-agent*: a sandbox where every claim the agent makes becomes a measurement, every
-change is versioned and replayable, and every failure is isolated instead of
-described. Around it sits a compact agent core (streaming provider adapter,
-tool registry, durable SQLite state, delegation, budgets) whose purpose here is
-to be *tested*, not merely run.
+| Навык | Выполнение |
+|---|---|
+| `somersault` | Разгон, приседание, сальто, колено и кулак у пола |
+| `wall_flip` | Два шага по стене, обратное сальто, стабилизация |
+| `vault` | Опора рукой на тумбу, перемахивание, продолжение бега |
+| `ladder` | Поочерёдная опора на реальные перекладины, выход наверх |
+| `mantle` | Зацеп края, подтягивание, силовой выход, заброс ноги |
+| `drive` | Подход, открывание двери, посадка, руки на руле |
 
-![Dagi workshop — the agent's sandbox as a debugging instrument: mechanisms, motion and measurements in one frame](docs/examples/workshop-debug-loop.gif)
+Модель планирует и вызывает `game_skill`. Тот же серверный инструмент обслуживает кнопки. Очередь, результаты и заметки сохраняются отдельно для каждой сессии в SQLite. Завершение и проверки определяет сервер; браузер только рисует общую исполняемую траекторию.
 
-*(12 s loop from a 2112×1267 recording. Scripted fixture — no live model. It
-shows the instrument, not intelligence: a rope over a wheel to a weight, a cart
-with motors, and a body that must earn its stance.)*
+Это **готовые контактные анимационные навыки**, а не обученные мышечные контроллеры. Полёты двух сальто используют баллистику центра масс и сохранение момента импульса. Проверки подтверждают геометрию штатных траекторий, не произвольные столкновения, красоту или общее владение паркуром. Смена навыка подготавливает отдельную площадку и меняет локальную систему координат; непрерывная навигация по общей карте пока не реализована.
 
-![Dagi vector character — v7 render test: muscle-surface anatomy, vector materials and layered scenery under shared light](docs/examples/vector-motion-loop.gif)
+Чат использует только API и модель, настроенные оператором. Кнопки, очередь, проверки и включаемая человеком локальная практика не вызывают модель. Практика повторяет готовые навыки; сама по себе она не обучает новые движения.
 
-*(7.6 s loop. Scripted render fixture — «Тест рендера: торс закреплён, движения
-заданы кодом.» Muscle/skin/bone surfaces, gradient wood-metal-stone materials,
-sun, clouds, parallax mountains; the camera closes on the body mid-motion. It
-shows the rendering surface of the instrument, not learned standing.)*
+## Быстрый старт
 
-## Why a physical world is the right instrument
+```sh
+uv sync
+uv run dagi-web
+```
 
-An LLM agent is normally debugged through prose: it says what it did, and you
-hope. This sandbox replaces hope with instrumentation:
+Настройте API и веб-авторизацию как описано ниже. Откройте `/game/` и нажмите «＋ Сессия». Старые сохранённые миры не перезаписываются; для них новый интерфейс предложит создать агентскую сессию.
 
-- **Claims become measurements.** "I walked to the target" is not accepted; the
-  run records tick-by-tick pose, contacts, displacement, foot slip, bone-length
-  error and motor work, and the goal check passes or fails on those numbers.
-- **Every change is an experiment with a baseline.** A candidate is tested
-  against the current world in a clone; if the trial degrades or fails, the
-  publication is blocked and the working version survives. There is no "trust
-  me" path from an edit to the live world.
-- **State is inspectable, memory is visible.** The agent's programs, policy
-  memory, reflections and self-passport are persisted and re-readable; a reload
-  or restart changes nothing silently, and nothing auto-replays or auto-spends.
-- **Failures are isolated, not narrated.** A broken controller is disabled by
-  name with its source preserved; the world keeps settling; the next model turn
-  sees the actual error. A failing check blocks release instead of shipping a
-  known-broken build.
-- **The debug loop is the agent's own.** Observe → hypothesize → trial →
-  publish/keep → reflect. The human uses the same loop from the outside: the
-  same trials, the same metrics, the same replayable frames.
+Попробуйте в чате: «Поднимись по лестнице, затем сделай сальто. Дождись завершения, проверь результаты и сохрани вывод». Или: «Сохрани связку разминка: перемахивание, сальто от стены, силовой выход».
 
-## The debugging surface
-
-**The body is the probe.** One stickman per session; canvas renders the real
-simulation (joints, contacts, objects), and the agent receives structured
-geometry — not screenshots — unless the operator enables the world-frame
-observation for a vision model.
-
-**The world is the fixture rack.** Objects, mechanisms (ropes over wheels to
-weights, carts with motors, joints, springs, gears), materials with density and
-friction, editable scenery and appearance: the conditions under test are
-authored, versioned and reproducible. A clean session is an empty world with a
-bare skeleton — no preset scenario decides what is being tested.
-
-**Abilities are the code under test.** Feedback policies, saved programs and
-extra limbs are authored as code, executed locally at 60 Hz without per-frame
-model calls, measured in trials, and published only on passing checks. A skill
-button is a control surface, never a claim of mastery.
-
-**Tools are exercised on the live object.** `game_observe` reads state, schemas
-and source; `game_iteration` submits one coherent change package, runs real
-trials and publishes through a countdown; `game_life` runs or pauses the world
-locally without model calls. Human controls and the agent's own buttons are
-local events, no LLM round-trip.
-
-### Video evidence
-
-Scripted fixtures that prove the instrument executes; each link opens the raw
-recording:
-
-- [`hello-dagi-storyboard.gif`](docs/examples/hello-dagi-storyboard.gif) — v9 cinema storyboard: the first authored short beat by beat (source frames from the operator's verification capture; the raw MP4 was not shipped in the archive).
-- [`vector-character-fixture.webm`](docs/examples/vector-character-fixture.webm) — v7 vector character (source of the second loop above): muscle-surface anatomy, vector materials and layered scenery under shared light, physical arm movement, body/face camera framing. The torso is explicitly supported; a rendering fixture, not learned standing.
-- [`physical-workshop-fixture.mp4`](docs/examples/physical-workshop-fixture.mp4) — rope → wheel → weight, cart with motors, editable scenery, the «торс закреплён. Ходьба не обучена.» bench banner.
-- [`workshop-physical-test-bench.webm`](docs/examples/workshop-physical-test-bench.webm) — the physical test bench: unassisted start, joint force controls, mechanism measurements (the source of the loop above).
-- [`workshop-unassisted-start.webm`](docs/examples/workshop-unassisted-start.webm) — a clean session without controller assistance.
-- [`director-scripted-demo.webm`](docs/examples/director-scripted-demo.webm) — an agent-owned JavaScript scene project coordinating action, camera, gaze and graphics.
-
-All five are **scripted fixtures with no live model**: execution evidence, not
-live-model inventiveness, not general intelligence, not an aesthetic judgment.
-
-## Skill Fitness Lab (v8)
-
-[Learning contracts](game/LEARNING.md) turn a goal into a dependency DAG of
-executable skills with measured fitness, success conditions, guards and declared
-validation cases. Failed source and scoped hypotheses persist across turns.
-Improvement can publish without claiming mastery; dependencies and the final
-composition need their own current, source-bound receipts. Budgets and plateaus
-stop unproductive autonomous model turns. The UI shows observed values against
-thresholds and supports local reevaluation without model calls.
-
-The included [walking criteria example](game/WALKING_FITNESS.json) declares
-balance → step → walking; it supplies no controller or installed curriculum.
-The current evaluation adapter measures physics. A domain-neutral report grader
-is available for future trusted business-tool adapters; those are not connected
-to the sandbox in this release.
-
-## Vector Character Studio (v7)
-
-[Visual authoring](game/VISUAL.md) adds real shoulder/hip attachments on a rigid
-torso, editable bone lengths, capsule radii and segment masses — geometry that
-actually changes physics and inertia — plus anatomical, skeletal, ceramic and
-ink surfaces, shared lighting, gradient materials and atmospheric vector
-scenery. The game renders entirely from Canvas2D vector geometry: no raster
-backgrounds or external images. Named scene layers and the agent's live JS
-graphics share one vector API: Bezier curves, linear/radial gradients,
-transforms, blend modes, shadows, layer order and parallax. For the debugger
-this means: cosmetic edits preserve motion and are verified to do so, while
-geometry edits remap the live pose and are re-tested against their new
-dimensions — appearance changes cannot silently invalidate a controller's
-calibration. The viewer offers body/face framing and automatic detail control
-independent of the 60 Hz physical clock. The new skeleton ships no gait and no
-automatic stance holding.
+Контракты, примеры JSON и ограничения: [game/AGENT.md](game/AGENT.md). Общие физические механизмы Core сохранены для совместимости старых проектов, но не выдаются за контроллер нового тела.
 
 ## Core features
 
@@ -207,24 +117,6 @@ export DAGI_BUDGET_USD="0.25"
 
 CLI commands: `/help`, `/new`, `/sessions`, `/resume <session_id>`, `/memory <query>`, `/skills`, `/model`, `/exit`. A run prints its ID and final status. Skills can be saved with `create_skill` and loaded with `use_skill`.
 
-## Visual sandbox (the run inspector)
-
-Run the local web shell with one command:
-
-```bash
-uv run dagi-web
-```
-
-It binds to `127.0.0.1:8765` by default. The sandbox shows sessions, runs, chat/events, exact provider requests, tool outcomes, errors, and usage — the request/response surface a debugger needs, not a toy dashboard. The login form creates an HttpOnly, SameSite=Strict session cookie; APIs reject unauthenticated requests, login attempts are rate-limited, and logout revokes the current session. Configure a PBKDF2-SHA256 password hash and exact public HTTPS origin in the protected service environment file. Run events are persisted and replayed after reconnect; opening a saved run only inspects it and never starts it again. Each HTTP handler and run worker opens its own SQLite connection. Shell tools are disabled in the web sandbox; use the CLI for individually approved shell actions. Keep the server on loopback unless you add an authenticated reverse proxy.
-
-## Embodied workshop (the instrument)
-
-Open **`http://127.0.0.1:8765/game/`** after starting `uv run dagi-web` with the same provider and web-login settings used by the visual sandbox.
-
-Each session starts with a clean physical stickman and an empty world. New sessions have unassisted muscles and joint limits — standing and walking are controller-development tasks, not installed routines — while older sessions stay in a marked `ASSISTED` mode for compatibility. The agent can author multi-file JavaScript projects that coordinate physical behavior, camera, gaze, facial expression and custom vector graphics; construct mechanisms, appendages and tools; create human controls; and publish a tested version through the countdown transition. Local projects run on the server without per-frame model calls or an open browser. Chat and bounded autonomous development use the normal configured provider. The browser streams physical state and can supply chronological canvas observations. Passing checks establish execution evidence, not autonomous intelligence or aesthetic improvement.
-
-See [`game/DIRECTOR.md`](game/DIRECTOR.md) for the project contract, [`game/PHYSICS.md`](game/PHYSICS.md) for the unassisted embodiment rules and [`game/GENESIS.md`](game/GENESIS.md) for the runtime architecture.
-
 ## Custom tools
 
 Register tools through the public registry; duplicate names raise `ValueError`.
@@ -298,26 +190,3 @@ docs/examples/         example recordings and the inline loops/storyboard
 ## Provenance
 
 The first `main` commit (`b14b0ba`) was a prototype based on `Mohamedhasbini/hermes`; that snapshot and its MIT notice remain in Git history. The active implementation is a compact reimplementation informed by the current Hermes upstream commit [`848fc0a`](https://github.com/NousResearch/hermes-agent/commit/848fc0ad8be766b9dc10fe42bd80b5fc2d45d95c). See `NOTICE.md` for details.
-
-## Cinema v9 — authored animation in the vector world
-
-![Dagi cinema v9 — storyboard of the first authored short, beat by beat](docs/examples/hello-dagi-storyboard.gif)
-
-*(Inline 22 s loop, drawn from the operator verification frames: wide → figure
-→ waist → wink → "Hello I'm Dagi" → material reveal → transform → portrait →
-assisted flip → landing → guard stance. Local authored playback, no live
-model; the flip uses the labelled powered stage rig, recorded as external
-support in fitness guards. The footage itself was not shipped inside the
-archive — these are the captured stills of each beat, not invented motion.)*
-
-**▷ Новый мультфильм** opens a separate short: camera shot progression, wink,
-smile, “Hello I'm Dagi”, looping material reveals, changing scenery, detailed
-vector hair/portrait, an assisted physical flip and a guard stance. Local
-playback and replay make no model calls. The film uses an explicitly labelled
-powered stage rig; it is scripted choreography, not a learned unassisted skill.
-
-Projects can now author live cosmetic `look` and head-anchored `speech` channels,
-independent eyelids, smile/brow/fist cues, up to 10× camera framing and generic
-numeric/vector/color timeline tracks. New ordinary sessions retain the clean
-unassisted start. [Contracts and limitations](game/CINEMA.md),
-[authored film](game/examples/hello-dagi.js), [timeline library](game/examples/story-kit.js).

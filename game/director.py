@@ -17,7 +17,7 @@ import quickjs
 _CACHE = threading.local()
 
 HELP = {
-    "cinema":"For exact look/speech, vector portrait, timeline and explicit powered stage rig contracts read view=schema,path=cinema. Example source game/examples/story-kit.js and game/examples/hello-dagi.js is allowlisted; copy/edit into your own project.",
+    "cinema":"For exact look/speech, vector portrait, timeline and explicit powered stage rig contracts read view=schema,path=cinema. Old packaged films have been removed.",
     "edit": "project {name,description,files:{'main.js':source,...},entry?:'main.js',activate?:true}; edits one named project; files merge with existing files unless replace:true; <=12 files, <=48000 source chars total. Each file is CommonJS: module.exports; require('./helper.js') loads project files only. Main exports a synchronous function(input). Full JS functions, loops, classes, math and arrays work.",
     "input": "{t,dt,s,state,params,event}; t is seconds since this project was activated, dt=1/60; s is current physical sensors incl joints, objects, appendages, contact_evidence:{objects,support,joints,grip}, runtime{thinking,status}; state is your durable JSON state; event is a queued human project event or null; params is your saved numeric parameters.",
     "physical_control":"For an unassisted body use control.muscles and relative servos; drive/jump/pose/free forces are unavailable. s.articulation,s.mechanisms,s.ropes,s.energy provide physical evidence. Read game_observe view=schema,path=physics for exact construction/control.",

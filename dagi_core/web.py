@@ -36,6 +36,7 @@ from .goals import validate_checks, verify
 from .worker import load_workers
 from game.world import links as game_links
 from game.bridge import GAME_PROMPT, identity as game_identity, register_game, render_game_context
+from game.agent_runtime import PROMPT as AGENT_GAME_PROMPT
 from game.turns import GameContext, game_call_cap
 from game.life import LifeRuntime
 from game.learning import summary as learning_summary
@@ -423,7 +424,7 @@ class WebApp:
                         self.send_header("Content-Length", "0")
                         self.end_headers()
                         return
-                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/anatomy.js", "/game/vector.js", "/game/scenery.js", "/game/learning.js", "/game/cinema.js", "/game/direction.js", "/game/workshop.js", "/game/component-host.js"}:
+                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/anatomy.js", "/game/vector.js", "/game/scenery.js", "/game/learning.js", "/game/motion.js", "/game/agent-renderer.js", "/game/agent-ui.js", "/game/workshop.js", "/game/component-host.js"}:
                         self._static(path)
                     elif path == "/api/auth/session":
                         if app._is_authenticated(self.headers):
@@ -445,6 +446,9 @@ class WebApp:
                         ]})
                     elif match := re.fullmatch(r"/api/workers/([A-Za-z0-9_-]+)/proxy(/api/.*)", path):
                         self._proxy(match.group(1), match.group(2))
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/agent", path):
+                        from game.agent_runtime import snapshot
+                        self._send_json(200, snapshot(app.config.database, int(match.group(1))))
                     elif path == "/api/game/sessions":
                         with GameStore(app.config.database) as game:
                             self._send_json(200, {"sessions": game.list_sessions()})
@@ -597,17 +601,21 @@ class WebApp:
                             raise ValueError("title must be 1..160 characters")
                         mode=body.get("mode","physical")
                         if mode not in ("physical","assisted"):raise ValueError("mode must be physical or assisted")
-                        film=body.get("film",False)
-                        if type(film) is not bool:raise ValueError("film must be boolean")
+                        if body.get("film"):
+                            raise ValueError("Old film presets were removed; create an agent session")
+                        agent_mode=body.get("agent",False)
+                        if type(agent_mode) is not bool:raise ValueError("agent must be boolean")
                         workspace = f"game/sessions/{uuid4().hex}"
                         with _StateContext(self._state()) as state:
                             session_id = state.create_session(title, workspace=workspace)
                         with GameStore(app.config.database) as game:
-                            game.create(session_id,mode=mode)
-                            if film:
-                                from game.cinema import premiere
-                                with game.mutation(session_id) as world:premiere(world,physical=True)
+                            game.create(session_id,mode=mode,agent=agent_mode)
                         self._send_json(201, {"session_id": session_id})
+                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/agent", parsed.path):
+                        from game.agent_runtime import execute
+                        if body.get("wait"):
+                            raise ValueError("HTTP controls are asynchronous; use polling for completion")
+                        self._send_json(200, execute(app.config.database, int(match.group(1)), body))
                     elif match := re.fullmatch(r"/api/game/sessions/(\d+)/learning/evaluate", parsed.path):
                         from game.world import keys as game_keys
                         from game.learning import handle as train_skill
@@ -1292,7 +1300,7 @@ class WebApp:
                 tools,
                 state,
                 session_id,
-                system_prompt=GAME_PROMPT if is_game else SYSTEM_PROMPT,
+                system_prompt=(AGENT_GAME_PROMPT if is_game and "game_skill" in tools.model_tool_names else GAME_PROMPT) if is_game else SYSTEM_PROMPT,
                 usage_policy=replace(self.config.usage_policy,max_calls_per_run=game_call_cap(self.config.usage_policy.max_calls_per_run)) if is_game else self.config.usage_policy,
                 context_builder=context,
                 agent_id=self.agent_id,

@@ -434,7 +434,7 @@ def test_web_agent_chat_moves_its_own_body_persists_evidence_and_new_session_is_
             urlopen(base + "/api/game/sessions")
         assert exc.value.code == 401
         _, _, page = _request(base + "/game/")
-        assert b"game.js" in page
+        assert b"agent-ui.js" in page
         _, _, script = _request(base + "/game/game.js")
         assert b"EventSource" in script
         _, _, created = _request(base + "/api/game/sessions", "POST", {"title": "assisted compatibility test", "mode":"assisted"})
