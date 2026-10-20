@@ -9,10 +9,12 @@ given (assignment, acceptance checks, blocker, next observed action, latest
 reflection). Everything is persisted and correlated by session ID, run ID and
 tool-call ID, so a run can be replayed and inspected after the fact.
 
-The product is the core plus the chat. The embodied game surface is folded
-away: it stays in the repository for rollback, but it is no longer the product
-and it is no longer advertised in the chat UI — see
-[Folded game surface](#folded-game-surface).
+The product is the core plus the chat. The embodied lab was removed from the
+product on 2026-10-20; the base it carried — versioned skill contracts, the
+bounded expression language, measured grading and dependency-aware mastery —
+now lives in the core, and the lab's own operator documentation stays in
+[docs/legacy-game/](docs/legacy-game/). See
+[Removed embodied lab](#removed-embodied-lab).
 
 ## Quick start
 
@@ -181,27 +183,31 @@ Use the focused gate during small iterations; do not remove or weaken tests. Run
 |dagi_core/cli.py       terminal interface
 ```
 
-## Folded game surface
+## Removed embodied lab
 
-The embodied lab under `/game/` and the `game/` package is folded away as of
-2026-10-20. It is kept in the repository so the work stays recoverable, and
-it is not part of the product surface: the chat no longer links to it, and no
-new work is planned for it.
+The embodied lab (`/game/` and the `game/` package) was removed from the
+product on 2026-10-20, after the operator folded that direction away and asked
+for a minimal, stable core.
 
-- What it is: an authored 2D character with contact skills (`somersault`,
-  `wall_flip`, `vault`, `ladder`, `mantle`, `drive`), a server-side skill
-  runtime with per-skill checks, and a Skill Fitness Lab with measured
+- What it was: an authored 2D character with contact skills, a server-side
+  skill runtime with per-skill checks, and a Skill Fitness Lab with measured
   fitness contracts.
-- What it is not: not learned controllers, not a navigation stack, and not a
-  certification of physical quality. Checks confirm the geometry of the
-  packaged trajectories, not arbitrary collisions.
-- Contracts and limits: [game/AGENT.md](game/AGENT.md), `game/LEARNING.md`,
-  `game/PHYSICS.md`.
-- Removal is a separate, explicit decision: deleting the package would also
-  delete the skills, the learning contracts and the operator documentation, so
-  it is not done as part of folding the direction away.
-- The in-flight route/approach work is parked on the side branch
-  `wip/game-route-approach` (not merged into `main`, not deployed).
+- What it was never: not learned controllers, not a navigation stack, and not
+  a certification of physical quality. Its checks confirmed the geometry of
+  the packaged trajectories, not arbitrary collisions.
+- What moved into the core: the bounded expression language
+  (`dagi_core/expressions.py`) and the contract model
+  (`dagi_core/learning.py`) — contract validation, grading of a host-measured
+  report, receipts, and dependency-aware mastery. The core grades a report
+  only when a trusted host measured it; a model claim is never a certificate.
+- What stayed as documentation: the lab's operator contracts and limits are
+  in [docs/legacy-game/](docs/legacy-game/) (`AGENT.md`, `LEARNING.md`,
+  `PHYSICS.md`, and the example walking contract).
+- Rollback: the full source stays in Git history, the tag
+  `legacy-game-base-a754c3b` marks the last commit that still carried the
+  package, and the parked side branch `wip/game-route-approach` holds the
+  unfinished route/approach work. No persisted data was dropped: the game
+  tables in the database are untouched.
 
 ## Provenance
 

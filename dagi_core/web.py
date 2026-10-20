@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import json
@@ -10,7 +9,7 @@ import os
 import re
 import secrets
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from decimal import Decimal
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,15 +33,6 @@ from .tools import ToolRegistry, _resolve
 from .workspace import resolve_session_workspace
 from .goals import validate_checks, verify
 from .worker import load_workers
-from game.world import links as game_links
-from game.bridge import GAME_PROMPT, identity as game_identity, register_game, render_game_context
-from game.agent_runtime import PROMPT as AGENT_GAME_PROMPT
-from game.turns import GameContext, game_call_cap
-from game.life import LifeRuntime
-from game.learning import summary as learning_summary
-from game.store import GameStore, live_slot
-from game.world import PAIRS, frame as game_frame, observation as game_observation
-from game.studio import browser_report, build_summary, human_prompt, digest as game_digest, snapshot as game_snapshot, configuration as game_configuration
 
 ProviderFactory = Callable[[str, str, str], Any]
 _REFLECTION_VOLATILE_KEYS = {"timestamp", "created_at", "updated_at", "request_id", "event_id", "nonce"}
@@ -276,7 +266,6 @@ class WebApp:
         self._session_secret = secrets.token_bytes(32)
         self._revoked_sessions: dict[str, int] = {}
         self._failed_logins: dict[str, tuple[int, float]] = {}
-        self.life = LifeRuntime(self)
         self.workers = load_workers(os.environ.get("DAGI_WORKERS", "{}"))
 
     def _cookie_token(self, headers: Any) -> str | None:
@@ -349,7 +338,6 @@ class WebApp:
                     pass
 
     def close(self) -> None:
-        self.life.close()
         with self._lock:
             controls = list({id(item): item for item in [*self._runs.values(), *self._goals.values()]}.values())
         for control in controls:
@@ -371,9 +359,6 @@ class WebApp:
             with _StateContext(StateStore(self.config.database)) as state:
                 state.recover_interrupted()
                 state.recover_goals()
-            with GameStore(self.config.database) as game:
-                game.recover_releases()
-            self.life.recover()
         except BaseException:
             lease.close()
             self._lease = None
@@ -418,13 +403,7 @@ class WebApp:
                 parsed = urlparse(self.path)
                 path = parsed.path
                 try:
-                    if path == "/game":
-                        self.send_response(302)
-                        self.send_header("Location", "game/")
-                        self.send_header("Content-Length", "0")
-                        self.end_headers()
-                        return
-                    if path in {"/", "/app.js", "/game", "/game/", "/game/game.js", "/game/studio.js", "/game/scene.js", "/game/anatomy.js", "/game/vector.js", "/game/scenery.js", "/game/learning.js", "/game/motion.js", "/game/agent-renderer.js", "/game/agent-ui.js", "/game/workshop.js", "/game/component-host.js"}:
+                    if path in {"/", "/app.js"}:
                         self._static(path)
                     elif path == "/api/auth/session":
                         if app._is_authenticated(self.headers):
@@ -446,62 +425,6 @@ class WebApp:
                         ]})
                     elif match := re.fullmatch(r"/api/workers/([A-Za-z0-9_-]+)/proxy(/api/.*)", path):
                         self._proxy(match.group(1), match.group(2))
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/agent", path):
-                        from game.agent_runtime import snapshot
-                        self._send_json(200, snapshot(app.config.database, int(match.group(1))))
-                    elif path == "/api/game/sessions":
-                        with GameStore(app.config.database) as game:
-                            self._send_json(200, {"sessions": game.list_sessions()})
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/frames", path):
-                        self._game_frames(int(match.group(1)))
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/export", path):
-                        session_id = int(match.group(1))
-                        with GameStore(app.config.database) as game:
-                            world = game.get(session_id)
-                        if world is None:
-                            self._send_json(404, {"error": "game session not found"})
-                            return
-                        with _StateContext(self._state()) as state:
-                            try:
-                                export = _game_session_export(state, session_id, world)
-                            except ValueError as exc:
-                                self._send_json(404, {"error": str(exc)})
-                                return
-                        serialized = json.dumps(_json_safe(export), ensure_ascii=False).encode("utf-8")
-                        if len(serialized) > 50_000_000:
-                            self._send_json(413, {"error": "session export exceeds 50 MB; no partial export was produced"})
-                            return
-                        self._send_json(200, export, headers={
-                            "Content-Disposition": f'attachment; filename="dagi-session-{session_id}.json"',
-                        })
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)", path):
-                        session_id = int(match.group(1))
-                        with GameStore(app.config.database) as game:
-                            world = game.get(session_id)
-                        if world is None:
-                            self._send_json(404, {"error": "game session not found"})
-                            return
-                        with _StateContext(self._state()) as state:
-                            session = state.get_session(session_id)
-                            runs = state.list_runs(session_id, 10)
-                            active = next((r for r in runs if r["status"] == "running"), None)
-                            reference = active or (runs[0] if runs else None)
-                            calls = state.list_provider_calls(reference["run_id"]) if reference else []
-                            pending = next((c for c in reversed(calls) if c["finished_at"] is None), None) if active else None
-                            executing = next((c for c in reversed(state.list_tool_calls(session_id)) if c["status"] == "running" and c["run_id"] == active["run_id"]), None) if active else None
-                            activity = {"phase": "tool" if executing else "provider" if pending else "running" if active else "idle",
-                                        "model": pending["model"] if pending else app.config.model, "provider_calls": len(calls), "run_id": active["run_id"] if active else None,
-                                        "tool": executing["name"] if executing else None}
-                        workspace = resolve_session_workspace(app.config.workspace, session["workspace"])
-                        self._send_json(200, {"self": game_identity(session_id, workspace, world),
-                            "scene": game_observation(world), "frame": game_frame(world),
-                            "links": game_links(world), "motion": world["motion"], "history": world["history"],
-                            "reflections": world["reflections"], "widgets": world["widgets"], "components": world["components"], "theme": world["theme"],
-                            "learning":learning_summary(world,details=True), "character":world["character"], "art":world["art"], "body_control":world["body_control"], "environment":world["environment"], "ropes":world["ropes"], "substances":world["substances"], "direction":world["direction"], "appendages":world["appendages"], "projects":[{"name":k,"version":v["version"],"description":v["description"]} for k,v in world["projects"].items()],
-                            "life": world["life"], "policies": [{"name": k, "version": v["version"], "description": v["description"]} for k,v in world["policies"].items()], "appearance": world["appearance"], "evolution": world["evolution"],
-                            "build": build_summary(world), "preview": {k: world["draft"]["candidate"][k] for k in ("widgets", "objects", "components")} if world["draft"] else None,
-                            "last_release": world["last_release"], "activity": activity, "server_time": time.time(),
-                            "render_key": game_digest(game_configuration({**world,**world["draft"]["candidate"]}) if world["draft"] else game_configuration(world))})
                     elif path == "/api/sessions":
                         with _StateContext(self._state()) as state:
                             sessions = state.list_sessions(100)
@@ -595,123 +518,6 @@ class WebApp:
                         self._send_json(202, app.start_goal(int(match.group(1)), body))
                     elif match := re.fullmatch(r"/api/goals/([^/]+)/(stop|resume)", parsed.path):
                         self._send_json(202, app.control_goal(match.group(1), match.group(2)))
-                    elif parsed.path == "/api/game/sessions":
-                        title = body.get("title", "Embodied experiment")
-                        if not isinstance(title, str) or not 1 <= len(title.strip()) <= 160:
-                            raise ValueError("title must be 1..160 characters")
-                        mode=body.get("mode","physical")
-                        if mode not in ("physical","assisted"):raise ValueError("mode must be physical or assisted")
-                        if body.get("film"):
-                            raise ValueError("Old film presets were removed; create an agent session")
-                        agent_mode=body.get("agent",False)
-                        if type(agent_mode) is not bool:raise ValueError("agent must be boolean")
-                        workspace = f"game/sessions/{uuid4().hex}"
-                        with _StateContext(self._state()) as state:
-                            session_id = state.create_session(title, workspace=workspace)
-                        with GameStore(app.config.database) as game:
-                            game.create(session_id,mode=mode,agent=agent_mode)
-                        self._send_json(201, {"session_id": session_id})
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/agent", parsed.path):
-                        from game.agent_runtime import execute
-                        if body.get("wait"):
-                            raise ValueError("HTTP controls are asynchronous; use polling for completion")
-                        self._send_json(200, execute(app.config.database, int(match.group(1)), body))
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/learning/evaluate", parsed.path):
-                        from game.world import keys as game_keys
-                        from game.learning import handle as train_skill
-                        game_keys(body,("skill","world_version","contract"))
-                        if type(body.get("world_version")) is not int or not isinstance(body.get("contract"),str):raise ValueError("evaluation requires the displayed world/contract versions")
-                        session_id=int(match.group(1))
-                        if app._session_busy(session_id):raise ValueError("wait for the current model turn before evaluating manually")
-                        result=train_skill(app.config.database,session_id,{"action":"evaluate",**body})
-                        self._send_json(200,{"local":True,"model_calls":0,**result})
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/project-event", parsed.path):
-                        session_id=int(match.group(1))
-                        from game.world import keys as game_keys
-                        game_keys(body,("version","id"))
-                        if not isinstance(body.get("id"),str) or not 1<=len(body["id"])<=60:raise ValueError("event id must be1..60 characters")
-                        with GameStore(app.config.database) as game:
-                            with game.transient(session_id) as world:
-                                if type(body.get("version")) is not int or body["version"]!=world["version"] or not world["active_project"]:raise ValueError("project changed; refresh before sending event")
-                                world["event_queue"]=(world["event_queue"]+[{"id":body["id"],"tick":world["tick"]}])[-8:]
-                        self._send_json(200,{"queued":True,"local":True})
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/vision", parsed.path):
-                        session_id=int(match.group(1))
-                        with GameStore(app.config.database) as game:
-                            if game.get(session_id) is None:raise ValueError("game session not found")
-                        slot=live_slot(app.config.database,session_id)
-                        if body.get("enabled") is False:
-                            with slot.lock:slot.vision=None
-                        else:
-                            image=body.get("image","")
-                            if not isinstance(image,str) or not image.startswith("data:image/jpeg;base64,") or len(image)>150000:
-                                raise ValueError("vision requires a bounded JPEG data URL")
-                            raw=base64.b64decode(image.split(",",1)[1],validate=True)
-                            if not raw.startswith(b"\xff\xd8") or len(raw)>100000:raise ValueError("invalid JPEG frame")
-                            if type(body.get("version")) is not int:raise ValueError("vision requires world version")
-                            with slot.lock:slot.vision={"image":image,"version":body["version"],"at":time.time()}
-                        self._send_json(200,{"saved":True})
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/input", parsed.path):
-                        session_id=int(match.group(1))
-                        with GameStore(app.config.database) as game:
-                            with game.transient(session_id) as world:
-                                kind=body.get("type")
-                                if kind=="grab":
-                                    from game.world import number
-                                    number(body.get("x"),0,1000,"x");number(body.get("y"),0,600,"y")
-                                    if not any(o["id"]==body.get("id") and o["kind"]=="body" and o.get("motion")!="static" for o in world["objects"]):raise ValueError("unknown dynamic object")
-                                    world["human"].update(object=body["id"],pointer=[body["x"],body["y"]])
-                                elif kind=="release":
-                                    world["human"].pop("object",None);world["human"].pop("pointer",None)
-                                elif kind=="muscle":
-                                    from game.embodiment import limits
-                                    from game.world import number
-                                    if body.get("joint") not in limits(world):raise ValueError("unknown muscle joint")
-                                    value=number(body.get("effort"),-1,1,"effort")
-                                    world["human"].update(muscles={body["joint"]:value},until=world["tick"]+18)
-                                elif kind=="drive":
-                                    from game.world import number
-                                    number(body.get("drive",0),-1,1,"drive")
-                                    if type(body.get("jump",False)) is not bool:raise ValueError("jump must be boolean")
-                                    if world["body_control"]["mode"]=="physical":raise ValueError("physical mode uses muscle input, not automatic drive or jump")
-                                    world["human"].update(drive=body.get("drive",0),jump=body.get("jump",False),until=world["tick"]+30)
-                                else:raise ValueError("input type must be grab, release or drive")
-                        app.life.ensure_clock(session_id)
-                        self._send_json(200,{"accepted":True})
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/life", parsed.path):
-                        self._send_json(200, app.life.control(int(match.group(1)), body))
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/interact", parsed.path):
-                        session_id = int(match.group(1))
-                        with GameStore(app.config.database) as game:
-                            world = game.get(session_id)
-                            if world is None:
-                                raise ValueError("game session not found")
-                            prompt = human_prompt(world, body)
-                            widget=next((w for w in world["widgets"] if w["id"]==body.get("widget_id")),None)
-                            target=widget.get("target") if widget else None
-                            if body.get("component_id"):
-                                component=next((c for c in world["components"] if c["id"]==body["component_id"]),None)
-                                event=next((e for e in component.get("events",[]) if e["id"]==body.get("event_id")),None) if component else None
-                                target=event.get("target") if event else None
-                        if target and target.get("type")=="project":
-                            if world["active_project"]!=target["name"]:
-                                app.life.control(session_id,{"action":"select","name":target["name"]})
-                            if target.get("event"):
-                                with GameStore(app.config.database) as game:
-                                    with game.transient(session_id) as world:
-                                        if body["version"]!=world["version"] or world["active_project"]!=target["name"]:raise ValueError("project changed; refresh before sending event")
-                                        world["event_queue"]=(world["event_queue"]+[{"id":target["event"],"tick":world["tick"]}])[-8:]
-                            app.life.ensure_clock(session_id)
-                            self._send_json(200,{"local":True,"project":target["name"]})
-                        elif target and target.get("type")=="policy":
-                            app.life.control(session_id,{"action":"select","name":target["name"]})
-                            app.life.ensure_clock(session_id)
-                            self._send_json(200,{"local":True,"policy":target["name"]})
-                        else:self._start_run(session_id, {"message": prompt})
-                    elif match := re.fullmatch(r"/api/game/sessions/(\d+)/render-report", parsed.path):
-                        with GameStore(app.config.database) as game:
-                            game.apply(int(match.group(1)), browser_report, body)
-                        self._send_json(200, {"saved": True})
                     elif parsed.path == "/api/sessions":
                         title = body.get("title")
                         if title is not None and not isinstance(title, str):
@@ -750,10 +556,9 @@ class WebApp:
                 self._send_json(200, result)
 
             def _static(self, path: str) -> None:
-                is_game = path.startswith("/game")
-                name = (path.rsplit("/", 1)[-1] if path.endswith(".js") else "index.html") if is_game else ("index.html" if path == "/" else "app.js")
+                name = "index.html" if path == "/" else "app.js"
                 content_type = "text/html; charset=utf-8" if name.endswith(".html") else "text/javascript; charset=utf-8"
-                data = files("game" if is_game else "dagi_core").joinpath("static", name).read_bytes()
+                data = files("dagi_core").joinpath("static", name).read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(data)))
@@ -856,34 +661,6 @@ class WebApp:
                     return
                 finally:
                     state.close()
-
-            def _game_frames(self, session_id):
-                with GameStore(app.config.database) as game:
-                    if game.get(session_id) is None:
-                        self._send_json(404, {"error":"game session not found"})
-                        return
-                slot = live_slot(app.config.database, session_id)
-                self.close_connection = True
-                self.send_response(200)
-                self.send_header("Content-Type","text/event-stream; charset=utf-8")
-                self.send_header("Cache-Control","no-cache, no-transform")
-                self.send_header("X-Accel-Buffering","no")
-                self.end_headers()
-                revision = -1
-                try:
-                    while not app.life._stop.is_set():
-                        with slot.lock:
-                            w = slot.world
-                            packet = {"revision":w["revision"],"version":w["version"],"frame":game_frame(w),
-                                      "emotion":w["emotion"],"life":w["life"],"contacts":w["contacts"],
-                                      "error":w["policy_error"],"release":{k:w["draft"][k] for k in ("id","state","objective","edits","activate_at","countdown_ms") if k in w["draft"]} if w["draft"] else None} if w["revision"]!=revision else None
-                        if packet:
-                            self.wfile.write(("data: "+json.dumps(packet,separators=(",",":"))+"\n\n").encode())
-                            self.wfile.flush()
-                            revision = packet["revision"]
-                        time.sleep(1/30)
-                except (BrokenPipeError,ConnectionResetError):
-                    return
 
             def _start_run(self, session_id: int, body: dict[str, Any]) -> None:
                 self._send_json(202, app.start_run(session_id, body.get("message")))
@@ -1251,7 +1028,6 @@ class WebApp:
 
     def _execute_run(self, run_id: str, session_id: int, message: str, control: _RunControl) -> None:
         state = StateStore(self.config.database)
-        is_game = False
         try:
             provider = self.provider_factory(self.config.model, self.config.api_key, self.config.base_url)
             compression_provider = self.provider_factory(
@@ -1270,11 +1046,6 @@ class WebApp:
                 raise ValueError("session not found")
             workspace = resolve_session_workspace(self.config.workspace, session["workspace"])
             tools = ToolRegistry(workspace, state, session_id, shell_enabled=False)
-            is_game = register_game(tools, self.life)
-            if is_game:
-                with GameStore(self.config.database) as game:
-                    with game.transient(session_id) as world:
-                        world["life"].update(thinking=True,run_id=run_id,run_kind="autonomous" if message.startswith("Continue your own development in this living world.") else "human")
             delegation = DelegationManager(
                 state,
                 self.config.workspace,
@@ -1291,7 +1062,7 @@ class WebApp:
                 repeat_failure_threshold=self.config.goal_repeat_failure_threshold,
             )
             delegation.register(tools)
-            context = (GameContext if is_game else ContextBuilder)(
+            context = ContextBuilder(
                 state,
                 max_tokens=self.config.context_limit_tokens,
                 max_tool_result_chars=self.config.context_max_tool_result_chars,
@@ -1303,14 +1074,13 @@ class WebApp:
                 tools,
                 state,
                 session_id,
-                system_prompt=(AGENT_GAME_PROMPT if is_game and "game_skill" in tools.model_tool_names else GAME_PROMPT) if is_game else SYSTEM_PROMPT,
-                usage_policy=replace(self.config.usage_policy,max_calls_per_run=game_call_cap(self.config.usage_policy.max_calls_per_run)) if is_game else self.config.usage_policy,
+                system_prompt=SYSTEM_PROMPT,
+                usage_policy=self.config.usage_policy,
                 context_builder=context,
                 agent_id=self.agent_id,
                 agent_name=self.config.model,
                 entry_point="web",
                 repeat_failure_threshold=self.config.goal_repeat_failure_threshold,
-                runtime_context_extension=(lambda: render_game_context(state.path, session_id, workspace, self.config.model)) if is_game else None,
             )
             for _event in agent.run_turn(
                 message,
@@ -1331,14 +1101,6 @@ class WebApp:
                     state.append_run_event(session_id, run_id, event)
                 state.finish_run(run_id, "error", error_text)
         finally:
-            if is_game:
-                with GameStore(self.config.database) as game:
-                    try:
-                        with game.transient(session_id) as world:
-                            if world["life"].get("run_id")==run_id:
-                                world["life"].update(thinking=False,run_id=None)
-                    except ValueError:
-                        pass  # Runtime closed while the cancelled turn was unwinding.
             state.close()
             with self._lock:
                 self._runs.pop(run_id, None)
@@ -1384,51 +1146,6 @@ def _redact_export(value: Any) -> Any:
         for pattern in _EXPORT_TOKEN_PATTERNS:
             value = pattern.sub("[REDACTED]", value)
     return value
-
-
-def _game_session_export(state: StateStore, session_id: int, world: dict[str, Any]) -> dict[str, Any]:
-    session = state.get_session(session_id)
-    if session is None:
-        raise ValueError("session not found")
-    runs = state.list_runs(session_id, limit=None)
-    run_exports = []
-    for run in runs:
-        event_rows: list[dict[str, Any]] = []
-        after_id = 0
-        while True:
-            page = state.list_run_events(run["run_id"], after_id=after_id, limit=5000)
-            if not page:
-                break
-            event_rows.extend(page)
-            after_id = page[-1]["id"]
-            if len(page) < 5000:
-                break
-        provider_calls = state.list_provider_calls(run["run_id"])
-        run_exports.append({
-            key: run.get(key) for key in
-            ("run_id", "session_id", "agent_id", "parent_run_id", "depth", "agent_name", "status", "started_at", "finished_at", "error")
-        } | {
-            "provider_calls": [{key: call.get(key) for key in
-                ("id", "model", "purpose", "usage_source", "input_tokens", "output_tokens", "cost_usd", "started_at", "finished_at")}
-                for call in provider_calls],
-            "events": event_rows,
-        })
-    payload = {
-        "format": "dagi-session-export-v1",
-        "exported_at": time.time(),
-        "scope": {
-            "includes": ["persisted visible messages", "all stored run events", "tool arguments/results/errors", "provider usage metadata", "current game world and retained history"],
-            "excludes": ["raw provider request payloads/system prompts", "private internal reasoning (not stored/exportable)"],
-            "history_note": "The world history is bounded by the runtime; all remaining persisted entries and all run/tool events are included.",
-            "redaction_note": "Credential-shaped keys and common bearer/API-token patterns are redacted; review before sharing externally.",
-        },
-        "session": {key: session.get(key) for key in ("id", "title", "created_at", "parent_id")},
-        "messages": state.messages(session_id, include_metadata=True),
-        "runs": run_exports,
-        "tool_calls": state.list_tool_calls(session_id),
-        "game_world": world,
-    }
-    return _redact_export(payload)
 
 
 def _json_safe(value: Any) -> Any:

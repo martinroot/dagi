@@ -278,6 +278,31 @@ Verification: 17 Node UI checks for the chat and the cost inspector, 13 DOM
 checks against a real DOM implementation, 5 cost-status state tests, 1 API
 contract test; full agent gate: 394 pytest + 61 Node UI.
 
+## Core and chat only (2026-10-20) — the game package is removed
+
+The operator folded the game direction away and asked for the base to move into
+the core, so the product could become a minimal, stable core improved in chat
+mode ("otherwise I will just delete the folder and you will be restoring it").
+
+Two slices, both on `main`:
+
+1. The base moved into the core (`a754c3b`, issue #69): `dagi_core/expressions.py`
+   (the bounded expression language) and `dagi_core/learning.py` (contract
+   validation, plan validation, grading of a host-measured report, dependency
+   aware mastery, guarded publish progress). The game package delegated to the
+   core instead of carrying a second copy, and the game suites still passed
+   against the core implementation.
+2. The game package was removed from the product: `game/` and its suites are
+   gone, `dagi_core/web.py` serves the core chat only, packaging no longer
+   includes the game package, and the operator documentation moved to
+   `docs/legacy-game/` (contracts, limits, the example walking contract and
+   the third-party license).
+
+Rollback: the tag `legacy-game-base-a754c3b` marks the last commit that still
+carried the package, the full source stays in Git history, and the unfinished
+route/approach work stays parked on `wip/game-route-approach`. No persisted
+data was dropped: the game tables in the operator database are untouched.
+
 ## Repository framing (2026-10-20) — core and chat first
 
 The operator folded the game direction away and asked why the repository still
