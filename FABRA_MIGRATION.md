@@ -57,7 +57,7 @@ one of them is reported with the gap instead of silently losing the tool.
 | FGM-05 | Fabra catalogue tab in the console, with a one click import | Done | 32 cards, gap report per card |
 | FGM-06 | Fabra sandbox clone: card, master form, chat on the Dagi core | Done | `https://fabra.live/dagi/fabra/` |
 | FGM-07 | Test runner: dialogue, streaming, tools, cost per agent | Done | 30/31 pass, 1 stale registry entry |
-| FGM-08 | Streaming transport in the clone: server sent events instead of polling | Open | the clone polls the transcript |
+| FGM-08 | Streaming transport in the clone: server sent events instead of polling | Done | `fabra_events.py`; the clone subscribes to the run event stream |
 | FGM-09 | Media tools in the core: image, music, video, audio, artifact publish | Open | 24 agents report a tool gap |
 | FGM-10 | Ship the passed agents to the site: route the Fabra chat to the Dagi core | Open | needs a routing decision per agent |
 | FGM-11 | Remove the stale `ssh-vless-vpn` entry from the Fabra test registry | Open | no package, no row in `agents` |
@@ -72,6 +72,16 @@ one of them is reported with the gap instead of silently losing the tool.
   model is offered. Unknown names are ignored, and a profile that matches
   nothing leaves the full registry visible instead of leaving the model with
   no tools at all.
+
+## Last run
+
+31 agents from the Fabra test registry were run through the Dagi core on
+2026-10-20: 30 passed, 1 failed. The failure is `ssh-vless-vpn`: it has no
+package in `data/agents` and no row in the `agents` table, so the entry in the
+test registry is stale (FGM-11). Every passed agent created its session, ran
+to completion, answered, and called no tool outside its own profile.
+
+Report: `/var/www/fabra/data/dagi/migration-report.json`.
 
 ## Rules for shipping an agent
 
