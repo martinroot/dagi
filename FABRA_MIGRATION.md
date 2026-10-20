@@ -58,9 +58,12 @@ one of them is reported with the gap instead of silently losing the tool.
 | FGM-06 | Fabra sandbox clone: card, master form, chat on the Dagi core | Done | `https://fabra.live/dagi/fabra/` |
 | FGM-07 | Test runner: dialogue, streaming, tools, cost per agent | Done | 30/31 pass, 1 stale registry entry |
 | FGM-08 | Streaming transport in the clone: server sent events instead of polling | Done | `fabra_events.py`; the clone subscribes to the run event stream |
-| FGM-09 | Media tools in the core: image, music, video, audio, artifact publish | Open | 24 agents report a tool gap |
-| FGM-10 | Ship the passed agents to the site: route the Fabra chat to the Dagi core | Open | needs a routing decision per agent |
+| FGM-09 | Media tools in the core: image, music, video, audio | Open | 14 agents report a media tool gap |
+| FGM-10 | Ship the passed agents to the site: route the Fabra chat to the Dagi core | Done | `agent_runtime_dagi.py`; the package field `runtime.backend: dagi` |
 | FGM-11 | Remove the stale `ssh-vless-vpn` entry from the Fabra test registry | Open | no package, no row in `agents` |
+| FGM-12 | `artifact.publish` in the core | Done | `artifact_publish`; the file lands in `published/` |
+| FGM-13 | The produced file shows up in the Fabra chat as a downloadable artifact | Done | `dagi_artifacts.py`; the `sandbox:` link is rewritten to the Fabra artifact link |
+| FGM-14 | The tool gap report counts every unmapped Fabra tool | Done | the gap is computed against the mapping, not against a list |
 
 ## Core changes made for the migration
 
@@ -72,6 +75,44 @@ one of them is reported with the gap instead of silently losing the tool.
   model is offered. Unknown names are ignored, and a profile that matches
   nothing leaves the full registry visible instead of leaving the model with
   no tools at all.
+- **Publishing a file.** `artifact_publish` copies a produced file into the
+  `published/` folder of the workspace and reports it as an artifact. The
+  Fabra agents publish their result with `artifact.publish`, so without this
+  tool every agent that delivers a document had a tool gap.
+
+## How an agent reaches the site
+
+The switch is one field in the agent package:
+
+```yaml
+runtime: {mode: agentic, backend: dagi, ...}
+```
+
+With that field the portal runtime hands the order to the Dagi core instead
+of running the model loop itself. The bridge keeps one Dagi session per
+order, sends the user text, waits for the run to finish, copies the produced
+files into the order workspace and writes the answer into the order chat. An
+answer that asks for more input becomes the need-info state of the order, so
+the site asks the user the question instead of marking the order done.
+
+## The agents that are on the site now
+
+Eight agents run on the Dagi core on the site. They passed the migration
+checks, every tool they use exists in the core, and they already ran the
+agentic runtime, so nothing else about them changed:
+
+`apartment-rental-contract`, `apartment-sale-contract`, `car-sale-contract`,
+`loan-contract`, `presentation-maker`, `seo-site-text`, `service-contract`,
+`work-contract`.
+
+The other agents keep the portal runtime for now:
+
+- 19 agents need a media tool the core does not have yet: `image.*`,
+  `music.*`, `video.*`, `audio.*`, `ssh.*`, `shell.*`.
+- 3 agents run a fixed pipeline on the site instead of the agentic runtime:
+  `music-lofi`, `music-reels`, `promo-landing`. The core has no counterpart
+  for that pipeline, so switching them would lose the flow that produces
+  their result.
 
 ## Last run
 
