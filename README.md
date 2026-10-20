@@ -1,34 +1,33 @@
-# Dagi — агентская среда
+# Dagi — a debugging instrument for an AI agent
 
-Новая рабочая поверхность `/game/`: один 2D-персонаж, чат с Core и шесть базовых навыков. Старые видеоролики, кино-премьера, раскадровка и режиссёрские пресеты удалены.
+Dagi watches an AI agent instead of narrating it. The live chat is the product
+surface: the model answers, calls tools, and the run inspector shows exactly
+what happened — the provider requests that were sent, the tool calls and their
+outcomes, the persisted transcript, the run's usage and cost provenance, the
+shared parent/child budget, and the bounded runtime context the agent was
+given (assignment, acceptance checks, blocker, next observed action, latest
+reflection). Everything is persisted and correlated by session ID, run ID and
+tool-call ID, so a run can be replayed and inspected after the fact.
 
-| Навык | Выполнение |
-|---|---|
-| `somersault` | Разгон, приседание, сальто, колено и кулак у пола |
-| `wall_flip` | Два шага по стене, обратное сальто, стабилизация |
-| `vault` | Опора рукой на тумбу, перемахивание, продолжение бега |
-| `ladder` | Поочерёдная опора на реальные перекладины, выход наверх |
-| `mantle` | Зацеп края, подтягивание, силовой выход, заброс ноги |
-| `drive` | Подход, открывание двери, посадка, руки на руле |
+The product is the core plus the chat. The embodied game surface is folded
+away: it stays in the repository for rollback, but it is no longer the product
+and it is no longer advertised in the chat UI — see
+[Folded game surface](#folded-game-surface).
 
-Модель планирует и вызывает `game_skill`. Тот же серверный инструмент обслуживает кнопки. Очередь, результаты и заметки сохраняются отдельно для каждой сессии в SQLite. Завершение и проверки определяет сервер; браузер только рисует общую исполняемую траекторию.
-
-Это **готовые контактные анимационные навыки**, а не обученные мышечные контроллеры. Полёты двух сальто используют баллистику центра масс и сохранение момента импульса. Проверки подтверждают геометрию штатных траекторий, не произвольные столкновения, красоту или общее владение паркуром. Смена навыка подготавливает отдельную площадку и меняет локальную систему координат; непрерывная навигация по общей карте пока не реализована.
-
-Чат использует только API и модель, настроенные оператором. Кнопки, очередь, проверки и включаемая человеком локальная практика не вызывают модель. Практика повторяет готовые навыки; сама по себе она не обучает новые движения.
-
-## Быстрый старт
+## Quick start
 
 ```sh
 uv sync
 uv run dagi-web
 ```
 
-Настройте API и веб-авторизацию как описано ниже. Откройте `/game/` и нажмите «＋ Сессия». Старые сохранённые миры не перезаписываются; для них новый интерфейс предложит создать агентскую сессию.
+Configure the API key and web authorization as described below, then open the
+chat. Pick or create a session and send a message. The right-hand inspector
+holds the run evidence: exact model requests, tool calls and errors, usage and
+cost, the shared tree budget, and the runtime/reflection card.
 
-Попробуйте в чате: «Поднимись по лестнице, затем сделай сальто. Дождись завершения, проверь результаты и сохрани вывод». Или: «Сохрани связку разминка: перемахивание, сальто от стены, силовой выход».
-
-Контракты, примеры JSON и ограничения: [game/AGENT.md](game/AGENT.md). Общие физические механизмы Core сохранены для совместимости старых проектов, но не выдаются за контроллер нового тела.
+Try in the chat: "Read the project layout and report the entry point", or
+"Create a goal, run a bounded check, and show me the receipts".
 
 ## Core features
 
@@ -166,26 +165,43 @@ Use the focused gate during small iterations; do not remove or weaken tests. Run
 ## Layout
 
 ```text
-dagi_core/agent.py     agent loop, run status, recovery, and usage budgets
-dagi_core/provider.py  single OpenAI-compatible streaming adapter
-dagi_core/tools.py     workspace files, memory, skills, optional shell
-dagi_core/state.py     SQLite, FTS5, runs, requests, archives, and usage
-dagi_core/context.py   bounded request assembly and history compression
-dagi_core/usage.py     token provenance, model prices, and run limits
-dagi_core/web.py       loopback web sandbox and HTTP API
-dagi_core/static/      sandbox HTML and event-driven UI
-dagi_core/config.py    environment-based configuration
-dagi_core/cli.py       terminal interface
-game/world.py          physical world: embodiment, objects, mechanics
-game/rigid.py          Chipmunk rigid-body simulator
-game/living.py         feedback policies and sensors
-game/director.py       agent-owned JavaScript scene projects (quickjs)
-game/embodiment.py     unassisted muscles, joint limits and appendages
-game/mechanics.py      ropes, joints, springs, gears and materials
-game/workshop.py       skill panel, controls and editable scenery
-game/static/           canvas renderer, scene and workshop UI
-docs/examples/         example recordings and the inline loops/storyboard
+|dagi_core/agent.py     agent loop, run status, recovery, and usage budgets
+|dagi_core/provider.py  single OpenAI-compatible streaming adapter
+|dagi_core/tools.py     workspace files, memory, skills, optional shell
+|dagi_core/state.py     SQLite, FTS5, runs, requests, archives, and usage
+|dagi_core/context.py   bounded request assembly and history compression
+|dagi_core/usage.py     token provenance, model prices, and run limits
+|dagi_core/runtime_context.py  bounded runtime identity and task position
+|dagi_core/goals.py     goals, acceptance checks, and repeat-failure caps
+|dagi_core/delegation.py  bounded parent/child agent delegation
+|dagi_core/worker.py    remote worker peers and their proxy
+|dagi_core/web.py       loopback web sandbox and HTTP API
+|dagi_core/static/      sandbox HTML and event-driven chat UI
+|dagi_core/config.py    environment-based configuration
+|dagi_core/cli.py       terminal interface
 ```
+
+## Folded game surface
+
+The embodied lab under `/game/` and the `game/` package is folded away as of
+2026-10-20. It is kept in the repository so the work stays recoverable, and
+it is not part of the product surface: the chat no longer links to it, and no
+new work is planned for it.
+
+- What it is: an authored 2D character with contact skills (`somersault`,
+  `wall_flip`, `vault`, `ladder`, `mantle`, `drive`), a server-side skill
+  runtime with per-skill checks, and a Skill Fitness Lab with measured
+  fitness contracts.
+- What it is not: not learned controllers, not a navigation stack, and not a
+  certification of physical quality. Checks confirm the geometry of the
+  packaged trajectories, not arbitrary collisions.
+- Contracts and limits: [game/AGENT.md](game/AGENT.md), `game/LEARNING.md`,
+  `game/PHYSICS.md`.
+- Removal is a separate, explicit decision: deleting the package would also
+  delete the skills, the learning contracts and the operator documentation, so
+  it is not done as part of folding the direction away.
+- The in-flight route/approach work is parked on the side branch
+  `wip/game-route-approach` (not merged into `main`, not deployed).
 
 ## Provenance
 

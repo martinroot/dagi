@@ -278,6 +278,28 @@ Verification: 17 Node UI checks for the chat and the cost inspector, 13 DOM
 checks against a real DOM implementation, 5 cost-status state tests, 1 API
 contract test; full agent gate: 394 pytest + 61 Node UI.
 
+## Repository framing (2026-10-20) — core and chat first
+
+The operator folded the game direction away and asked why the repository still
+showed a game section and a Russian, game-first description. Both came from
+the Agent v12 snapshot that became the main line on the operator's instruction
+("Ставь это основной в main"): that snapshot carried the `game/` package and a
+Russian README written around the embodied lab.
+
+- The README is now English and core-first: the product is the chat plus the
+  run inspector, and the embodied lab is a short "Folded game surface" section
+  that states what it is, what it is not, where its contracts live, and that
+  removal is a separate explicit decision (deleting the package would also
+  delete the skills, the learning contracts and the operator documentation).
+- The chat header no longer links to the embodied lab. The `/game/` surface
+  itself is untouched and still reachable by URL.
+- The GitHub repository description and topics now describe the instrument
+  (ai-agent, debugging, instrumentation, agent-tools, chat, skills, memory,
+  observability) instead of a generic "Agents Web".
+- The `game/` package stays in `main` on purpose: it keeps the skills, the
+  learning contracts and the rollback path, and nothing about it is advertised
+  as the product.
+
 ## Operational constraints
 
 ### Fast issue-level testing (DX)
