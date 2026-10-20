@@ -5,6 +5,7 @@ from __future__ import annotations
 import difflib
 import json
 import re
+import shutil
 from decimal import Decimal
 import subprocess
 import time
@@ -182,6 +183,16 @@ class ToolRegistry:
         self._execution_context: ToolExecutionContext | None = None
         self.documents_enabled = documents_enabled
         self._register_builtins(shell_enabled)
+        self.register(Tool(
+            "artifact_publish",
+            "Publish a produced file as a deliverable of the session.",
+            {"type": "object", "properties": {
+                "path": {"type": "string"},
+                "filename": {"type": "string"},
+                "type": {"type": "string"},
+            }, "required": ["path"]},
+            self._artifact_publish, retryable=True,
+        ))
         if documents_enabled:
             self._register_document_tools()
         self._builtin_tool_names = frozenset(self._tools)
@@ -351,6 +362,7 @@ class ToolRegistry:
             {"type": "object", "properties": {}}, self._document_latest, retryable=True,
         ))
 
+
     def _document_path(self, relative: str) -> Path:
         path = _resolve(self.workspace, relative)
         if not path.is_file():
@@ -473,6 +485,32 @@ class ToolRegistry:
                     "proofread": verdict["proofread"],
                     "paragraphs": verdict["paragraphs"],
                 },
+            },
+        )
+
+    def _artifact_publish(self, args: dict[str, Any]) -> ToolResult:
+        """Copy a produced file into the published folder of the workspace."""
+        relative = str(args.get("path") or "").strip()
+        if not relative:
+            raise ToolError("path is required")
+        source = _resolve(self.workspace, relative)
+        if not source.is_file():
+            raise ToolError(f"not a file: {relative!r}")
+        name = str(args.get("filename") or source.name).strip() or source.name
+        name = re.sub(r"[^0-9A-Za-zА-Яа-яЁё_.() -]", "_", name)[:180]
+        target_dir = self.workspace / "published"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / name
+        shutil.copy2(source, target)
+        kind = str(args.get("type") or "").strip() or target.suffix.lstrip(".").lower() or "file"
+        published = target.relative_to(self.workspace).as_posix()
+        return ToolResult(
+            published,
+            presentation={
+                "type": "artifact",
+                "summary": f"Published: {published}",
+                "artifacts": [{"path": published, "kind": kind, "operation": "write"}],
+                "diagnostics": {"size_bytes": target.stat().st_size},
             },
         )
 
