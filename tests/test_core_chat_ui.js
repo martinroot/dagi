@@ -83,7 +83,7 @@ function makeUi(fetchImpl) {
   const context = {
     document,
     fetch: fetchImpl,
-    EventSource: FakeEventSource,
+    EventSource: FakeEventSource, setInterval: () => 0, clearInterval: () => {},
     navigator: {clipboard},
     performance: {now: () => 0},
     setTimeout,

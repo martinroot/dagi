@@ -58,6 +58,8 @@
     .tool-actions { display: flex; flex-wrap: wrap; gap: 6px; }
     .tool-actions:empty { display: none; }
     .tool-actions button { font-size: 12px; padding: 4px 7px; }
+    .approval-row { display: grid; gap: 6px; padding: 6px 0; border-bottom: 1px solid #30394a; }
+    .approval-command { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .event.error { color: #ffb4ab; }
     form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #30394a; }
     textarea { resize: vertical; min-height: 44px; max-height: 180px; flex: 1; border-radius: 6px; border: 1px solid #435571; background: #171d27; color: inherit; padding: 9px; }
@@ -110,6 +112,7 @@
         <details open><summary>Run usage and cost</summary><div id="cost-status" class="cost-status">Select a saved run or start one.</div><pre id="usage">{}</pre></details>
         <details open><summary>Shared tree budget</summary><pre id="budget-usage">{}</pre></details>
         <details open><summary>Runtime and reflection</summary><button id="refresh-runtime" type="button">Refresh</button><div id="runtime-status" class="runtime-status" aria-live="polite"></div></details>
+        <details open><summary>Command approval</summary><div id="approvals" class="run-list"><span class="muted">No command is waiting.</span></div></details>
         <details open><summary>Parent and child runs</summary><div id="children" class="run-list"></div></details>
       </aside>
     </main>

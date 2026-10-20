@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 from .agent import Agent, SYSTEM_PROMPT
+from .approvals import ApprovalRegistry
 from .auth import create_session_token, verify_password, verify_session_token
 from .config import Config, load_config
 from .context import ContextBuilder
@@ -262,6 +263,7 @@ class WebApp:
         self._runs: dict[str, _RunControl] = {}
         self._goals: dict[str, _RunControl] = {}
         self._lock = Lock()
+        self.approvals = ApprovalRegistry(self.config.web_command_approval_timeout)
         self._lease: RuntimeLease | None = None
         self._session_secret = secrets.token_bytes(32)
         self._revoked_sessions: dict[str, int] = {}
@@ -425,6 +427,8 @@ class WebApp:
                         ]})
                     elif match := re.fullmatch(r"/api/workers/([A-Za-z0-9_-]+)/proxy(/api/.*)", path):
                         self._proxy(match.group(1), match.group(2))
+                    elif path == "/api/approvals":
+                        self._send_json(200, {"approvals": app.approvals.pending()})
                     elif path == "/api/templates":
                         with _StateContext(self._state()) as state:
                             self._send_json(200, {"templates": state.list_templates()})
@@ -521,6 +525,14 @@ class WebApp:
                         self._send_json(202, app.start_goal(int(match.group(1)), body))
                     elif match := re.fullmatch(r"/api/goals/([^/]+)/(stop|resume)", parsed.path):
                         self._send_json(202, app.control_goal(match.group(1), match.group(2)))
+                    elif match := re.fullmatch(r"/api/approvals/([^/]+)", parsed.path):
+                        approved = body.get("approved")
+                        if type(approved) is not bool:
+                            raise ValueError("approved must be boolean")
+                        if not app.approvals.decide(match.group(1), approved):
+                            self._send_json(404, {"error": "approval not found or already decided"})
+                            return
+                        self._send_json(200, {"decided": True, "approved": approved})
                     elif parsed.path == "/api/templates":
                         name = body.get("name")
                         if not isinstance(name, str) or not name.strip():
@@ -1090,7 +1102,15 @@ class WebApp:
             if session is None:
                 raise ValueError("session not found")
             workspace = resolve_session_workspace(self.config.workspace, session["workspace"])
-            tools = ToolRegistry(workspace, state, session_id, shell_enabled=False)
+            tools = ToolRegistry(
+                workspace, state, session_id,
+                shell_enabled=self.config.web_enable_shell,
+                approve_shell=(
+                    lambda command: self.approvals.request(
+                        command, session_id=session_id, run_id=run_id
+                    )
+                ) if self.config.web_enable_shell else None,
+            )
             delegation = DelegationManager(
                 state,
                 self.config.workspace,

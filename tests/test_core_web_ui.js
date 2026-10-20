@@ -34,7 +34,7 @@ test("adjacent streamed text chunks render as one assistant message", () => {
   const context = {
     document,
     fetch: async () => ({status: 401, ok: false, text: async () => '{"error":"authentication required"}'}),
-    EventSource: class { close() {} },
+    EventSource: class { close() {} }, setInterval: () => 0, clearInterval: () => {},
   };
   vm.runInNewContext(fs.readFileSync(new URL("../dagi_core/static/app.js", import.meta.url), "utf8"), context);
 
@@ -60,7 +60,7 @@ function makeUi(fetchImpl) {
     constructor(url) { this.url = url; this.closed = false; sources.push(this); }
     close() { this.closed = true; }
   }
-  const context = {document, fetch: fetchImpl, EventSource: FakeEventSource};
+  const context = {document, fetch: fetchImpl, EventSource: FakeEventSource, setInterval: () => 0, clearInterval: () => {}};
   vm.runInNewContext(fs.readFileSync(new URL("../dagi_core/static/app.js", import.meta.url), "utf8"), context);
   return {context, elements, sources};
 }

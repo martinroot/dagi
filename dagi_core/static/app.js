@@ -565,6 +565,7 @@ async function showSandbox() {
   $("sandbox").hidden = false;
   await refreshSessions();
   await refreshTemplates();
+  await refreshApprovals();
 }
 
 async function restoreSession() {
@@ -969,6 +970,60 @@ async function refreshTemplates() {
   }
 }
 
+async function refreshApprovals() {
+  const root = $("approvals");
+  if (!root) return;
+  let approvals = [];
+  try {
+    const data = await api("/api/approvals");
+    approvals = data.approvals || [];
+  } catch (error) {
+    root.textContent = `Approvals unavailable: ${error}`;
+    return;
+  }
+  root.replaceChildren();
+  if (!approvals.length) {
+    const empty = document.createElement("span");
+    empty.className = "muted";
+    empty.textContent = "No command is waiting.";
+    root.append(empty);
+    return;
+  }
+  for (const approval of approvals) {
+    const row = document.createElement("div");
+    row.className = "approval-row";
+    row.dataset.approvalId = approval.id;
+    const command = document.createElement("div");
+    command.className = "approval-command";
+    command.textContent = approval.command;
+    const actions = document.createElement("div");
+    actions.className = "tool-actions";
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.textContent = "Approve";
+    approve.onclick = () => decideApproval(approval.id, true);
+    const deny = document.createElement("button");
+    deny.type = "button";
+    deny.textContent = "Deny";
+    deny.onclick = () => decideApproval(approval.id, false);
+    actions.append(approve, deny);
+    row.append(command, actions);
+    root.append(row);
+  }
+}
+
+async function decideApproval(approvalId, approved) {
+  try {
+    await api(`/api/approvals/${encodeURIComponent(approvalId)}`, {
+      method: "POST", body: JSON.stringify({approved}),
+    });
+    $("run-status").textContent = approved ? "Command approved." : "Command denied.";
+    await refreshApprovals();
+  } catch (error) {
+    $("run-status").textContent = `Approval failed: ${error}`;
+  }
+}
+
 async function cloneTemplate(templateId) {
   try {
     const data = await api(`/api/templates/${encodeURIComponent(templateId)}/clone`, {method: "POST", body: "{}"});
@@ -1214,6 +1269,7 @@ $("message").addEventListener("keydown", (event) => {
 });
 
 $("refresh-runtime").onclick = refreshRuntimeStatus;
+if (typeof setInterval === "function") setInterval(refreshApprovals, 5000);
 $("save-template").onclick = saveTemplateAsCurrent;
 
 $("stop-run").onclick = async () => {

@@ -38,7 +38,7 @@ function makeUi(fetchImpl) {
     constructor(url) { this.url = url; this.closed = false; sources.push(this); }
     close() { this.closed = true; }
   }
-  const context = {document, fetch: fetchImpl, EventSource: FakeEventSource, prompt: () => "hermes-deploy"};
+  const context = {document, fetch: fetchImpl, EventSource: FakeEventSource, setInterval: () => 0, clearInterval: () => {}, prompt: () => "hermes-deploy"};
   vm.runInNewContext(fs.readFileSync(new URL("../dagi_core/static/app.js", import.meta.url), "utf8"), context);
   return {context, elements, sources};
 }
@@ -120,4 +120,34 @@ test("saving a template records the current session and refreshes the list", asy
   assert.equal(posted.length, 1);
   assert.equal(posted[0].source_session_id, 7);
   assert.equal(posted[0].name, "hermes-deploy");
+});
+
+test("a pending command is shown with approve and deny controls", async () => {
+  const posted = [];
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/templates") return jsonResponse({templates: []});
+    if (url === "/api/approvals" && options.method === undefined) {
+      return jsonResponse({approvals: [{id: "ap-1", command: "ssh -i key user@host 'uname -a'", session_id: 1, run_id: "r1"}]});
+    }
+    if (url === "/api/approvals/ap-1") {
+      posted.push(JSON.parse(options.body));
+      return jsonResponse({decided: true, approved: JSON.parse(options.body).approved});
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.refreshApprovals();
+  const panel = elements.get("approvals");
+  assert.equal(panel.children.length, 1);
+  const row = panel.children[0];
+  assert.match(row.children[0].textContent, /ssh -i key/);
+  const buttons = row.children[1].children;
+  assert.equal(buttons.length, 2);
+  await buttons[0].onclick();
+  assert.deepEqual(posted, [{approved: true}]);
+  await buttons[1].onclick();
+  assert.deepEqual(posted, [{approved: true}, {approved: false}]);
 });

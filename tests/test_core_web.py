@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 import time
+from dataclasses import replace
 from copy import deepcopy
 from threading import Event, Thread
 from http.cookiejar import CookieJar
@@ -294,6 +295,57 @@ def test_run_inspector_explains_unavailable_cost_and_names_the_unpriced_model(tm
         assert "DAGI_MODEL_PRICES" in detail["cost_status"]["explanation"]
         assert detail["cost_status"]["cost_usd"] is None
         assert detail["budget_cost_status"]["unpriced_models"] == ["main-model"]
+    finally:
+        _stop(server, thread)
+
+
+def test_a_shell_command_from_a_chat_session_waits_for_operator_approval(tmp_path):
+    from dagi_core.config import Config
+    from dagi_core.auth import hash_password
+
+    config = replace(_config(tmp_path), web_enable_shell=True, web_command_approval_timeout=5)
+    app = WebApp(config, provider_factory=lambda *_args: SlowProvider())
+    server, thread, base = _start(app)
+    opener = build_opener(HTTPCookieProcessor())
+
+    def request(path, method="GET", payload=None):
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = Request(
+            base + path, data=data,
+            headers={"Content-Type": "application/json"}, method=method,
+        )
+        try:
+            with opener.open(req, timeout=5) as response:
+                return response.status, json.loads(response.read() or b"{}")
+        except HTTPError as response:
+            return response.code, json.loads(response.read() or b"{}")
+
+    try:
+        request("/api/auth/login", "POST", {"username": "admin", "password": "local-test-password"})
+        assert request("/api/approvals")[1]["approvals"] == []
+
+        registry = app.approvals
+        decision = {}
+
+        def ask():
+            decision["approved"] = registry.request("uname -a", session_id=1, run_id="r1")
+
+        import threading
+        worker = threading.Thread(target=ask)
+        worker.start()
+        deadline = time.monotonic() + 3
+        pending = []
+        while time.monotonic() < deadline:
+            pending = registry.pending()
+            if pending:
+                break
+            time.sleep(0.01)
+        assert pending, "the command must wait for the operator"
+        status, body = request(f"/api/approvals/{pending[0]['id']}", "POST", {"approved": True})
+        assert status == 200 and body["approved"] is True
+        worker.join(timeout=5)
+        assert decision["approved"] is True
+        assert request("/api/approvals")[1]["approvals"] == []
     finally:
         _stop(server, thread)
 

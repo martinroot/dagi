@@ -38,6 +38,8 @@ class Config:
     web_public_origin: str = ""
     web_cookie_secure: bool = True
     web_token: str = field(default="", repr=False)
+    web_enable_shell: bool = False
+    web_command_approval_timeout: int = 300
     enable_check_commands: bool = False
     goal_repeat_failure_threshold: int = 2
 
@@ -120,6 +122,8 @@ def load_config() -> Config:
         web_public_origin=os.environ.get("DAGI_WEB_PUBLIC_ORIGIN", "").strip().rstrip("/"),
         web_cookie_secure=_enabled(os.environ.get("DAGI_WEB_COOKIE_SECURE", "true")),
         web_token=os.environ.get("DAGI_WEB_TOKEN", "").strip(),
+        web_enable_shell=_enabled(os.environ.get("DAGI_WEB_ENABLE_SHELL", "false")),
+        web_command_approval_timeout=int(os.environ.get("DAGI_WEB_COMMAND_APPROVAL_TIMEOUT", "300")),
         enable_check_commands=_enabled(os.environ.get("DAGI_ENABLE_CHECK_COMMANDS")),
         goal_repeat_failure_threshold=goal_repeat_failure_threshold,
     )
