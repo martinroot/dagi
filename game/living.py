@@ -63,94 +63,16 @@ COMPARE = {ast.Lt: operator.lt, ast.LtE: operator.le, ast.Gt: operator.gt,
            ast.GtE: operator.ge, ast.Eq: operator.eq, ast.NotEq: operator.ne}
 
 
-@lru_cache(maxsize=128)
 def parse(source):
-    if not isinstance(source, str) or not 1 <= len(source) <= 8000:
-        raise ValueError("policy code must be a Python expression, 1..8000 characters")
-    try:
-        tree = ast.parse(source, mode="eval")
-    except (SyntaxError, RecursionError) as exc:
-        raise ValueError("invalid policy expression: " + str(exc)[:180]) from exc
-    nodes = list(ast.walk(tree))
-    allowed = (ast.Expression, ast.Constant, ast.Name, ast.Load, ast.Subscript,
-               ast.Dict, ast.List, ast.Tuple, ast.BinOp, ast.UnaryOp, ast.BoolOp,
-               ast.Compare, ast.IfExp, ast.Call, ast.USub, ast.UAdd, ast.Not,
-               ast.And, ast.Or, *BINARY, *COMPARE)
-    if len(nodes) > 600 or any(not isinstance(n, allowed) for n in nodes):
-        raise ValueError("policy supports bounded expressions, dictionaries, indexing, math and conditions; no attributes, loops or imports")
-    if any(isinstance(n, ast.Call) and (not isinstance(n.func, ast.Name) or n.func.id not in FUNCTIONS or n.keywords) for n in nodes):
-        raise ValueError("policy calls only: " + ", ".join(FUNCTIONS))
-    return tree.body
+    """Bounded expression parsing now lives in the core (`dagi_core.expressions`)."""
+    from dagi_core.expressions import parse as core_parse
+    return core_parse(source)
 
 
 def evaluate(source, context):
-    budget = [1200]
-
-    def check(value):
-        if isinstance(value, (int, float)) and (not math.isfinite(value) or abs(value) > 1e9):
-            raise ValueError("policy number out of bounds")
-        if isinstance(value, (str, list, tuple, dict)) and len(value) > 128:
-            raise ValueError("policy value too large")
-        return value
-
-    def visit(node):
-        budget[0] -= 1
-        if budget[0] < 0:
-            raise ValueError("policy operation budget exceeded")
-        if isinstance(node, ast.Constant):
-            return check(node.value)
-        if isinstance(node, ast.Name):
-            if node.id == "pi":
-                return math.pi
-            if node.id not in context:
-                raise ValueError("unknown policy variable: " + node.id)
-            return context[node.id]
-        if isinstance(node, ast.Subscript):
-            return visit(node.value)[visit(node.slice)]
-        if isinstance(node, (ast.List, ast.Tuple)):
-            return check([visit(n) for n in node.elts])
-        if isinstance(node, ast.Dict):
-            if any(k is None for k in node.keys):
-                raise ValueError("dictionary unpacking is not supported")
-            return check({visit(k): visit(v) for k, v in zip(node.keys, node.values)})
-        if isinstance(node, ast.IfExp):
-            return visit(node.body if visit(node.test) else node.orelse)
-        if isinstance(node, ast.UnaryOp):
-            value = visit(node.operand)
-            return check(not value if isinstance(node.op, ast.Not) else -value if isinstance(node.op, ast.USub) else +value)
-        if isinstance(node, ast.BoolOp):
-            value = None
-            for item in node.values:
-                value = visit(item)
-                if isinstance(node.op, ast.And) and not value or isinstance(node.op, ast.Or) and value:
-                    break
-            return value
-        if isinstance(node, ast.BinOp):
-            a, b = visit(node.left), visit(node.right)
-            if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
-                raise ValueError("policy arithmetic requires numbers")
-            if isinstance(node.op, ast.Pow) and abs(b) > 6:
-                raise ValueError("policy exponent limit: 6")
-            return check(BINARY[type(node.op)](a, b))
-        if isinstance(node, ast.Compare):
-            a = visit(node.left)
-            for op, right in zip(node.ops, node.comparators):
-                b = visit(right)
-                if not COMPARE[type(op)](a, b):
-                    return False
-                a = b
-            return True
-        if isinstance(node, ast.Call):
-            return check(FUNCTIONS[node.func.id](*(visit(n) for n in node.args)))
-        raise ValueError("unsupported policy expression")
-
-    try:
-        result = visit(parse(source))
-        if len(json.dumps(result, allow_nan=False)) > 8000:
-            raise ValueError("policy result too large")
-        return result
-    except (TypeError, KeyError, IndexError, ArithmeticError, RecursionError) as exc:
-        raise ValueError("policy runtime: " + str(exc)[:180]) from exc
+    """Bounded expression evaluation now lives in the core (`dagi_core.expressions`)."""
+    from dagi_core.expressions import evaluate as core_evaluate
+    return core_evaluate(source, context)
 
 
 def sensors(world):

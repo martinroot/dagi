@@ -275,27 +275,14 @@ def assess(world,id,cancelled=lambda:False,require_dependencies=True):
 def grade_report(contract,report):
     """Domain-neutral grading of a host-measured report; never trust model claims.
 
-    Physics supplies the report today. File/test/deployment adapters can reuse
-    this function, but must obtain their own trusted measurements and bindings.
-    It is deliberately not an API accepting an LLM-supplied success report.
+    The implementation now lives in the core (`dagi_core.learning`). Physics
+    supplies the report today; file/test/deployment adapters reuse the same
+    function but must obtain their own trusted measurements and bindings. It is
+    deliberately not an API accepting an LLM-supplied success report.
     """
-    from .living import evaluate
-    try:
-        if report.get('passed') is not True:raise ValueError(report.get('error','execution report failed'))
-        score=evaluate(contract['score'],{'r':report});success=evaluate(contract['success'],{'r':report})
-        if isinstance(score,bool) or not isinstance(score,(int,float)) or not math.isfinite(score):raise ValueError('fitness score must be finite numeric')
-        if type(success) is not bool:raise ValueError('success must be boolean')
-        guards=[evaluate(g,{'r':report}) for g in contract['guards']]
-        if any(type(g) is not bool for g in guards):raise ValueError('guards must be boolean')
-        checks=[]
-        for m in contract['metrics']:
-            target=m.get('target',{});v=report['metrics'][m['name']]
-            if isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v):raise ValueError('measured metric must be finite numeric')
-            checks.append({'metric':m['name'],'value':v,'target':target,'passed':target.get('min',-1e100)<=v<=target.get('max',1e100)})
-        return {'score':score,'passed':success and all(guards) and all(x['passed'] for x in checks),'guards_pass':all(guards),'success':success,'metrics':checks,
-                'guards':[{'expression':g,'passed':v} for g,v in zip(contract['guards'],guards)],'report':{k:v for k,v in report.items() if k not in ('objects','ropes')}}
-    except (ValueError,KeyError) as exc:
-        return {'score':None,'passed':False,'guards_pass':False,'error':str(exc)[:200],'metrics':report.get('metrics',{})}
+    from dagi_core.learning import grade_report as core_grade_report
+    return core_grade_report(contract,report)
+
 
 def record(world,id,result,*,applied,improved=False):
     c=world['learning']['skills'][id]
@@ -367,8 +354,5 @@ def save_failure(database,sid,original,id,result,candidate=None,changes=None):
 
 
 def progress(before,after,min_delta):
-    improved=after["score"] is not None and (before["score"] is None or after["score"]>before["score"]+min_delta)
-    previous={c['id']:c for c in before['cases']}
-    validation_ok=all(c['score'] is not None and (previous.get(c['id'],{}).get('score') is None or c['score']>=previous[c['id']]['score']-min_delta) for c in after['cases'] if c['split']=='validation')
-    accepted=after['guards_pass'] and (after['passed'] or (improved and validation_ok)) and not (before['passed'] and not after['passed'])
-    return accepted,improved
+    from dagi_core.learning import progress as core_progress
+    return core_progress(before,after,min_delta)

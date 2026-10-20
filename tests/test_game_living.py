@@ -93,7 +93,8 @@ def test_delayed_policy_failure_blocks_release_even_without_any_skill_widget():
     report = world["draft"]["report"]
     assert report["passed"] is False
     assert report["feedback_trial"]["candidate"]["passed"] is False
-    assert "policy runtime" in report["feedback_trial"]["candidate"]["error"]
+    error = report["feedback_trial"]["candidate"]["error"]
+    assert "runtime" in error and "division by zero" in error
     assert world["tick"] == 0 and not world["widgets"]
     with pytest.raises(ValueError, match="passing"):
         build(world, {"operation": "commit"})
