@@ -76,7 +76,7 @@ Environment variables:
 - `DAGI_API_KEY` — required API key.
 - `DAGI_BASE_URL` — API endpoint; defaults to `https://api.openai.com/v1`.
 - `DAGI_MODEL` — model; defaults to `gpt-4o-mini`.
-- `DAGI_MODEL_PRICES` — JSON model map with `input_per_million` and `output_per_million` prices in USD per million tokens.
+- `DAGI_MODEL_PRICES` — JSON model map with `input_per_million` and `output_per_million` prices in USD per million tokens. Without an entry for a model that was used, the run inspector reports the cost as unavailable (never as zero), names the unpriced models, and points here: a USD budget cannot be enforced for an unpriced model.
 - `DAGI_MAX_PROVIDER_CALLS_PER_RUN` — maximum primary and auxiliary provider calls across the parent/child budget group; defaults to `32`. Game turns are additionally capped at `min(16, this value)`; the headroom exists so a learning contract can finish a skill iteration inside one turn, while budgets still bound total spend.
 - `DAGI_BUDGET_USD` — optional shared parent/child spend limit; requires price entries for every selected model.
 - `DAGI_ESTIMATE_MISSING_USAGE` — estimate missing token usage (default `true`); set to `false` to retain it as unavailable.
