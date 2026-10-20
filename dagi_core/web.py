@@ -425,6 +425,9 @@ class WebApp:
                         ]})
                     elif match := re.fullmatch(r"/api/workers/([A-Za-z0-9_-]+)/proxy(/api/.*)", path):
                         self._proxy(match.group(1), match.group(2))
+                    elif path == "/api/templates":
+                        with _StateContext(self._state()) as state:
+                            self._send_json(200, {"templates": state.list_templates()})
                     elif path == "/api/sessions":
                         with _StateContext(self._state()) as state:
                             sessions = state.list_sessions(100)
@@ -518,6 +521,28 @@ class WebApp:
                         self._send_json(202, app.start_goal(int(match.group(1)), body))
                     elif match := re.fullmatch(r"/api/goals/([^/]+)/(stop|resume)", parsed.path):
                         self._send_json(202, app.control_goal(match.group(1), match.group(2)))
+                    elif parsed.path == "/api/templates":
+                        name = body.get("name")
+                        if not isinstance(name, str) or not name.strip():
+                            raise ValueError("template name must be text")
+                        source_session_id = body.get("source_session_id")
+                        if source_session_id is not None and (type(source_session_id) is not int or source_session_id < 1):
+                            raise ValueError("source_session_id must be a positive integer")
+                        brief = body.get("brief", "")
+                        if not isinstance(brief, str):
+                            raise ValueError("brief must be text")
+                        task = body.get("task")
+                        if task is not None and not isinstance(task, str):
+                            raise ValueError("task must be text")
+                        with _StateContext(self._state()) as state:
+                            template = state.create_template(
+                                name, source_session_id=source_session_id, task=task, brief=brief,
+                            )
+                        self._send_json(201, {"template": template})
+                    elif match := re.fullmatch(r"/api/templates/([^/]+)/clone", parsed.path):
+                        with _StateContext(self._state()) as state:
+                            clone = state.clone_template(match.group(1))
+                        self._send_json(201, {"clone": clone})
                     elif parsed.path == "/api/sessions":
                         title = body.get("title")
                         if title is not None and not isinstance(title, str):
@@ -535,6 +560,26 @@ class WebApp:
                     self._send_json(409, {"error": str(exc)})
                 except (ValueError, json.JSONDecodeError) as exc:
                     self._send_json(400, {"error": str(exc)})
+                except Exception:
+                    self._send_json(500, {"error": "sandbox request failed"})
+
+            def do_DELETE(self) -> None:
+                parsed = urlparse(self.path)
+                try:
+                    if not app._origin_allowed(self.headers):
+                        self._send_json(403, {"error": "request origin is not allowed"})
+                        return
+                    if parsed.path.startswith("/api/") and not app._is_authenticated(self.headers):
+                        self._send_json(401, {"error": "authentication required"})
+                        return
+                    if match := re.fullmatch(r"/api/templates/([^/]+)", parsed.path):
+                        with _StateContext(self._state()) as state:
+                            state.delete_template(match.group(1))
+                        self._send_json(200, {"deleted": True})
+                    else:
+                        self._send_json(404, {"error": "not found"})
+                except ValueError as exc:
+                    self._send_json(404, {"error": str(exc)})
                 except Exception:
                     self._send_json(500, {"error": "sandbox request failed"})
 

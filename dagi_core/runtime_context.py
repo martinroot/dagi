@@ -161,6 +161,7 @@ def build_runtime_context(
             "enabled_tools": displayed_tools,
             "omitted_tool_count": max(0, len(tool_names) - len(displayed_tools)),
         },
+        "scenario_brief": _bounded_text(session.get("brief") or "") or None,
         "assignment": {
             "current_message_id": user_message_id,
             "source": "delegated_parent_contract" if assignment_contract else "saved_user_message",

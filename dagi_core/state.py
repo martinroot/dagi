@@ -20,6 +20,16 @@ CREATE TABLE IF NOT EXISTS sessions (
     parent_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
     workspace TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS session_templates (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    task TEXT NOT NULL,
+    brief TEXT NOT NULL DEFAULT '',
+    skills_json TEXT NOT NULL DEFAULT '[]',
+    tools_json TEXT NOT NULL DEFAULT '[]',
+    source_session_id INTEGER,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
     session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -291,6 +301,8 @@ class StateStore:
             self._db.execute("ALTER TABLE sessions ADD COLUMN parent_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL")
         if "workspace" not in session_columns:
             self._db.execute("ALTER TABLE sessions ADD COLUMN workspace TEXT NOT NULL DEFAULT ''")
+        if "brief" not in session_columns:
+            self._db.execute("ALTER TABLE sessions ADD COLUMN brief TEXT NOT NULL DEFAULT ''")
         self._db.execute("CREATE INDEX IF NOT EXISTS sessions_parent_id ON sessions(parent_id)")
         run_columns = {row[1] for row in self._db.execute("PRAGMA table_info(runs)")}
         if "agent_id" not in run_columns:
@@ -338,9 +350,12 @@ class StateStore:
         *,
         parent_id: int | None = None,
         workspace: str = "",
+        brief: str = "",
     ) -> int:
         if title is not None and not isinstance(title, str):
             raise ValueError("session title must be text")
+        if not isinstance(brief, str) or len(brief) > 8000:
+            raise ValueError("session brief must be text of at most 8000 characters")
         if parent_id is not None:
             if isinstance(parent_id, bool) or not isinstance(parent_id, int) or self.get_session(parent_id) is None:
                 raise ValueError("parent session does not exist")
@@ -350,8 +365,8 @@ class StateStore:
         if workspace_path.is_absolute() or ".." in workspace_path.parts:
             raise ValueError("session workspace must stay inside the configured root")
         cursor = self._db.execute(
-            "INSERT INTO sessions(title, created_at, parent_id, workspace) VALUES(?, ?, ?, ?)",
-            (title, _now(), parent_id, workspace),
+            "INSERT INTO sessions(title, created_at, parent_id, workspace, brief) VALUES(?, ?, ?, ?, ?)",
+            (title, _now(), parent_id, workspace, brief),
         )
         self._db.commit()
         return int(cursor.lastrowid)
@@ -857,6 +872,118 @@ class StateStore:
             "provider_calls": len(rows),
         }
 
+    # --- session templates: the agent factory ---------------------------
+
+    def create_template(
+        self,
+        name: str,
+        *,
+        source_session_id: int | None = None,
+        task: str | None = None,
+        brief: str = "",
+    ) -> dict[str, Any]:
+        """Capture a working session as a reusable template.
+
+        The template keeps the scenario (the task and the brief) and what made
+        it work (the skills that exist, the tools the session used). It never
+        copies the transcript: a clone starts clean.
+        """
+        slug = _skill_name(name)
+        if not slug:
+            raise ValueError("template name must not be empty")
+        if not isinstance(brief, str) or len(brief) > 8000:
+            raise ValueError("template brief must be text of at most 8000 characters")
+        resolved_task = task
+        tools: list[str] = []
+        if source_session_id is not None:
+            if self.get_session(source_session_id) is None:
+                raise ValueError("source session does not exist")
+            if resolved_task is None:
+                first = next(
+                    (
+                        row["content"] for row in self._db.execute(
+                            "SELECT content FROM messages WHERE session_id=? AND role='user' ORDER BY id",
+                            (source_session_id,),
+                        )
+                    ),
+                    "",
+                )
+                resolved_task = first or ""
+            tools = [
+                row["name"] for row in self._db.execute(
+                    "SELECT DISTINCT name FROM tool_executions WHERE session_id=? ORDER BY name",
+                    (source_session_id,),
+                )
+            ]
+        if not isinstance(resolved_task, str) or not resolved_task.strip():
+            raise ValueError("a template needs a nonempty task")
+        if len(resolved_task) > 8000:
+            raise ValueError("template task must be at most 8000 characters")
+        skills = [skill["name"] for skill in self.list_skills()]
+        template_id = str(uuid.uuid4())
+        self._db.execute(
+            """INSERT INTO session_templates(id, name, task, brief, skills_json, tools_json,
+                       source_session_id, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                template_id, slug, resolved_task.strip(), brief.strip(),
+                json.dumps(skills, ensure_ascii=False), json.dumps(tools, ensure_ascii=False),
+                source_session_id, _now(),
+            ),
+        )
+        self._db.commit()
+        return self.get_template(template_id)  # type: ignore[return-value]
+
+    def get_template(self, template_id: str) -> dict[str, Any] | None:
+        row = self._db.execute(
+            "SELECT * FROM session_templates WHERE id=?", (template_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["skills"] = json.loads(result.pop("skills_json"))
+        result["tools"] = json.loads(result.pop("tools_json"))
+        return result
+
+    def list_templates(self) -> list[dict[str, Any]]:
+        rows = self._db.execute(
+            "SELECT * FROM session_templates ORDER BY created_at, name"
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["skills"] = json.loads(item.pop("skills_json"))
+            item["tools"] = json.loads(item.pop("tools_json"))
+            result.append(item)
+        return result
+
+    def delete_template(self, template_id: str) -> None:
+        cursor = self._db.execute("DELETE FROM session_templates WHERE id=?", (template_id,))
+        if cursor.rowcount != 1:
+            raise ValueError("template not found")
+        self._db.commit()
+
+    def clone_template(self, template_id: str) -> dict[str, Any]:
+        """Create a clean session from a template.
+
+        The clone inherits the scenario and the saved skills, never the
+        transcript: the agent starts from the template, not from the old run.
+        """
+        template = self.get_template(template_id)
+        if template is None:
+            raise ValueError("template not found")
+        session_id = self.create_session(
+            f"{template['name']} · clone", brief=template["brief"]
+        )
+        return {
+            "session_id": session_id,
+            "template_id": template["id"],
+            "name": template["name"],
+            "task": template["task"],
+            "brief": template["brief"],
+            "skills": template["skills"],
+            "tools": template["tools"],
+        }
+
     def save_tool_round(
         self,
         session_id: int,
@@ -1075,7 +1202,7 @@ class StateStore:
 
     def get_session(self, session_id: int) -> dict[str, Any] | None:
         row = self._db.execute(
-            "SELECT id, title, created_at, parent_id, workspace FROM sessions WHERE id=?", (session_id,)
+            "SELECT id, title, created_at, parent_id, workspace, brief FROM sessions WHERE id=?", (session_id,)
         ).fetchone()
         return dict(row) if row is not None else None
 

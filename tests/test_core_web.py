@@ -298,6 +298,66 @@ def test_run_inspector_explains_unavailable_cost_and_names_the_unpriced_model(tm
         _stop(server, thread)
 
 
+def test_template_api_captures_a_session_and_clones_a_clean_session(tmp_path):
+    app = WebApp(_config(tmp_path), provider_factory=lambda *_args: SlowProvider())
+    server, thread, base = _start(app)
+    opener = build_opener(HTTPCookieProcessor())
+
+    def request(path, method="GET", payload=None):
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = Request(
+            base + path, data=data,
+            headers={"Content-Type": "application/json"}, method=method,
+        )
+        try:
+            with opener.open(req, timeout=5) as response:
+                return response.status, json.loads(response.read() or b"{}")
+        except HTTPError as response:
+            return response.code, json.loads(response.read() or b"{}")
+
+    try:
+        request("/api/auth/login", "POST", {"username": "admin", "password": "local-test-password"})
+        status, created = request("/api/sessions", "POST", {"title": "Hermes_ssh_tg"})
+        assert status == 201
+        session_id = created["session_id"]
+        state = StateStore(app.config.database)
+        try:
+            state.append_message(session_id, {
+                "role": "user",
+                "content": "Install the Hermes agent on a remote server, create a user and a token, and set up Telegram.",
+            })
+        finally:
+            state.close()
+
+        status, body = request("/api/templates", "POST", {
+            "name": "hermes-deploy", "source_session_id": session_id,
+            "brief": "Remote host, dedicated user, protected token, bot online.",
+        })
+        assert status == 201
+        template = body["template"]
+        assert "Install the Hermes agent" in template["task"]
+        assert template["brief"].startswith("Remote host")
+
+        status, body = request("/api/templates")
+        assert status == 200 and [item["name"] for item in body["templates"]] == ["hermes-deploy"]
+
+        status, body = request(f"/api/templates/{template['id']}/clone", "POST", {})
+        assert status == 201
+        clone = body["clone"]
+        assert clone["session_id"] != session_id
+        assert clone["task"].startswith("Install the Hermes agent")
+
+        status, body = request(f"/api/sessions/{clone['session_id']}")
+        assert status == 200
+        assert body["messages"] == [], "a clone must start with a clean transcript"
+        assert body["runs"] == [], "a clone must start with no runs"
+
+        assert request(f"/api/templates/{template['id']}", "DELETE")[0] == 200
+        assert request("/api/templates")[1]["templates"] == []
+    finally:
+        _stop(server, thread)
+
+
 def test_web_inspector_exposes_parent_child_runs_and_child_model(tmp_path):
     from copy import deepcopy
 

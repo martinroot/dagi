@@ -564,6 +564,7 @@ async function showSandbox() {
   $("login-panel").hidden = true;
   $("sandbox").hidden = false;
   await refreshSessions();
+  await refreshTemplates();
 }
 
 async function restoreSession() {
@@ -939,6 +940,66 @@ async function refreshSessions(generation = sessionGeneration) {
   }
 }
 
+async function refreshTemplates() {
+  let templates = [];
+  try {
+    const data = await api("/api/templates");
+    templates = data.templates || [];
+  } catch (error) {
+    $("templates").textContent = `Templates unavailable: ${error}`;
+    return;
+  }
+  const list = $("templates");
+  list.replaceChildren();
+  if (!templates.length) {
+    const empty = document.createElement("li");
+    empty.className = "muted";
+    empty.textContent = "No templates yet.";
+    list.append(empty);
+    return;
+  }
+  for (const template of templates) {
+    const li = document.createElement("li");
+    const button = document.createElement("button");
+    button.textContent = `Clone · ${template.name}`;
+    button.title = template.brief || template.task || "";
+    button.onclick = () => cloneTemplate(template.id);
+    li.append(button);
+    list.append(li);
+  }
+}
+
+async function cloneTemplate(templateId) {
+  try {
+    const data = await api(`/api/templates/${encodeURIComponent(templateId)}/clone`, {method: "POST", body: "{}"});
+    const clone = data.clone || {};
+    await refreshSessions();
+    await selectSession(clone.session_id);
+    const input = $("message");
+    if (input) input.value = clone.task || "";
+    $("run-status").textContent = `Cloned template ${clone.name || ""}. Review the task and press Run.`;
+  } catch (error) {
+    $("run-status").textContent = `Clone failed: ${error}`;
+  }
+}
+
+async function saveTemplateAsCurrent() {
+  if (selectedSession === null) return;
+  const suggested = "agent-template";
+  const name = typeof prompt === "function" ? prompt("Template name", suggested) : suggested;
+  if (!name) return;
+  try {
+    await api("/api/templates", {
+      method: "POST",
+      body: JSON.stringify({name, source_session_id: selectedSession}),
+    });
+    await refreshTemplates();
+    $("run-status").textContent = `Template "${name}" saved.`;
+  } catch (error) {
+    $("run-status").textContent = `Could not save the template: ${error}`;
+  }
+}
+
 function renderRuns(runs) {
   const list = $("runs");
   list.replaceChildren();
@@ -976,6 +1037,7 @@ async function selectSession(sessionId) {
   applySessionSnapshot(sessionId, data);
   renderRuntimeStatus(data.runtime_status);
   $("session-title").textContent = `${data.session.title || "Untitled session"} · #${sessionId}`;
+  $("save-template").disabled = false;
   $("message").value = loadDraft(sessionId);
   $("chat").replaceChildren();
   for (const message of data.messages) {
@@ -1152,6 +1214,7 @@ $("message").addEventListener("keydown", (event) => {
 });
 
 $("refresh-runtime").onclick = refreshRuntimeStatus;
+$("save-template").onclick = saveTemplateAsCurrent;
 
 $("stop-run").onclick = async () => {
   if (!activeRunId) return;
