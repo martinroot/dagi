@@ -465,3 +465,36 @@ test("a priced run reports its cost instead of a null", async () => {
   assert.match(shown[0], /0\.02/);
   assert.doesNotMatch(shown[0], /unavailable/i);
 });
+
+test("a document tool card offers a download link to the session artifact", async () => {
+  const fetchImpl = async (url) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/1") return jsonResponse({
+      session: {id: 1, title: "contract"},
+      runs: [{run_id: "run-1", status: "running"}],
+      messages: [], tool_calls: [], goals: [], event_cursors: {"run-1": 0},
+    });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements, sources} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.selectSession(1);
+  const source = sources.at(-1);
+  source.onmessage({lastEventId: "1", data: JSON.stringify({
+    kind: "tool_result", session_id: 1, run_id: "run-1", tool_call_id: "call-doc",
+    tool_name: "document_create", text: "saved contract.docx", is_error: false, outcome: "succeeded",
+    presentation: {
+      type: "document", summary: "Contract saved as contract.docx",
+      artifacts: [{path: "contract.docx", kind: "docx", operation: "create", size_bytes: 1886}],
+      diagnostics: {fields: ["customer"], field_count: 1},
+    },
+  })});
+  const card = elements.get("chat").children[0];
+  const actions = card.children[card.children.length - 1];
+  const link = actions.children.find((child) => child.tagName === "A");
+  assert.ok(link, "the document card must offer a download link");
+  assert.match(link.href, /\/api\/sessions\/1\/artifacts\/contract\.docx/);
+  assert.equal(link.rel, "noopener noreferrer");
+  assert.equal(link.target, "_blank");
+});

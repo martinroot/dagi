@@ -14,7 +14,7 @@ from decimal import Decimal
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from threading import Event, Lock, Thread
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
@@ -432,6 +432,10 @@ class WebApp:
                     elif path == "/api/templates":
                         with _StateContext(self._state()) as state:
                             self._send_json(200, {"templates": state.list_templates()})
+                    elif match := re.fullmatch(r"/api/sessions/(\d+)/artifacts", path):
+                        self._send_json(200, {"artifacts": app.list_artifacts(int(match.group(1)))})
+                    elif match := re.fullmatch(r"/api/sessions/(\d+)/artifacts/(.+)", path):
+                        self._send_artifact(int(match.group(1)), match.group(2))
                     elif path == "/api/sessions":
                         with _StateContext(self._state()) as state:
                             sessions = state.list_sessions(100)
@@ -568,9 +572,12 @@ class WebApp:
                         title = body.get("title")
                         if title is not None and not isinstance(title, str):
                             raise ValueError("title must be text")
+                        # Every session gets its own workspace, so the artifacts
+                        # of one agent never mix with another agent's files.
+                        workspace = f"sessions/{uuid4().hex}"
                         with _StateContext(self._state()) as state:
-                            session_id = state.create_session(title)
-                        self._send_json(201, {"session_id": session_id})
+                            session_id = state.create_session(title, workspace=workspace)
+                        self._send_json(201, {"session_id": session_id, "workspace": workspace})
                     elif match := re.fullmatch(r"/api/sessions/(\d+)/runs", parsed.path):
                         self._start_run(int(match.group(1)), body)
                     elif match := re.fullmatch(r"/api/runs/([^/]+)/cancel", parsed.path):
@@ -607,6 +614,23 @@ class WebApp:
                     self._send_json(404, {"error": str(exc)})
                 except Exception:
                     self._send_json(500, {"error": "sandbox request failed"})
+
+            def _send_artifact(self, session_id: int, name: str) -> None:
+                try:
+                    path = app.artifact_path(session_id, name)
+                except ValueError as exc:
+                    self._send_json(404, {"error": str(exc)})
+                    return
+                data = path.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header(
+                    "Content-Disposition", f'attachment; filename="{path.name}"'
+                )
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(data)
 
             def _proxy(self, worker_id: str, path: str, body: dict[str, Any] | None = None) -> None:
                 worker = app.workers.get(worker_id)
@@ -1117,6 +1141,7 @@ class WebApp:
             workspace = resolve_session_workspace(self.config.workspace, session["workspace"])
             tools = ToolRegistry(
                 workspace, state, session_id,
+                documents_enabled=self.config.enable_documents,
                 shell_enabled=self.config.web_enable_shell,
                 approve_shell=(
                     lambda command: self.approvals.request(
@@ -1182,6 +1207,44 @@ class WebApp:
             state.close()
             with self._lock:
                 self._runs.pop(run_id, None)
+
+    def list_artifacts(self, session_id: int) -> list[dict[str, Any]]:
+        """List the files a session produced, newest first."""
+        with _StateContext(StateStore(self.config.database)) as state:
+            session = state.get_session(session_id)
+        if session is None:
+            raise ValueError("session not found")
+        workspace = resolve_session_workspace(self.config.workspace, session["workspace"])
+        if not workspace.is_dir():
+            return []
+        items = []
+        for path in sorted(workspace.rglob("*")):
+            if not path.is_file() or path.name.startswith("~$"):
+                continue
+            items.append({
+                "name": path.relative_to(workspace).as_posix(),
+                "size_bytes": path.stat().st_size,
+                "kind": path.suffix.lower().lstrip(".") or "file",
+            })
+        items.sort(key=lambda item: item["name"])
+        return items[:200]
+
+    def artifact_path(self, session_id: int, name: str) -> Path:
+        """Resolve one artifact inside the session workspace, or refuse."""
+        with _StateContext(StateStore(self.config.database)) as state:
+            session = state.get_session(session_id)
+        if session is None:
+            raise ValueError("session not found")
+        workspace = resolve_session_workspace(self.config.workspace, session["workspace"])
+        relative = PurePosixPath(name)
+        if relative.is_absolute() or ".." in relative.parts or "\\" in name:
+            raise ValueError("artifact name must stay inside the session workspace")
+        path = workspace / relative
+        if not path.is_file():
+            raise ValueError("artifact not found")
+        if path.stat().st_size > 32 * 1024 * 1024:
+            raise ValueError("artifact is too large")
+        return path
 
     def serve(self, host: str = "127.0.0.1", port: int = 8765) -> None:
         server = self.create_server(host, port)

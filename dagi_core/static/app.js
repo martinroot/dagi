@@ -273,6 +273,45 @@ function renderSkillsPresentation(presentation) {
   };
 }
 
+function renderDocumentPresentation(presentation) {
+  const artifacts = Array.isArray(presentation.artifacts) ? presentation.artifacts : [];
+  const artifact = artifacts.find((item) => item && item.path) || artifacts[0] || {};
+  const diagnostics = presentation.diagnostics || {};
+  const sessionId = artifact.sessionId ?? selectedSession;
+  const lines = [];
+  if (artifact.path) {
+    const href = `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/${artifact.path.split("/").map(encodeURIComponent).join("/")}`;
+    lines.push({
+      type: "link",
+      label: `Скачать ${artifact.path.split("/").pop()}`,
+      href,
+    });
+  }
+  const facts = [];
+  if (diagnostics.ok === true) facts.push("документ проверен: все поля заполнены, вычитка чистая");
+  if (diagnostics.ok === false) facts.push("проверка не пройдена — документ требует правок");
+  if (Array.isArray(diagnostics.missing_fields) && diagnostics.missing_fields.length) {
+    facts.push(`не заполнено: ${diagnostics.missing_fields.join(", ")}`);
+  }
+  if (Array.isArray(diagnostics.remaining) && diagnostics.remaining.length) {
+    facts.push(`остались открытые поля: ${diagnostics.remaining.join(", ")}`);
+  }
+  if (Array.isArray(diagnostics.proofread) && diagnostics.proofread.length) {
+    facts.push(`вычитка: ${diagnostics.proofread.join("; ")}`);
+  }
+  if (Array.isArray(diagnostics.filled) && diagnostics.filled.length) {
+    facts.push(`заполнено полей: ${diagnostics.filled.join(", ")}`);
+  }
+  return {
+    icon: "📄",
+    title: artifact.path ? artifact.path.split("/").pop() : (presentation.summary || "Документ"),
+    summary: presentation.summary || "Документ",
+    resultText: facts.join("\n") || (presentation.summary || ""),
+    metadata: presentation.summary || "",
+    links: lines,
+  };
+}
+
 function renderMemoryPresentation(presentation) {
   const diagnostics = presentation.diagnostics || {};
   const hits = Array.isArray(presentation.artifacts) ? presentation.artifacts : [];
@@ -299,6 +338,8 @@ const toolPresentationRenderers = new Map([
   ["directory", renderDirectoryPresentation],
   ["delegation", renderDelegationPresentation],
   ["command", renderCommandPresentation],
+  ["document", renderDocumentPresentation],
+  ["document_template", renderDocumentPresentation],
   ["memory", renderMemoryPresentation],
   ["skills", renderSkillsPresentation],
   ["skill", renderSkillPresentation],
@@ -400,6 +441,16 @@ function renderToolCard(sessionId, runId, toolCallId) {
     ? `${resultText.slice(0, 8_000)}\n[original text truncated for display]`
     : resultText;
   record.card.actions.replaceChildren();
+  for (const link of view?.links || []) {
+    if (!link || typeof link.href !== "string") continue;
+    const anchor = document.createElement("a");
+    anchor.href = link.href;
+    anchor.textContent = link.label || "Открыть";
+    anchor.className = "artifact-link";
+    anchor.target = "_blank";
+    anchor.rel = "noopener noreferrer";
+    record.card.actions.append(anchor);
+  }
   for (const action of view?.actions || []) {
     if (action.type !== "open-session" || !Number.isSafeInteger(action.sessionId) || action.sessionId < 1) continue;
     const button = document.createElement("button");

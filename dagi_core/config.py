@@ -42,6 +42,7 @@ class Config:
     web_command_approval_timeout: int = 300
     enable_check_commands: bool = False
     goal_repeat_failure_threshold: int = 2
+    enable_documents: bool = False
 
     @property
     def database(self) -> Path:
@@ -110,6 +111,7 @@ def load_config() -> Config:
         home=home,
         workspace=workspace,
         enable_shell=_enabled(os.environ.get("DAGI_ENABLE_SHELL")),
+        enable_documents=_enabled(os.environ.get("DAGI_ENABLE_DOCUMENTS", "false")),
         usage_policy=usage_policy,
         compression_model=compression_model,
         context_limit_tokens=context_limit,

@@ -180,6 +180,7 @@ def test_web_sandbox_starts_inspects_and_replays_saved_run(tmp_path):
 
         _, _, created = _request(f"{base}/api/sessions", "POST", {"title": "web test"})
         session_id = json.loads(created)["session_id"]
+        session_workspace = json.loads(created)["workspace"]
         _, _, empty_snapshot = _request(f"{base}/api/sessions/{session_id}")
         empty_runtime = json.loads(empty_snapshot)["runtime_status"]
         assert empty_runtime["role"] is None and empty_runtime["latest_reflection"] is None
@@ -193,7 +194,7 @@ def test_web_sandbox_starts_inspects_and_replays_saved_run(tmp_path):
         assert detail["usage"]["provider_calls"] == 2
         assert len(detail["requests"]) == 2
         assert detail["tool_calls"][0]["tool_call_id"] == "web-call-1"
-        assert (tmp_path / "workspace" / "web.txt").read_text() == "created from web"
+        assert (tmp_path / "workspace" / session_workspace / "web.txt").read_text() == "created from web"
         runtime = detail["runtime_status"]
         assert runtime["role"] == "root"
         assert runtime["phase"] == "provider_request"
@@ -346,6 +347,54 @@ def test_a_shell_command_from_a_chat_session_waits_for_operator_approval(tmp_pat
         worker.join(timeout=5)
         assert decision["approved"] is True
         assert request("/api/approvals")[1]["approvals"] == []
+    finally:
+        _stop(server, thread)
+
+
+def test_document_artifact_is_listed_and_downloaded_for_the_chat(tmp_path):
+    from dataclasses import replace
+    app = WebApp(replace(_config(tmp_path), enable_documents=True), provider_factory=lambda *_args: SlowProvider())
+    server, thread, base = _start(app)
+    opener = build_opener(HTTPCookieProcessor())
+
+    def request(path, method="GET", payload=None):
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = Request(
+            base + path, data=data,
+            headers={"Content-Type": "application/json"}, method=method,
+        )
+        try:
+            with opener.open(req, timeout=5) as response:
+                return response.status, response.headers, response.read()
+        except HTTPError as response:
+            return response.code, response.headers, response.read()
+
+    try:
+        request("/api/auth/login", "POST", {"username": "admin", "password": "local-test-password"})
+        status, _, created = request("/api/sessions", "POST", {"title": "contract"})
+        session_id = json.loads(created)["session_id"]
+        workspace = app.config.workspace / f"sessions/{session_id}"
+        workspace.mkdir(parents=True, exist_ok=True)
+        # the session owns its own workspace under the configured root
+        state = StateStore(app.config.database)
+        try:
+            state._db.execute("UPDATE sessions SET workspace=? WHERE id=?", (f"sessions/{session_id}", session_id))
+            state._db.commit()
+        finally:
+            state.close()
+        (workspace / "contract.docx").write_bytes(b"PK\x03\x04fake-docx-bytes")
+
+        status, _, body = request(f"/api/sessions/{session_id}/artifacts")
+        assert status == 200
+        artifacts = json.loads(body)["artifacts"]
+        assert any(item["name"] == "contract.docx" for item in artifacts)
+
+        status, headers, data = request(f"/api/sessions/{session_id}/artifacts/contract.docx")
+        assert status == 200
+        assert data.startswith(b"PK")
+        assert "attachment" in (headers.get("Content-Disposition") or "")
+
+        assert request("/api/sessions/%d/artifacts/../secret" % session_id)[0] in (400, 404)
     finally:
         _stop(server, thread)
 

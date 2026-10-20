@@ -632,8 +632,8 @@ def test_goal_http_api_requires_session_and_rejects_payload_capability_flags(tmp
     monkeypatch.setenv("DAGI_WORKERS", "{}")
     config = replace(_config(tmp_path), web_public_origin="https://sandbox.example")
     config.workspace.mkdir(parents=True, exist_ok=True)
-    (config.workspace / "ready.txt").write_text("ready", encoding="utf-8")
-    app = WebApp(config, lambda *_args: WriteResultProvider(config.workspace, write_result=False))
+    holder = {"workspace": config.workspace}
+    app = WebApp(config, lambda *_args: WriteResultProvider(holder["workspace"], write_result=False))
     server = app.create_server(host="127.0.0.1", port=0)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -657,6 +657,10 @@ def test_goal_http_api_requires_session_and_rejects_payload_capability_flags(tmp
         status, session = _api_request(base, "/api/sessions", opener, method="POST", payload={"title": "api-goal"})
         assert status == 201
         session_id = session["session_id"]
+        # every session owns its workspace; the goal check runs there
+        holder["workspace"] = config.workspace / session["workspace"]
+        holder["workspace"].mkdir(parents=True, exist_ok=True)
+        (holder["workspace"] / "ready.txt").write_text("ready", encoding="utf-8")
 
         status, error = _api_request(
             base,

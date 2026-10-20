@@ -17,6 +17,7 @@ from .state import StateStore
 
 MAX_OUTPUT_CHARS = 8_000
 MAX_FILE_BYTES = 250_000
+MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
 MAX_FILE_DIFF_SOURCE_BYTES = 4_096
 MAX_FILE_DIFF_BYTES = 8_000
 MAX_PRESENTATION_BYTES = 16_000
@@ -168,6 +169,7 @@ class ToolRegistry:
         shell_enabled: bool = False,
         approve_shell: Callable[[str], bool] | None = None,
         memory_session_scope: bool = False,
+        documents_enabled: bool = False,
     ):
         self.workspace = Path(workspace).expanduser().resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -178,7 +180,10 @@ class ToolRegistry:
         self._tools: dict[str, Tool] = {}
         self.model_tool_names: set[str] | None = None
         self._execution_context: ToolExecutionContext | None = None
+        self.documents_enabled = documents_enabled
         self._register_builtins(shell_enabled)
+        if documents_enabled:
+            self._register_document_tools()
         self._builtin_tool_names = frozenset(self._tools)
 
     def register(self, tool: Tool) -> None:
@@ -293,6 +298,166 @@ class ToolRegistry:
                 {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]},
                 self._run_bash,
             ))
+
+    def _register_document_tools(self) -> None:
+        """Document tools for a contract agent: template, create, read, edit, verify."""
+        self.register(Tool(
+            "document_template", "Show the contract template: its sections, required and optional fields.",
+            {"type": "object", "properties": {}}, self._document_template, retryable=True,
+        ))
+        self.register(Tool(
+            "document_create", "Create the contract .docx from field values and save it in the workspace.",
+            {"type": "object", "properties": {
+                "values": {"type": "object", "description": "Field values by name (customer, contractor, works, ...)."},
+                "filename": {"type": "string", "description": "File name to save, default contract.docx."},
+            }, "required": ["values"]},
+            self._document_create,
+        ))
+        self.register(Tool(
+            "document_read", "Read a .docx file: paragraphs, tables and open placeholders.",
+            {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+            self._document_read, retryable=True,
+        ))
+        self.register(Tool(
+            "document_edit", "Replace field values inside a .docx and save the edited file.",
+            {"type": "object", "properties": {
+                "path": {"type": "string"},
+                "values": {"type": "object"},
+            }, "required": ["path", "values"]},
+            self._document_edit,
+        ))
+        self.register(Tool(
+            "document_verify", "Verify a contract .docx: required fields, open placeholders, proofreading.",
+            {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+            self._document_verify, retryable=True,
+        ))
+        self.register(Tool(
+            "document_latest", "Path of the most recently produced .docx in the workspace.",
+            {"type": "object", "properties": {}}, self._document_latest, retryable=True,
+        ))
+
+    def _document_path(self, relative: str) -> Path:
+        path = _resolve(self.workspace, relative)
+        if not path.is_file():
+            raise ToolError(f"not a file: {relative!r}")
+        if path.stat().st_size > MAX_DOCUMENT_BYTES:
+            raise ToolError("document exceeds the size limit")
+        if path.suffix.lower() != ".docx":
+            raise ToolError("only .docx documents are supported")
+        return path
+
+    def _document_template(self, _args: dict[str, Any]) -> ToolResult:
+        from .documents import CONTRACT_TEMPLATE
+        return ToolResult(
+            json.dumps(CONTRACT_TEMPLATE, ensure_ascii=False, indent=2),
+            presentation={
+                "type": "document_template",
+                "summary": CONTRACT_TEMPLATE["title"],
+                "artifacts": [{"kind": "template", "fields": CONTRACT_TEMPLATE["fields"]}],
+                "diagnostics": {
+                    "required": CONTRACT_TEMPLATE["required"],
+                    "optional": CONTRACT_TEMPLATE["optional"],
+                    "sections": CONTRACT_TEMPLATE["sections"],
+                },
+            },
+        )
+
+    def _document_create(self, args: dict[str, Any]) -> ToolResult:
+        from .documents import create_contract, normalize_values
+        values = normalize_values(args.get("values"))
+        filename = str(args.get("filename") or "contract.docx")
+        if not re.fullmatch(r"[A-Za-z0-9._\-]{1,120}\.docx", filename):
+            raise ToolError("filename must be a simple .docx name")
+        data = create_contract(values)
+        path = _resolve(self.workspace, filename)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        relative = path.relative_to(self.workspace).as_posix()
+        return ToolResult(
+            f"saved {relative} ({len(data)} bytes)",
+            presentation={
+                "type": "document",
+                "summary": f"Contract saved as {relative}",
+                "artifacts": [{"path": relative, "kind": "docx", "operation": "create", "size_bytes": len(data)}],
+                "diagnostics": {"fields": sorted(values), "field_count": len(values)},
+            },
+        )
+
+    def _document_read(self, args: dict[str, Any]) -> ToolResult:
+        from .documents import read_contract
+        path = self._document_path(str(args["path"]))
+        content = read_contract(path.read_bytes())
+        return ToolResult(
+            content["text"],
+            presentation={
+                "type": "document",
+                "summary": f"Read {path.name}",
+                "artifacts": [{"path": path.relative_to(self.workspace).as_posix(), "kind": "docx", "operation": "read"}],
+                "diagnostics": {
+                    "paragraphs": len(content["paragraphs"]),
+                    "tables": len(content["tables"]),
+                    "placeholders": content["placeholders"],
+                },
+            },
+        )
+
+    def _document_edit(self, args: dict[str, Any]) -> ToolResult:
+        from .documents import edit_contract, normalize_values
+        path = self._document_path(str(args["path"]))
+        values = normalize_values(args.get("values"))
+        updated, report = edit_contract(path.read_bytes(), values)
+        path.write_bytes(updated)
+        relative = path.relative_to(self.workspace).as_posix()
+        return ToolResult(
+            f"edited {relative}: filled {len(report['filled'])} field(s); still open: {', '.join(report['remaining']) or 'none'}",
+            presentation={
+                "type": "document",
+                "summary": f"Edited {relative}",
+                "artifacts": [{"path": relative, "kind": "docx", "operation": "update", "size_bytes": len(updated)}],
+                "diagnostics": {"filled": report["filled"], "remaining": report["remaining"]},
+            },
+        )
+
+    def _document_verify(self, args: dict[str, Any]) -> ToolResult:
+        from .documents import verify_contract
+        path = self._document_path(str(args["path"]))
+        verdict = verify_contract(path.read_bytes())
+        summary = (
+            "the document is complete and proofread"
+            if verdict["ok"]
+            else "; ".join(verdict["problems"])
+        )
+        return ToolResult(
+            summary,
+            presentation={
+                "type": "document",
+                "summary": summary,
+                "artifacts": [{"path": path.relative_to(self.workspace).as_posix(), "kind": "docx", "operation": "verify"}],
+                "diagnostics": {
+                    "ok": verdict["ok"],
+                    "missing_fields": verdict["missing_fields"],
+                    "placeholders": verdict["placeholders"],
+                    "proofread": verdict["proofread"],
+                    "paragraphs": verdict["paragraphs"],
+                },
+            },
+        )
+
+    def _document_latest(self, _args: dict[str, Any]) -> ToolResult:
+        from .documents import latest_document
+        path = latest_document(self.workspace)
+        if path is None:
+            return ToolResult("no .docx document in the workspace yet")
+        relative = path.relative_to(self.workspace).as_posix()
+        return ToolResult(
+            relative,
+            presentation={
+                "type": "document",
+                "summary": f"Latest document: {relative}",
+                "artifacts": [{"path": relative, "kind": "docx", "operation": "read"}],
+                "diagnostics": {"size_bytes": path.stat().st_size},
+            },
+        )
 
     def _read_file(self, args: dict[str, Any]) -> ToolResult:
         path = _resolve(self.workspace, str(args["path"]))

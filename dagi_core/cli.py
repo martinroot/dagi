@@ -47,6 +47,7 @@ def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
             workspace,
             state,
             active_session_id,
+            documents_enabled=config.enable_documents,
             shell_enabled=config.enable_shell,
             approve_shell=approve_shell_command if config.enable_shell else None,
         )
