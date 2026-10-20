@@ -757,6 +757,15 @@ class WebApp:
                             after = row["id"]
                         run = state.get_run(run_id)
                         if run is None or run["status"] != "running":
+                            # The run is over: the last event has to reach the
+                            # reader before the connection is closed, otherwise
+                            # the reader only sees a run that never finished.
+                            rows = state.list_run_events(run_id, after_id=after)
+                            for row in rows:
+                                frame = f"id: {row['id']}\ndata: {json.dumps(row['event'], ensure_ascii=False)}\n\n"
+                                self.wfile.write(frame.encode("utf-8"))
+                                self.wfile.flush()
+                                after = row["id"]
                             break
                         time.sleep(0.05)
                 except (BrokenPipeError, ConnectionResetError):
