@@ -977,10 +977,17 @@ async function refreshSessions(generation = sessionGeneration) {
   if (generation !== sessionGeneration) return;
   const list = $("sessions");
   list.replaceChildren();
+  if (!data.sessions.length) {
+    const empty = document.createElement("li");
+    empty.className = "nav-empty";
+    empty.textContent = "No sessions yet.";
+    list.append(empty);
+  }
   for (const session of data.sessions) {
     const li = document.createElement("li");
     const button = document.createElement("button");
     button.textContent = `${session.title || "Untitled"} · #${session.id}`;
+    button.title = `${session.title || "Untitled"} · #${session.id}`;
     button.classList.toggle("selected", session.id === selectedSession);
     button.onclick = () => selectSession(session.id);
     const remove = document.createElement("button");
@@ -1051,7 +1058,7 @@ async function refreshTemplates() {
   list.replaceChildren();
   if (!templates.length) {
     const empty = document.createElement("li");
-    empty.className = "muted";
+    empty.className = "nav-empty";
     empty.textContent = "No templates yet.";
     list.append(empty);
     return;
@@ -1059,8 +1066,8 @@ async function refreshTemplates() {
   for (const template of templates) {
     const li = document.createElement("li");
     const button = document.createElement("button");
-    button.textContent = `Clone · ${template.name}`;
-    button.title = template.brief || template.task || "";
+    button.textContent = template.name;
+    button.title = template.brief || template.task || template.name;
     button.onclick = () => cloneTemplate(template.id);
     const remove = document.createElement("button");
     remove.className = "row-delete";
