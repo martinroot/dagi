@@ -278,6 +278,38 @@ Verification: 17 Node UI checks for the chat and the cost inspector, 13 DOM
 checks against a real DOM implementation, 5 cost-status state tests, 1 API
 contract test; full agent gate: 394 pytest + 61 Node UI.
 
+## Agent factory (2026-10-20) — templates, clone, and the first real session
+
+The operator wiped every old session and asked for one real session —
+"Hermes_ssh_tg": install the Hermes agent on a remote server with its own
+user and token, and end with a working Telegram setup — so that the chat
+becomes a template and a clone button can load a clean copy. Dagi is meant to
+be a factory of agents.
+
+Delivered:
+
+- Session templates: `session_templates` table (task, brief, skills, tools,
+  source session) with capture, list, delete and clone. A clone starts a clean
+  session with no transcript and no runs; it inherits the brief and the saved
+  skills, and the brief reaches the agent as `scenario_brief` in the bounded
+  runtime context (issue #71).
+- Operator-approved commands: a chat session may request a shell command, the
+  command waits in the browser for an explicit Approve/Deny, and an unanswered
+  approval denies it. `DAGI_WEB_ENABLE_SHELL=1` enables this on the live
+  service (issue #72).
+- The first real session ran end to end and stopped honestly: it found the
+  target host in `known_hosts_dagi`, proved the available SSH key is not
+  authorised for any account, refused to brute-force or to disable host-key
+  checking, and wrote the verified continuation plan to
+  `docs/scenarios/hermes-remote-deployment-runbook.md`.
+- The session is saved as the template `hermes-deploy`; the clone button in
+  the chat sidebar loads a clean instance of it.
+
+Open operator inputs (the deployment cannot finish without them): a bot token
+for the new Telegram bot (created via BotFather and written straight into a
+protected file on the target), and SSH access for the target account —
+the available key is not authorised for `root` or `dagi` on the known host.
+
 ## Core and chat only (2026-10-20) — the game package is removed
 
 The operator folded the game direction away and asked for the base to move into
