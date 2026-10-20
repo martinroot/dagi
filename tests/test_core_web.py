@@ -476,7 +476,10 @@ def test_template_api_captures_a_session_and_clones_a_clean_session(tmp_path):
         assert template["brief"].startswith("Remote host")
 
         status, body = request("/api/templates")
-        assert status == 200 and [item["name"] for item in body["templates"]] == ["hermes-deploy"]
+        names = [item["name"] for item in body["templates"]]
+        assert status == 200 and "hermes-deploy" in names
+        # the built-in agents ship with the product
+        assert "work-contract" in names
 
         status, body = request(f"/api/templates/{template['id']}/clone", "POST", {})
         assert status == 201
@@ -490,7 +493,10 @@ def test_template_api_captures_a_session_and_clones_a_clean_session(tmp_path):
         assert body["runs"] == [], "a clone must start with no runs"
 
         assert request(f"/api/templates/{template['id']}", "DELETE")[0] == 200
-        assert request("/api/templates")[1]["templates"] == []
+        remaining = request("/api/templates")[1]["templates"]
+        assert all(item["id"] != template["id"] for item in remaining)
+        # the built-in agents are not the operator's to delete by accident
+        assert {item["name"] for item in remaining} >= {"work-contract"}
     finally:
         _stop(server, thread)
 

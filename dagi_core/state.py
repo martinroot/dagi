@@ -881,12 +881,15 @@ class StateStore:
         source_session_id: int | None = None,
         task: str | None = None,
         brief: str = "",
+        tools: list[str] | None = None,
     ) -> dict[str, Any]:
         """Capture a working session as a reusable template.
 
         The template keeps the scenario (the task and the brief) and what made
         it work (the skills that exist, the tools the session used). It never
-        copies the transcript: a clone starts clean.
+        copies the transcript: a clone starts clean. An explicit tool list
+        wins over the tools the session happened to call, so an agent that
+        ships with the product states its own tool set.
         """
         slug = _skill_name(name)
         if not slug:
@@ -894,8 +897,11 @@ class StateStore:
         if not isinstance(brief, str) or len(brief) > 8000:
             raise ValueError("template brief must be text of at most 8000 characters")
         resolved_task = task
+        explicit_tools = tools
         tools: list[str] = []
-        if source_session_id is not None:
+        if explicit_tools is not None:
+            tools = [str(item).strip() for item in explicit_tools if str(item).strip()]
+        elif source_session_id is not None:
             if self.get_session(source_session_id) is None:
                 raise ValueError("source session does not exist")
             if resolved_task is None:
@@ -954,6 +960,44 @@ class StateStore:
             item["skills"] = json.loads(item.pop("skills_json"))
             item["tools"] = json.loads(item.pop("tools_json"))
             result.append(item)
+        return result
+
+    def upsert_template(
+        self,
+        name: str,
+        *,
+        source_session_id: int | None = None,
+        task: str | None = None,
+        brief: str = "",
+        tools: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Save a template under a name, replacing the template with that name.
+
+        The factory names its agents, so saving the same name again means the
+        agent was recaptured from a better session, not that a second agent
+        appeared.
+        """
+        existing = self.get_template_by_name(name)
+        if existing is None:
+            return self.create_template(
+                name, source_session_id=source_session_id, task=task, brief=brief, tools=tools
+            )
+        # The delete and the insert share one transaction: the name is unique,
+        # so the old row has to go first, and the agent is never lost in between.
+        self._db.execute("DELETE FROM session_templates WHERE id=?", (existing["id"],))
+        return self.create_template(
+            name, source_session_id=source_session_id, task=task, brief=brief, tools=tools
+        )
+
+    def get_template_by_name(self, name: str) -> dict[str, Any] | None:
+        row = self._db.execute(
+            "SELECT * FROM session_templates WHERE name=?", (_skill_name(name),)
+        ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["skills"] = json.loads(result["skills_json"])
+        result["tools"] = json.loads(result["tools_json"])
         return result
 
     def delete_template(self, template_id: str) -> None:

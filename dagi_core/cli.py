@@ -88,6 +88,9 @@ def _new_agent(config, provider, state, session_id: int | None = None) -> Agent:
 
 def _run_locked(config) -> None:
     state = StateStore(config.database)
+    # The built-in agents ship with the code, so the factory is never empty.
+    from .factory_seed import install_builtin_agents
+    install_builtin_agents(state)
     provider = OpenAICompatibleProvider(config.model, config.api_key, config.base_url)
     session_id = state.create_session()
     agent = _new_agent(config, provider, state)

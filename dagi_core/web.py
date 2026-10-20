@@ -269,6 +269,14 @@ class WebApp:
         self._revoked_sessions: dict[str, int] = {}
         self._failed_logins: dict[str, tuple[int, float]] = {}
         self.workers = load_workers(os.environ.get("DAGI_WORKERS", "{}"))
+        # The built-in agents ship with the code: a redeploy must not leave
+        # the factory empty. Existing agents are never overwritten.
+        from .factory_seed import install_builtin_agents
+        try:
+            with _StateContext(StateStore(self.config.database)) as state:
+                install_builtin_agents(state)
+        except Exception:  # a broken seed must not take the service down
+            pass
 
     def _cookie_token(self, headers: Any) -> str | None:
         cookie = SimpleCookie()
@@ -560,7 +568,7 @@ class WebApp:
                         if task is not None and not isinstance(task, str):
                             raise ValueError("task must be text")
                         with _StateContext(self._state()) as state:
-                            template = state.create_template(
+                            template = state.upsert_template(
                                 name, source_session_id=source_session_id, task=task, brief=brief,
                             )
                         self._send_json(201, {"template": template})
