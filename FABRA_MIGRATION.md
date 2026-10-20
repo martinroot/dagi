@@ -68,6 +68,10 @@ one of them is reported with the gap instead of silently losing the tool.
 | FGM-16 | The media tools of the core: image, music, audio, video | Done | `media.py`, `media_audio.py`, `media_video.py`, `media_merge.py` |
 | FGM-17 | The remote tools of the core: inspect and change a server | Done | `remote.py`; a change needs the approval of the user |
 | FGM-18 | Every card of the catalogue is covered by the core | Done | 32 cards, no tool gap |
+| FGM-19 | The voice and the words of a file work when the queue of fal is closed | Done | `voice.py`; the provider of the core is the second road |
+| FGM-20 | The music and the video tell the agent plainly that the provider is closed | Done | no broken file, a clear message instead |
+| FGM-21 | The last event of a run reaches the reader of the site | Done | the stream writes the last events out before it closes |
+| FGM-22 | An agent of the site runs end to end in the browser of a user | Done | order `DC-995accb8`, agent `logo-creator` |
 
 ## Core changes made for the migration
 
@@ -114,11 +118,11 @@ the site asks the user the question instead of marking the order done.
 
 ## The agents that are on the site now
 
-8 agents run on the Dagi core on the site. They passed the migration
+27 agents run on the Dagi core on the site. They passed the migration
 checks, every tool they use exists in the core, and they already ran the
 agentic runtime, so nothing else about them changed:
 
-`apartment-rental-contract`, `apartment-sale-contract`, `car-sale-contract`, `loan-contract`, `presentation-maker`, `seo-site-text`, `service-contract`, `work-contract`.
+`apartment-rental-contract`, `apartment-sale-contract`, `audio-transcription`, `business-plan`, `car-sale-contract`, `commercial-proposal`, `hair-style`, `image-merge-prompt`, `interior-design`, `landscape-design`, `loan-contract`, `logo-creator`, `marketplace-card-creator`, `marketplace-photo`, `neuro-photo`, `photo-restore`, `presentation-maker`, `prompt-photo-edit`, `seo-site-text`, `service-contract`, `ssh-minecraft-server`, `ssh-n8n`, `ssh-server-repair`, `ssh-web-server`, `ssh-wordpress`, `text-to-voice`, `work-contract`.
 
 Every card of the catalogue is covered by the core: no agent has a tool
 gap any more, so nothing is kept back by a missing tool.
@@ -127,9 +131,16 @@ gap any more, so nothing is kept back by a missing tool.
 
 The agents of the Fabra test registry were run through the Dagi core: they
 created their session, ran to completion, answered, and called no tool
-outside their own profile. The failure is `ssh-vless-vpn`: it has no package
-in `data/agents` and no row in the `agents` table, so the entry in the test
-registry is stale (FGM-11).
+outside their own profile. 32 agents passed. The registry row of
+`ssh-vless-vpn` was stale: it has no package in `data/agents` and no row in
+the `agents` table, so the row was taken out of the registry (FGM-11). Two
+cards of the catalogue were missing in the registry and were added:
+`business-plan` and `commercial-proposal`.
+
+The order `DC-995accb8` of the site ran the agent `logo-creator` end to end
+in the browser of a user: the agent called `image_generate` and
+`artifact_publish`, the answer came into the chat while it was written, and
+the file was shown in the chat with a link to the artifact of the site.
 
 Report: `/var/www/fabra/data/dagi/migration-report.json`.
 
