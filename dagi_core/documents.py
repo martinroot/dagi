@@ -83,29 +83,19 @@ def template_blocks(values: dict[str, str] | None = None) -> list[dict[str, Any]
     blocks: list[dict[str, Any]] = [
         {"type": "title", "text": CONTRACT_TEMPLATE["title"]},
         {"type": "heading", "level": 1, "text": "1. Стороны"},
-        {"type": "paragraph", "text": "Заказчик: "},
-        {"type": "field", "name": "customer", "text": field("customer")},
-        {"type": "paragraph", "text": "Реквизиты заказчика: "},
-        {"type": "field", "name": "customer_details", "text": field("customer_details")},
-        {"type": "paragraph", "text": "Подрядчик: "},
-        {"type": "field", "name": "contractor", "text": field("contractor")},
-        {"type": "paragraph", "text": "Реквизиты подрядчика: "},
-        {"type": "field", "name": "contractor_details", "text": field("contractor_details")},
+        {"type": "labeled_field", "label": "Заказчик: ", "name": "customer", "text": field("customer")},
+        {"type": "labeled_field", "label": "Реквизиты заказчика: ", "name": "customer_details", "text": field("customer_details")},
+        {"type": "labeled_field", "label": "Подрядчик: ", "name": "contractor", "text": field("contractor")},
+        {"type": "labeled_field", "label": "Реквизиты подрядчика: ", "name": "contractor_details", "text": field("contractor_details")},
         {"type": "heading", "level": 1, "text": "2. Работы"},
         {"type": "field", "name": "works", "text": field("works")},
-        {"type": "paragraph", "text": "Объект или место выполнения работ: "},
-        {"type": "field", "name": "object", "text": field("object")},
-        {"type": "paragraph", "text": "Материалы предоставляет: "},
-        {"type": "field", "name": "materials", "text": field("materials")},
+        {"type": "labeled_field", "label": "Объект или место выполнения работ: ", "name": "object", "text": field("object")},
+        {"type": "labeled_field", "label": "Материалы предоставляет: ", "name": "materials", "text": field("materials")},
         {"type": "heading", "level": 1, "text": "3. Сроки, цена и порядок расчётов"},
-        {"type": "paragraph", "text": "Начало работ: "},
-        {"type": "field", "name": "start", "text": field("start")},
-        {"type": "paragraph", "text": "Окончание работ: "},
-        {"type": "field", "name": "deadline", "text": field("deadline")},
-        {"type": "paragraph", "text": "Цена работ: "},
-        {"type": "field", "name": "price", "text": field("price")},
-        {"type": "paragraph", "text": "Порядок оплаты: "},
-        {"type": "field", "name": "payment", "text": field("payment")},
+        {"type": "labeled_field", "label": "Начало работ: ", "name": "start", "text": field("start")},
+        {"type": "labeled_field", "label": "Окончание работ: ", "name": "deadline", "text": field("deadline")},
+        {"type": "labeled_field", "label": "Цена работ: ", "name": "price", "text": field("price")},
+        {"type": "labeled_field", "label": "Порядок оплаты: ", "name": "payment", "text": field("payment")},
     ]
     blocks.append({"type": "heading", "level": 2, "text": "Этапы работ"})
     for index, stage in enumerate(stage_items, start=1):
@@ -114,8 +104,7 @@ def template_blocks(values: dict[str, str] | None = None) -> list[dict[str, Any]
     blocks += [
         {"type": "heading", "level": 1, "text": "4. Сдача и приёмка"},
         {"type": "field", "name": "acceptance", "text": field("acceptance")},
-        {"type": "paragraph", "text": "Гарантия: "},
-        {"type": "field", "name": "warranty", "text": field("warranty")},
+        {"type": "labeled_field", "label": "Гарантия: ", "name": "warranty", "text": field("warranty")},
         {"type": "heading", "level": 1, "text": "5. Особые условия"},
         {"type": "field", "name": "special", "text": field("special")},
         {"type": "heading", "level": 1, "text": "6. Подписи сторон"},
@@ -211,7 +200,18 @@ def read_contract(data: bytes) -> dict[str, Any]:
 
 
 def edit_contract(data: bytes, values: dict[str, str]) -> tuple[bytes, dict[str, Any]]:
+    """Apply field values to a contract and report what actually changed.
+
+    A field name that is not in the document is reported as unknown, with the
+    names that do exist: a silent no-op would let the agent believe it had
+    written something it never wrote.
+    """
+    content = read_document(data)
+    known = set(content.get("fields") or {})
+    unknown = sorted(name for name in values if name not in known)
     updated, report = replace_fields(data, values)
+    report["unknown"] = unknown
+    report["available"] = sorted(known)
     return updated, report
 
 

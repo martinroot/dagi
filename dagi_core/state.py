@@ -972,7 +972,9 @@ class StateStore:
         if template is None:
             raise ValueError("template not found")
         session_id = self.create_session(
-            f"{template['name']} · clone", brief=template["brief"]
+            f"{template['name']} · clone",
+            brief=template["brief"],
+            workspace=f"sessions/{uuid.uuid4().hex}",
         )
         return {
             "session_id": session_id,

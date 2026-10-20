@@ -366,8 +366,15 @@ class ToolRegistry:
         from .documents import create_contract, normalize_values
         values = normalize_values(args.get("values"))
         filename = str(args.get("filename") or "contract.docx")
-        if not re.fullmatch(r"[A-Za-z0-9._\-]{1,120}\.docx", filename):
-            raise ToolError("filename must be a simple .docx name")
+        if (
+            not filename.endswith(".docx")
+            or len(filename) > 120
+            or "/" in filename
+            or "\\" in filename
+            or filename.startswith(".")
+            or any(ord(character) < 32 for character in filename)
+        ):
+            raise ToolError("filename must be a plain .docx name without a path")
         data = create_contract(values)
         path = _resolve(self.workspace, filename)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -408,13 +415,24 @@ class ToolRegistry:
         updated, report = edit_contract(path.read_bytes(), values)
         path.write_bytes(updated)
         relative = path.relative_to(self.workspace).as_posix()
+        unknown = report.get("unknown") or []
+        summary = f"edited {relative}: filled {len(report['filled'])} field(s); still open: {', '.join(report['remaining']) or 'none'}"
+        if unknown:
+            summary += (
+                f"; unknown field(s): {', '.join(unknown)}"
+                f" — this document has: {', '.join(report.get('available') or [])}"
+            )
         return ToolResult(
-            f"edited {relative}: filled {len(report['filled'])} field(s); still open: {', '.join(report['remaining']) or 'none'}",
+            summary,
             presentation={
                 "type": "document",
                 "summary": f"Edited {relative}",
                 "artifacts": [{"path": relative, "kind": "docx", "operation": "update", "size_bytes": len(updated)}],
-                "diagnostics": {"filled": report["filled"], "remaining": report["remaining"]},
+                "diagnostics": {
+                    "filled": report["filled"],
+                    "remaining": report["remaining"],
+                    "unknown": unknown,
+                },
             },
         )
 

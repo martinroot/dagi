@@ -166,6 +166,16 @@ def build_document_xml(blocks: list[dict[str, Any]]) -> str:
             body.append(_paragraph_xml(f"• {text}", "ListParagraph", indent=360))
         elif kind == "number":
             body.append(_paragraph_xml(f"{block.get('index', 1)}. {text}", "ListParagraph", indent=360))
+        elif kind == "labeled_field":
+            name = str(block.get("name", "")).strip()
+            if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", name):
+                raise DocumentError("a field needs a simple name")
+            body.append(
+                "<w:p>"
+                + _run(str(block.get("label", "")))
+                + _field_xml(name, str(block.get("text", "")))
+                + "</w:p>"
+            )
         elif kind == "field":
             name = str(block.get("name", "")).strip()
             if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", name):

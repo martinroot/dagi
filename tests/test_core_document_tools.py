@@ -93,6 +93,10 @@ def test_editing_a_document_keeps_the_file_and_reports_open_fields(tmp_path):
     registry, state, _ = _registry(tmp_path)
     registry.call("document_create", {"values": VALUES, "filename": "contract.docx"})
     before = (tmp_path / "work" / "contract.docx").read_bytes()
+    unknown = registry.call("document_edit", {"path": "contract.docx", "values": {"stages": "Этап 1"}})
+    assert "unknown field(s): stages" in unknown.content, "a wrong field name must be reported"
+    assert "price" in unknown.content, "the report lists the fields the document has"
+
     edited = registry.call("document_edit", {"path": "contract.docx", "values": {"price": "150 000 ₽"}})
     after = (tmp_path / "work" / "contract.docx").read_bytes()
     assert after != before
@@ -117,4 +121,9 @@ def test_a_document_name_must_be_a_simple_docx_file(tmp_path):
         registry.call("document_create", {"values": VALUES, "filename": "../escape.docx"})
     with pytest.raises(Exception):
         registry.call("document_create", {"values": VALUES, "filename": "contract.txt"})
+    with pytest.raises(Exception):
+        registry.call("document_create", {"values": VALUES, "filename": "docs/contract.docx"})
+    # a readable name in the operator's language is fine
+    result = registry.call("document_create", {"values": VALUES, "filename": "Договор подряда.docx"})
+    assert "Договор подряда.docx" in result.content
     state.close()
