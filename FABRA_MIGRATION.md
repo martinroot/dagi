@@ -64,6 +64,10 @@ one of them is reported with the gap instead of silently losing the tool.
 | FGM-12 | `artifact.publish` in the core | Done | `artifact_publish`; the file lands in `published/` |
 | FGM-13 | The produced file shows up in the Fabra chat as a downloadable artifact | Done | `dagi_artifacts.py`; the `sandbox:` link is rewritten to the Fabra artifact link |
 | FGM-14 | The tool gap report counts every unmapped Fabra tool | Done | the gap is computed against the mapping, not against a list |
+| FGM-15 | The real chat streams the answer while it is written | Done | the bridge reads the run events of the core; the chat grows one bubble |
+| FGM-16 | The media tools of the core: image, music, audio, video | Done | `media.py`, `media_audio.py`, `media_video.py`, `media_merge.py` |
+| FGM-17 | The remote tools of the core: inspect and change a server | Done | `remote.py`; a change needs the approval of the user |
+| FGM-18 | Every card of the catalogue is covered by the core | Done | 32 cards, no tool gap |
 
 ## Core changes made for the migration
 
@@ -79,6 +83,19 @@ one of them is reported with the gap instead of silently losing the tool.
   `published/` folder of the workspace and reports it as an artifact. The
   Fabra agents publish their result with `artifact.publish`, so without this
   tool every agent that delivers a document had a tool gap.
+- **Media.** `image_generate`, `image_edit`, `image_edit_batch` and
+  `image_merge_prompt` draw with the provider of the core, `music_generate`
+  writes a song, `audio_transcribe` writes the words of a file and
+  `audio_synthesize` reads a text out loud, `video_generate` turns a picture
+  into a short video and `video_export` makes a web ready copy of it. The
+  images come from the same provider the model calls use.
+- **Remote access.** `ssh_inspect` looks at a server and `ssh_exec_write`
+  changes it. A command that changes something has to be approved by the
+  user first, the same way the site does it.
+- **Streaming.** The bridge reads the run events of the core and forwards
+  every text delta to the order, so the chat shows the answer while it is
+  being written. The finished answer of the transcript replaces the bubble
+  of the stream, so the file links of the site are the ones the user sees.
 
 ## How an agent reaches the site
 
@@ -97,30 +114,22 @@ the site asks the user the question instead of marking the order done.
 
 ## The agents that are on the site now
 
-Eight agents run on the Dagi core on the site. They passed the migration
+8 agents run on the Dagi core on the site. They passed the migration
 checks, every tool they use exists in the core, and they already ran the
 agentic runtime, so nothing else about them changed:
 
-`apartment-rental-contract`, `apartment-sale-contract`, `car-sale-contract`,
-`loan-contract`, `presentation-maker`, `seo-site-text`, `service-contract`,
-`work-contract`.
+`apartment-rental-contract`, `apartment-sale-contract`, `car-sale-contract`, `loan-contract`, `presentation-maker`, `seo-site-text`, `service-contract`, `work-contract`.
 
-The other agents keep the portal runtime for now:
-
-- 19 agents need a media tool the core does not have yet: `image.*`,
-  `music.*`, `video.*`, `audio.*`, `ssh.*`, `shell.*`.
-- 3 agents run a fixed pipeline on the site instead of the agentic runtime:
-  `music-lofi`, `music-reels`, `promo-landing`. The core has no counterpart
-  for that pipeline, so switching them would lose the flow that produces
-  their result.
+Every card of the catalogue is covered by the core: no agent has a tool
+gap any more, so nothing is kept back by a missing tool.
 
 ## Last run
 
-31 agents from the Fabra test registry were run through the Dagi core on
-2026-10-20: 30 passed, 1 failed. The failure is `ssh-vless-vpn`: it has no
-package in `data/agents` and no row in the `agents` table, so the entry in the
-test registry is stale (FGM-11). Every passed agent created its session, ran
-to completion, answered, and called no tool outside its own profile.
+The agents of the Fabra test registry were run through the Dagi core: they
+created their session, ran to completion, answered, and called no tool
+outside their own profile. The failure is `ssh-vless-vpn`: it has no package
+in `data/agents` and no row in the `agents` table, so the entry in the test
+registry is stale (FGM-11).
 
 Report: `/var/www/fabra/data/dagi/migration-report.json`.
 

@@ -18,6 +18,12 @@ from .state import StateStore
 
 MAX_OUTPUT_CHARS = 8_000
 MAX_FILE_BYTES = 250_000
+# The commands the read only tool may run. Everything else is refused.
+READONLY_COMMANDS = {
+    "pwd", "ls", "find", "du", "df", "cat", "head", "tail", "grep",
+    "git status", "git diff", "python --version", "php -v", "node --version",
+    "nginx -t",
+}
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
 MAX_FILE_DIFF_SOURCE_BYTES = 4_096
 MAX_FILE_DIFF_BYTES = 8_000
@@ -183,6 +189,130 @@ class ToolRegistry:
         self._execution_context: ToolExecutionContext | None = None
         self.documents_enabled = documents_enabled
         self._register_builtins(shell_enabled)
+        self.register(Tool(
+            "image_generate",
+            "Draw a new image from a prompt with the image provider.",
+            {"type": "object", "properties": {
+                "prompt": {"type": "string"},
+                "filename": {"type": "string"},
+                "aspect_ratio": {"type": "string"},
+            }, "required": ["prompt"]},
+            self._image_generate, retryable=False,
+        ))
+        self.register(Tool(
+            "image_edit",
+            "Change an existing image with a prompt.",
+            {"type": "object", "properties": {
+                "input": {"type": "string"},
+                "prompt": {"type": "string"},
+                "filename": {"type": "string"},
+                "aspect_ratio": {"type": "string"},
+            }, "required": ["input", "prompt"]},
+            self._image_edit, retryable=False,
+        ))
+        self.register(Tool(
+            "image_edit_batch",
+            "Change several images with the same prompt and pack them into an archive.",
+            {"type": "object", "properties": {
+                "inputs": {"type": "array", "items": {"type": "string"}},
+                "prompt": {"type": "string"},
+                "filename_prefix": {"type": "string"},
+            }, "required": ["inputs", "prompt"]},
+            self._image_edit_batch, retryable=False,
+        ))
+
+        self.register(Tool(
+            "music_generate",
+            "Write a song with a voice over a production.",
+            {"type": "object", "properties": {
+                "lyrics": {"type": "string"},
+                "prompt": {"type": "string"},
+                "filename": {"type": "string"},
+            }, "required": ["lyrics", "prompt"]},
+            self._music_generate, retryable=False,
+        ))
+        self.register(Tool(
+            "audio_transcribe",
+            "Write the words of an audio file.",
+            {"type": "object", "properties": {
+                "input": {"type": "string"},
+                "filename": {"type": "string"},
+            }, "required": ["input"]},
+            self._audio_transcribe, retryable=False,
+        ))
+        self.register(Tool(
+            "audio_synthesize",
+            "Read a text out loud and save it as an audio file.",
+            {"type": "object", "properties": {
+                "text": {"type": "string"},
+                "voice": {"type": "string"},
+                "filename": {"type": "string"},
+            }, "required": ["text"]},
+            self._audio_synthesize, retryable=False,
+        ))
+        self.register(Tool(
+            "video_export",
+            "Make a web ready copy of a video.",
+            {"type": "object", "properties": {
+                "input": {"type": "string"},
+                "filename": {"type": "string"},
+            }, "required": ["input"]},
+            self._video_export, retryable=False,
+        ))
+        self.register(Tool(
+            "image_merge_prompt",
+            "Combine two pictures into one new picture with a prompt.",
+            {"type": "object", "properties": {
+                "first": {"type": "string"},
+                "second": {"type": "string"},
+                "prompt": {"type": "string"},
+                "filename": {"type": "string"},
+            }, "required": ["first", "second", "prompt"]},
+            self._image_merge_prompt, retryable=False,
+        ))
+        self.register(Tool(
+            "video_generate",
+            "Turn a picture into a short video.",
+            {"type": "object", "properties": {
+                "input": {"type": "string"},
+                "prompt": {"type": "string"},
+                "filename": {"type": "string"},
+                "duration": {"type": "string"},
+            }, "required": ["input", "prompt"]},
+            self._video_generate, retryable=False,
+        ))
+        self.register(Tool(
+            "ssh_inspect",
+            "Look at a remote server over ssh without changing anything.",
+            {"type": "object", "properties": {
+                "host": {"type": "string"},
+                "user": {"type": "string"},
+                "port": {"type": "string"},
+                "key": {"type": "string"},
+            }, "required": ["host", "user"]},
+            self._ssh_inspect, retryable=True,
+        ))
+        self.register(Tool(
+            "ssh_exec_write",
+            "Run a command on a remote server over ssh. The user approves it first.",
+            {"type": "object", "properties": {
+                "host": {"type": "string"},
+                "user": {"type": "string"},
+                "command": {"type": "string"},
+                "port": {"type": "string"},
+                "key": {"type": "string"},
+            }, "required": ["host", "user", "command"]},
+            self._ssh_exec_write, retryable=False,
+        ))
+        self.register(Tool(
+            "shell_readonly",
+            "Run a read only command in the workspace and read its output.",
+            {"type": "object", "properties": {
+                "command": {"type": "string"},
+            }, "required": ["command"]},
+            self._shell_readonly, retryable=True,
+        ))
+
         self.register(Tool(
             "artifact_publish",
             "Publish a produced file as a deliverable of the session.",
@@ -485,6 +615,276 @@ class ToolRegistry:
                     "proofread": verdict["proofread"],
                     "paragraphs": verdict["paragraphs"],
                 },
+            },
+        )
+
+    def _image_generate(self, args: dict[str, Any]) -> ToolResult:
+        from .media import MediaError, generate
+        try:
+            result = generate(
+                self.workspace,
+                str(args.get("prompt") or ""),
+                str(args.get("filename") or "generated.jpg"),
+                str(args.get("aspect_ratio") or ""),
+            )
+        except MediaError as error:
+            raise ToolError(str(error)) from error
+        return ToolResult(
+            result["path"],
+            presentation={
+                "type": "image",
+                "summary": f"Image saved as {result['path']}",
+                "artifacts": [{"path": result["path"], "kind": "image", "operation": "create"}],
+                "diagnostics": {"size_bytes": result["size_bytes"]},
+            },
+        )
+
+    def _image_edit(self, args: dict[str, Any]) -> ToolResult:
+        from .media import MediaError, edit
+        source = _resolve(self.workspace, str(args.get("input") or ""))
+        try:
+            result = edit(
+                self.workspace,
+                source,
+                str(args.get("prompt") or ""),
+                str(args.get("filename") or "edited.jpg"),
+                str(args.get("aspect_ratio") or ""),
+            )
+        except MediaError as error:
+            raise ToolError(str(error)) from error
+        return ToolResult(
+            result["path"],
+            presentation={
+                "type": "image",
+                "summary": f"Image saved as {result['path']}",
+                "artifacts": [{"path": result["path"], "kind": "image", "operation": "write"}],
+                "diagnostics": {"size_bytes": result["size_bytes"]},
+            },
+        )
+
+    def _image_edit_batch(self, args: dict[str, Any]) -> ToolResult:
+        from .media import MediaError, edit_batch
+        raw = args.get("inputs")
+        items = raw if isinstance(raw, list) else []
+        sources = []
+        for item in items:
+            try:
+                sources.append(str(_resolve(self.workspace, str(item))))
+            except ToolError:
+                continue
+        try:
+            result = edit_batch(
+                self.workspace,
+                sources,
+                str(args.get("prompt") or ""),
+                str(args.get("filename_prefix") or "result"),
+            )
+        except MediaError as error:
+            raise ToolError(str(error)) from error
+        return ToolResult(
+            result["path"],
+            presentation={
+                "type": "archive",
+                "summary": f"Archive saved as {result['path']}",
+                "artifacts": [{"path": result["path"], "kind": "archive", "operation": "create"}],
+                "diagnostics": {"count": len(result["items"])},
+            },
+        )
+
+    def _music_generate(self, args: dict[str, Any]) -> ToolResult:
+        from .media_audio import MediaError, music
+        try:
+            result = music(
+                self.workspace,
+                str(args.get("lyrics") or ""),
+                str(args.get("prompt") or ""),
+                str(args.get("filename") or "music.mp3"),
+            )
+        except MediaError as error:
+            raise ToolError(str(error)) from error
+        return ToolResult(
+            result["path"],
+            presentation={
+                "type": "audio",
+                "summary": f"Audio saved as {result['path']}",
+                "artifacts": [{"path": result["path"], "kind": "audio", "operation": "create"}],
+                "diagnostics": {"size_bytes": result["size_bytes"]},
+            },
+        )
+
+    def _audio_transcribe(self, args: dict[str, Any]) -> ToolResult:
+        from .media_audio import MediaError, transcribe
+        source = _resolve(self.workspace, str(args.get("input") or ""))
+        try:
+            result = transcribe(
+                self.workspace, source, str(args.get("filename") or "transcript.txt"))
+        except MediaError as error:
+            raise ToolError(str(error)) from error
+        return ToolResult(
+            result["text"],
+            presentation={
+                "type": "text",
+                "summary": f"Transcript saved as {result['path']}",
+                "artifacts": [{"path": result["path"], "kind": "text", "operation": "create"}],
+                "diagnostics": {"size_bytes": result["size_bytes"]},
+            },
+        )
+
+    def _audio_synthesize(self, args: dict[str, Any]) -> ToolResult:
+        from .media_audio import MediaError, speak
+        try:
+            result = speak(
+                self.workspace,
+                str(args.get("text") or ""),
+                str(args.get("voice") or ""),
+                str(args.get("filename") or "speech.mp3"),
+            )
+        except MediaError as error:
+            raise ToolError(str(error)) from error
+        return ToolResult(
+            result["path"],
+            presentation={
+                "type": "audio",
+                "summary": f"Audio saved as {result['path']}",
+                "artifacts": [{"path": result["path"], "kind": "audio", "operation": "create"}],
+                "diagnostics": {"size_bytes": result["size_bytes"]},
+            },
+        )
+
+    def _video_export(self, args: dict[str, Any]) -> ToolResult:
+        from .media_audio import MediaError, export_video
+        source = _resolve(self.workspace, str(args.get("input") or ""))
+        try:
+            result = export_video(
+                self.workspace, source, str(args.get("filename") or "video.mp4"))
+        except MediaError as error:
+            raise ToolError(str(error)) from error
+        return ToolResult(
+            result["path"],
+            presentation={
+                "type": "video",
+                "summary": f"Video saved as {result['path']}",
+                "artifacts": [{"path": result["path"], "kind": "video", "operation": "create"}],
+                "diagnostics": {"size_bytes": result["size_bytes"]},
+            },
+        )
+
+    def _image_merge_prompt(self, args: dict[str, Any]) -> ToolResult:
+        from .media_merge import MergeError, merge
+        left = _resolve(self.workspace, str(args.get("first") or ""))
+        right = _resolve(self.workspace, str(args.get("second") or ""))
+        try:
+            result = merge(
+                self.workspace,
+                left,
+                right,
+                str(args.get("prompt") or ""),
+                str(args.get("filename") or "merged.png"),
+            )
+        except MergeError as error:
+            raise ToolError(str(error)) from error
+        return ToolResult(
+            result["path"],
+            presentation={
+                "type": "image",
+                "summary": f"Merged picture saved as {result['path']}",
+                "artifacts": [{"path": result["path"], "kind": "image", "operation": "create"}],
+                "diagnostics": {"size_bytes": result["size_bytes"]},
+            },
+        )
+
+    def _video_generate(self, args: dict[str, Any]) -> ToolResult:
+        from .media_video import MediaError, generate_video
+        source = _resolve(self.workspace, str(args.get("input") or ""))
+        try:
+            result = generate_video(
+                self.workspace,
+                source,
+                str(args.get("prompt") or ""),
+                str(args.get("filename") or "video.mp4"),
+                str(args.get("duration") or "5"),
+            )
+        except MediaError as error:
+            raise ToolError(str(error)) from error
+        return ToolResult(
+            result["path"],
+            presentation={
+                "type": "video",
+                "summary": f"Video saved as {result['path']}",
+                "artifacts": [{"path": result["path"], "kind": "video", "operation": "create"}],
+                "diagnostics": {"size_bytes": result["size_bytes"]},
+            },
+        )
+
+    def _ssh_inspect(self, args: dict[str, Any]) -> ToolResult:
+        from .remote import RemoteError, inspect
+        try:
+            result = inspect(
+                str(args.get("host") or ""),
+                str(args.get("user") or ""),
+                args.get("port") or 22,
+                str(args.get("key") or ""),
+            )
+        except RemoteError as error:
+            raise ToolError(str(error)) from error
+        lines = []
+        for item in result["report"]:
+            lines.append(f"$ {item['command']} -> {item['code']}\n{item['stdout']}")
+        return ToolResult(
+            "\n\n".join(lines)[:20000],
+            presentation={
+                "type": "text",
+                "summary": f"Checked {result['host']}",
+            },
+        )
+
+    def _ssh_exec_write(self, args: dict[str, Any]) -> ToolResult:
+        from .remote import RemoteError, execute
+        command = str(args.get("command") or "").strip()
+        if not command:
+            raise ToolError("a command is required")
+        # A change on a remote server needs the user to say yes first.
+        if self.approve_shell is not None:
+            reason = f"Run on {args.get('host')}: {command}"
+            if not self.approve_shell(reason):
+                raise ToolError("the user did not approve the command")
+        try:
+            result = execute(
+                str(args.get("host") or ""),
+                str(args.get("user") or ""),
+                command,
+                args.get("port") or 22,
+                str(args.get("key") or ""),
+            )
+        except RemoteError as error:
+            raise ToolError(str(error)) from error
+        return ToolResult(
+            f"exit code {result['code']}\n{result['stdout']}"[-20000:],
+            presentation={
+                "type": "text",
+                "summary": f"Ran on {result['host']}: {command}",
+                "diagnostics": {"exit_code": result["code"]},
+            },
+        )
+
+    def _shell_readonly(self, args: dict[str, Any]) -> ToolResult:
+        command = str(args.get("command") or "").strip()
+        if not command:
+            raise ToolError("a command is required")
+        if not any(command == name or command.startswith(name + " ")
+                   for name in READONLY_COMMANDS):
+            raise ToolError("the command is not in the read only allowlist")
+        try:
+            result = subprocess.run(command, cwd=self.workspace, shell=True, text=True,
+                                    capture_output=True, timeout=30)
+        except subprocess.TimeoutExpired as exc:
+            raise ToolError("the command took too long") from exc
+        return ToolResult(
+            result.stdout[-20000:],
+            presentation={
+                "type": "text",
+                "summary": f"Command finished with code {result.returncode}",
+                "diagnostics": {"exit_code": result.returncode},
             },
         )
 
