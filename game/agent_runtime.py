@@ -1,7 +1,10 @@
 """Durable skill scheduler. LLM plans; local shared JS executes and measures motion.
 
 Reference/contact controllers are deliberately distinct from learned biomechanics.
-The browser is an observer: it cannot certify completion or supply fitness scores.
+A queued chain of skills is scheduled as one continuous scene: authored walk
+transitions carry the body between skill stations, and the receipts are still
+per skill. The browser is an observer: it cannot certify completion or supply
+fitness scores.
 """
 from __future__ import annotations
 import copy
@@ -19,12 +22,12 @@ from .world import keys, text
 
 VERSION = 'agent-1'
 SKILLS = [
-    {'id':'somersault','name':'Сальто','icon':'↻','duration':6.2,'requires':'floor'},
-    {'id':'wall_flip','name':'Сальто от стены','icon':'↰','duration':6.4,'requires':'wall'},
-    {'id':'vault','name':'Перемахивание','icon':'⇥','duration':5.3,'requires':'box'},
-    {'id':'ladder','name':'Лестница','icon':'⇡','duration':9.6,'requires':'ladder'},
-    {'id':'mantle','name':'Силовой выход','icon':'⌃','duration':8.0,'requires':'ledge'},
-    {'id':'drive','name':'За руль','icon':'◉','duration':7.6,'requires':'car'},
+    {'id':'somersault','name':'Сальто','icon':'↻','duration':6.2,'requires':'floor','station':0},
+    {'id':'wall_flip','name':'Сальто от стены','icon':'↰','duration':6.4,'requires':'wall','station':10},
+    {'id':'vault','name':'Перемахивание','icon':'⇥','duration':5.3,'requires':'box','station':20},
+    {'id':'ladder','name':'Лестница','icon':'⇡','duration':9.6,'requires':'ladder','station':30},
+    {'id':'mantle','name':'Силовой выход','icon':'⌃','duration':8.0,'requires':'ledge','station':40},
+    {'id':'drive','name':'За руль','icon':'◉','duration':7.6,'requires':'car','station':50},
 ]
 CATALOG = {s['id']:dict(s,index=i,backend='contact-reference + ballistic flip' if i<2 else 'contact-reference',learned=False) for i,s in enumerate(SKILLS)}
 PROMPT = '''
@@ -39,9 +42,11 @@ not learned muscular locomotion. Only the flip flight has ballistic COM and
 angular-momentum conservation. Geometry checks do not prove general physical
 robustness or visual beauty. Never describe a queued skill as completed; wait=true
 returns after execution and server-side checks, with no repeated LLM polling.
-Choose only supported capabilities. Obstacle-specific skills prepare a local
-practice station; changing stations resets local coordinates explicitly. This is
-not navigation through an arbitrary continuous terrain. Do not invent success.
+Choose only supported capabilities. Skills are staged along one shared route;
+between two skills the body performs an authored walk transition, so a chain
+plays as a single continuous scene. Transitions and skills are reference
+animation, not navigation through an arbitrary continuous terrain. Do not
+invent success.
 You can save compositions of these skills and record receipt-linked reflections.
 If a check fails, report it and inspect evidence. Never weaken criteria to pass.
 Autonomous local practice is opt-in and repeats existing skills; it is not online
@@ -76,9 +81,48 @@ def _state(world):
 
 def _enqueue(state, skill, reason, now):
     if skill not in state['enabled']:raise ValueError(f'Skill unavailable: {skill}')
-    item={**CATALOG[skill],'execution_id':uuid4().hex,'reason':reason,'queued_at':now}
+    item={**CATALOG[skill],'kind':'skill','execution_id':uuid4().hex,'reason':reason,'queued_at':now}
     state['queue'].append(item)
     return item['execution_id']
+
+
+def _route_endpoints(steps):
+    """Start/end hip positions of each skill on the shared route, from the same
+    executable trajectory the checks use."""
+    out={}
+    for s in steps:
+        frames=evaluate(s).get('trajectory') or []
+        if frames:
+            first,last=frames[0],frames[-1]
+            out[s]=({'hip':list(first['hip']),'station':CATALOG[s]['station']},
+                    {'hip':list(last['hip']),'station':CATALOG[s]['station']})
+    return out
+
+
+def _enqueue_route(state, steps, reason, now):
+    """Queue skills as one continuous scene: each boundary gets an authored
+    walk transition so the body travels between stations instead of teleporting."""
+    ends=_route_endpoints(steps)
+    ids=[];position=0
+    for i,s in enumerate(steps):
+        item_id=_enqueue(state,s,reason,now)
+        ids.append(item_id)
+        for job in state['queue'][-1:]:
+            job['chain']=steps;job['route_index']=position
+        position+=1
+        if i>=len(steps)-1:continue
+        nxt=steps[i+1]
+        if s not in ends or nxt not in ends:continue
+        a,b=ends[s][1],ends[nxt][0]
+        ax,ay=a['station']+a['hip'][0],a['hip'][1]-.87
+        bx,by=b['station']+b['hip'][0],b['hip'][1]-.87
+        d=((bx-ax)**2+(by-ay)**2)**.5
+        travel={'kind':'travel','id':nxt,'name':'Переход · '+CATALOG[nxt]['name'],'icon':'→',
+                'duration':max(1.6,d/0.94+.7),'execution_id':uuid4().hex,'reason':reason,'queued_at':now,
+                'chain':steps,'route_index':position,'index':CATALOG[nxt]['index']}
+        state['queue'].append(travel)
+        position+=1
+    return ids
 
 
 def advance(world, now=None):
@@ -86,13 +130,20 @@ def advance(world, now=None):
     state=_state(world)
     while state['active'] and now>=state['active']['started_at']+state['active']['duration']:
         job=state['active']; ended=job['started_at']+job['duration']
+        if job.get('kind')=='travel':
+            state['active']=None;state['idle_since']=ended;state['revision']+=1
+            if state['queue']:
+                state['active']=state['queue'].pop(0);state['active']['started_at']=ended;state['revision']+=1
+            continue
         evidence={k:copy.deepcopy(v) for k,v in evaluate(job['id']).items() if k!='trajectory'}
         receipt={**job,'completed_at':ended,'status':'passed' if evidence['passed'] else 'failed','evidence':evidence}
         state['history']=(state['history']+[receipt])[-60:]
         state['last_pose']={'index':job['index'],'time':job['duration']}
         state['active']=None;state['idle_since']=ended;state['revision']+=1
         if not evidence['passed']:
-            for q in state['queue']:state['history']=(state['history']+[{**q,'status':'blocked','reason':'Previous skill failed'}])[-60:]
+            for q in state['queue']:
+                if q.get('kind')=='travel':continue
+                state['history']=(state['history']+[{**q,'status':'blocked','reason':'Previous skill failed'}])[-60:]
             state['queue']=[];state['practice']=False
         if state['queue']:
             state['active']=state['queue'].pop(0);state['active']['started_at']=ended
@@ -109,7 +160,9 @@ def observe(world, now=None):
     state=advance(world,now)
     sensor=None
     pose_ref=({'index':state['active']['index'],'time':max(0,now-state['active']['started_at'])} if state['active'] else state.get('last_pose'))
-    if pose_ref:
+    if pose_ref and state['active'] and state['active'].get('kind')=='travel':
+        sensor=None
+    elif pose_ref:
         key=SKILLS[pose_ref['index']]['id'];frames=evaluate(key).get('trajectory',[])
         if frames:
             sensor=copy.deepcopy(frames[min(len(frames)-1,int(pose_ref['time']*10))])
@@ -118,8 +171,8 @@ def observe(world, now=None):
         'self':{'body_id':world['body_id'],'session_id':world['session_id'],'brain':'Configured LLM API → tools → local motion → checked receipts',
         'viewer':'game/static/agent-renderer.js','controller':'game/static/motion.js','scheduler':'game/agent_runtime.py',
         'human_observer':True,'perception':'Structured pose/phase/contact metadata; no browser pixels supplied in this mode',
-        'coordinates':'meters; x right, y up; floor y=0; station-local coordinates',
-        'limitations':['Reference/contact animation, not learned biomechanics','Station changes reset local coordinates','Checks cover packaged trajectories, not arbitrary geometry']}}
+        'coordinates':'meters; x right, y up; floor y=0; shared route coordinates',
+        'limitations':['Reference/contact animation, not learned biomechanics','Skill-to-skill transitions are authored walks, not learned locomotion','Checks cover packaged trajectories, not arbitrary geometry']}}
 
 
 def command(world,args,now=None):
@@ -129,6 +182,7 @@ def command(world,args,now=None):
     state=advance(world,now);action=args.get('action','run')
     if action=='stop':
         for job in ([state['active']] if state['active'] else [])+state['queue']:
+            if job.get('kind')=='travel':continue
             state['history']=(state['history']+[{**job,'status':'cancelled','completed_at':now}])[-60:]
         if state['active']:state['last_pose']={'index':state['active']['index'],'time':min(state['active']['duration'],now-state['active']['started_at'])}
         state.update(active=None,queue=[],practice=False,idle_since=now)
@@ -154,9 +208,10 @@ def command(world,args,now=None):
             if len(state['plans'])>=20 and args['name'] not in state['plans']:raise ValueError('At most 20 saved compositions')
             state['plans'][args['name']]={'steps':steps,'goal':goal}
         else:
-            if len(state['queue'])+len(steps)+(1 if state['active'] else 0)>6:raise ValueError('Queue capacity is 6; wait or stop current work')
+            pending=[j for j in ([state['active']] if state['active'] else [])+state['queue'] if j.get('kind')!='travel']
+            if len(pending)+len(steps)>6:raise ValueError('Queue capacity is 6; wait or stop current work')
             state['goal']=goal or state['goal'];state['practice']=False
-            ids=[_enqueue(state,s,goal,now) for s in steps]
+            ids=_enqueue_route(state,steps,goal,now)
             advance(world,now);state['revision']+=1
             return {'execution_ids':ids,'state':observe(world,now)}
     else:raise ValueError('Unknown agent action')

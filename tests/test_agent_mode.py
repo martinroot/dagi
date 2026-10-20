@@ -31,13 +31,37 @@ def test_all_included_skills_pass_shared_server_motion_checks(skill):
 def test_decomposition_runs_in_order_and_saves_evidence_without_changing_criteria():
     w=body();steps=list(runtime.CATALOG)
     ids=runtime.command(w,{'steps':steps,'goal':'Six skills'},now=100)['execution_ids']
-    runtime.advance(w,now=145)
-    state=runtime.observe(w,now=145)
+    q=[j for j in w['agent_runtime']['queue'] if j.get('kind')=='travel']
+    total=sum(runtime.CATALOG[s]['duration'] for s in steps)+sum(j['duration'] for j in q)
+    runtime.advance(w,now=100+total)
+    state=runtime.observe(w,now=100+total)
     assert not state['active'] and not state['queue']
     assert [h['execution_id'] for h in state['history']]==ids
     assert all(h['status']=='passed' for h in state['history'])
-    assert state['history'][1]['started_at']==106.2
+    assert state['history'][1]['started_at']>106.2
     assert not w['life']['running']
+
+
+def test_chain_plays_as_one_continuous_scene_with_authored_transitions():
+    w=body();steps=['somersault','ladder','drive']
+    runtime.command(w,{'steps':steps,'goal':'route'},now=100)
+    state=w['agent_runtime']
+    assert [j.get('kind') for j in state['queue']]==['travel','skill','travel','skill']
+    assert [j['id'] for j in state['queue'] if j.get('kind')=='travel']==['ladder','drive']
+    travels=[j for j in state['queue'] if j.get('kind')=='travel']
+    assert all(t['duration']>=1.6 for t in travels)
+    assert state['active']['chain']==steps and state['active']['route_index']==0
+    runtime.advance(w,now=100+state['active']['duration']+.05)
+    active=w['agent_runtime']['active']
+    assert active.get('kind')=='travel' and active['id']=='ladder'
+    assert runtime.observe(w,now=100+state['active']['duration']+.05)['sensors'] is None
+    total=sum(runtime.CATALOG[s]['duration'] for s in steps)+sum(t['duration'] for t in travels)
+    runtime.advance(w,now=100+total+.1)
+    state=runtime.observe(w,now=100+total+.1)
+    assert not state['active'] and not state['queue']
+    assert [h['id'] for h in state['history']]==steps
+    last=state['history'][-1]
+    assert state['last_pose']['index']==runtime.CATALOG['drive']['index']
 
 
 def test_failed_check_blocks_dependent_steps_and_cannot_be_overridden(monkeypatch):

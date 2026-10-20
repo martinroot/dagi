@@ -5,7 +5,7 @@ const clamp=(x,a=0,b=1)=>Math.max(a,Math.min(b,x)),mix=(a,b,t)=>a+(b-a)*t,sm=x=>
 const add=(a,b)=>[a[0]+b[0],a[1]+b[1]],sub=(a,b)=>[a[0]-b[0],a[1]-b[1]],mul=(a,b)=>[a[0]*b,a[1]*b],rot=(p,a)=>[p[0]*Math.cos(a)-p[1]*Math.sin(a),p[0]*Math.sin(a)+p[1]*Math.cos(a)],len=p=>Math.hypot(...p),lerp=(a,b,t)=>[mix(a[0],b[0],t),mix(a[1],b[1],t)];
 let playing=false;
 const root=document.getElementById('dagi-motion-studio'),canvas=root.querySelector('#dm-stage'),c=canvas.getContext('2d'),phase=root.querySelector('#dm-phase'),contact=root.querySelector('#dm-contact'),slider=root.querySelector('#dm-time'),clock=root.querySelector('#dm-time-label'),pause=root.querySelector('#dm-pause');
-let active=0,time=0,debug=false,cabin=false,cam={x:1,y:1.0,s:135},current=scene(0,0),seekMode=false;
+let active=0,time=0,debug=false,cabin=false,cam={x:1,y:1.0,s:135},current=scene(0,0),seekMode=false,routeInfo=null;
 const polar=(r,a)=>[r*Math.cos(a),r*Math.sin(a)];
 const ink='#24363e',far='#839ba4',accent='#bd5a3f';
 function path(points,fill,stroke,width=.01){c.beginPath();for(let i=0;i<points.length;i++)i?c.lineTo(...points[i]):c.moveTo(...points[i]);if(fill){c.closePath();c.fillStyle=fill;c.fill();}if(stroke){c.lineWidth=width;c.strokeStyle=stroke;c.lineJoin='round';c.lineCap='round';c.stroke();}}
@@ -53,11 +53,26 @@ function drawPerson(p){let hip=p.pelvis.p;let support=active===3&&time>7.8?LADDE
 function drawDebug(p){if(!debug)return;for(let v of p.meta.contacts||[]){let pt=v.p;disk(pt,.028,'#c86c49');line(add(pt,[-.065,0]),add(pt,[.065,0]),.009,'#c86c49');}let m=massProps(p);disk(m.c,.025,'#1b8b85','#fff',.008);if(p.meta.air){line(m.c,add(m.c,[.10,0]),.006,'#1b8b85');}}
 function render(){let w=canvas.clientWidth,h=canvas.clientHeight,dpr=Math.min(devicePixelRatio||1,2);if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);}c.setTransform(dpr,0,0,dpr,0,0);c.fillStyle=gradient(0,0,0,h,['#f6f9f8','#ffffff','#fffdf8']);c.fillRect(0,0,w,h);let p=current.pose,hip=p.pelvis.p,desiredS=(h-24)/(active===1?3.6:3.0),targetX=hip[0]+(p.meta.air?.10:.70),targetY=Math.max(1.12,p.torso.p[1]+.25);if(active===5){targetX=time>2.5?4.45:hip[0]+1.10;targetY=1.0;desiredS=Math.min(desiredS,w/5.25);}
  if(seekMode){cam={x:targetX,y:targetY,s:desiredS};seekMode=false;}else{cam.x+=.085*(targetX-cam.x);cam.y+=.075*(targetY-cam.y);cam.s+=.055*(desiredS-cam.s);}c.save();c.translate(w/2-cam.x*cam.s,h*.53+cam.y*cam.s);c.scale(cam.s,-cam.s);let ww=w/cam.s;let gy=0;c.fillStyle='#f1f2ed';c.fillRect(cam.x-ww,gy-3,ww*2,3);line([cam.x-ww,0],[cam.x+ww,0],.010,'#c2cfca');for(let x=Math.floor(cam.x-ww);x<cam.x+ww;x+=1){c.save();c.globalAlpha=.18;line([x,-.06],[x+.12,-.06],.007,'#7f9591');c.restore();}
- for(let prop of current.props){if(prop.kind==='box'||prop.kind==='platform')block(prop);if(prop.kind==='wall')block({...prop,kind:'box'});if(prop.kind==='ladder')drawLadder(prop);if(prop.kind==='car')carBack({...current,door:current.door});}
- drawPerson(p);if(active===5)carFront(current);drawDebug(p);c.restore();let text=playing?(p.meta.phase||'Движение'):'Готов к задаче';if(phase.textContent!==text)phase.textContent=text;let co=(p.meta.contacts||[]).map(v=>v.label|| (v.kind==='foot'?'Стопа':v.kind==='hand'?'Кисть':''));let detail=debug?[...new Set(co)].filter(Boolean).join(' · '):'';if(contact.textContent!==detail)contact.textContent=detail;slider.value=time.toFixed(2);clock.textContent=time.toFixed(1)+' / '+clips[active].duration.toFixed(1)+' с';}
+ for(let prop of current.props){if(prop.kind==='box'||prop.kind==='platform')block(prop);if(prop.kind==='wall')block({...prop,kind:'box'});if(prop.kind==='ladder')drawLadder(prop);if(prop.kind==='car'){c.save();c.translate(prop.x||0,0);carBack({...current,door:current.door});c.restore();}}
+ drawPerson(p);if(active===5){c.save();c.translate(current.props.find(v=>v.kind==='car')?.x||0,0);carFront(current);c.restore();}drawDebug(p);c.restore();let text=playing?(p.meta.phase||'Движение'):'Готов к задаче';
+ if(playing&&routeInfo&&routeInfo.segment.kind==='travel')text='Маршрут · переход: '+DagiMotion.clips[routeInfo.segment.id].name;if(phase.textContent!==text)phase.textContent=text;let co=(p.meta.contacts||[]).map(v=>v.label|| (v.kind==='foot'?'Стопа':v.kind==='hand'?'Кисть':''));let detail=debug?[...new Set(co)].filter(Boolean).join(' · '):'';if(contact.textContent!==detail)contact.textContent=detail;slider.value=time.toFixed(2);clock.textContent=time.toFixed(1)+' / '+clips[active].duration.toFixed(1)+' с';}
 
 window.DagiView={
- update(job,elapsed){playing=!!job;if(job){active=job.index;time=clamp(elapsed,0,clips[active].duration);current=scene(active,time);}else if(!window.DagiView.initialized){current={pose:build({hip:[0,.865],theta:0,feet:[{p:[-.1,.075],a:0},{p:[.1,.075],a:0}],arms:[[-1.65,-1.45],[-1.50,-1.40]],contacts:[]}),props:[]};window.DagiView.initialized=true;}render();},
+ update(job,elapsed){playing=!!job;if(job){
+  if(job.chain&&job.chain.length&&job.route_index!==undefined){
+   const full=DagiMotion.route(job.chain,0);
+   const seg=full.segs[job.route_index]||full.segs[0];
+   const r=DagiMotion.route(job.chain,seg.start+clamp(elapsed,0,seg.duration));
+   current={pose:r.pose,props:r.props,door:r.door};
+   active=r.segment.id;time=r.segment.kind==='skill'?r.skillTime:clamp(elapsed-r.segment.start,0,r.segment.duration);
+   routeInfo=r;
+  }else if(job.station!==undefined){
+   active=job.index;time=clamp(elapsed,0,clips[active].duration);
+   const r=scene(active,time),v=[job.station,0];
+   current={pose:DagiMotion.shiftPose(r.pose,v),props:DagiMotion.shiftProps(r.props,v),door:r.door};
+   routeInfo=null;
+  }else{active=job.index;time=clamp(elapsed,0,clips[active].duration);current=scene(active,time);routeInfo=null;}
+ }else if(!window.DagiView.initialized){current={pose:build({hip:[0,.865],theta:0,feet:[{p:[-.1,.075],a:0},{p:[.1,.075],a:0}],arms:[[-1.65,-1.45],[-1.50,-1.40]],contacts:[]}),props:[]};window.DagiView.initialized=true;}render();},
  debug(value){debug=value;render()},cabin(value){cabin=value;render()},
  get pose(){return current.pose}
 };

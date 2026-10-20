@@ -48,9 +48,45 @@ function scene(id,t){let z,props=[];
  if(id===3){props=[{kind:'ladder',...LADDER},{kind:'platform',x:3.13,y:LADDER.top,w:4.8,h:.20}];let start=stand(1.95);if(t<.85){z=blend(start,{...stand(2.31),theta:-.12},t/.85);z.phase='Подход к лестнице';return{pose:build(z),props};}let ct=Math.max(0,t-1.20),period=1.4,step=.60/period,u=clamp(ct/6.4),y=.685+ct*step,hip=[LADDER.x+LADDER.slope*y-.48,y],feet=[],hands=[],contacts=[];for(let i=0;i<2;i++){let p=ct/period+i*.5,n=Math.floor(p),f=p-n,idx=2*n-i,base=rung(Math.max(0,idx)),next=rung(Math.max(0,idx+2));let ankle=[base.x-.16,base.y+.075+.018],fa=0;if(f>.64){let q=sm((f-.64)/.36);ankle=[mix(base.x,next.x,q)-.16-.14*Math.sin(PI*q),mix(base.y,next.y,q)+.093];}else contacts.push({p:[base.x-.01,base.y+.018],kind:'foot',label:'Ступень '+(Math.max(0,idx)+1)});feet.push({p:ankle,a:fa});let hp=ct/period+i*.5+.26,hn=Math.floor(hp),hf=hp-hn,hidx=2*hn-i+3,h0=rung(Math.max(0,hidx)),h1=rung(Math.max(0,hidx+2)),hand=[h0.x,h0.y];if(hf>.66){let q=sm((hf-.66)/.34);hand=[mix(h0.x,h1.x,q)-.10*Math.sin(PI*q),mix(h0.y,h1.y,q)];}else contacts.push({p:hand,kind:'hand',label:'Хват за перекладину '+(hidx+1)});hands.push(hand);}
  z={hip,theta:-.14,headTheta:-.03,feet,hands,contacts,phase:'Лестница · опора на ступени'};if(t<1.65)z=blend({...stand(2.31),theta:-.12},z,(t-.85)/.8);if(t>7.30){let top={...stand(3.42,LADDER.top),hip:[3.42,LADDER.top+.84],feet:[{p:[3.17,LADDER.top+.075],a:0},{p:[3.68,LADDER.top+.075],a:0}],hands:[[3.60,LADDER.top+1.05],[3.35,LADDER.top+1.10]],theta:-.12,phase:'Выход на площадку'};if(t<8.15)z=blend(z,top,(t-7.30)/.85);else z=blend(top,walk(t-8.15,3.42,LADDER.top,false),(t-8.15)/.35);z.phase=t<8.15?'Выход на площадку':'Движение по площадке';}return{pose:build(z),props};}
  if(id===4){props=[{kind:'platform',x:EDGE,y:TOP,w:5.2,h:TOP}];let a=gait(Math.min(t,runEnd));if(t<runEnd)return{pose:build(a),props};let hands=[[EDGE+.02,TOP+.018],[EDGE+.09,TOP+.018]],hang={hip:[EDGE-.45,1.02],theta:-.02,headTheta:0,feet:[{p:[EDGE-.58,.29],a:-.20},{p:[EDGE-.23,.42],a:-.35}],hands,contacts:hands.map(p=>({p,kind:'hand',label:'Зацеп края'})),phase:'Прыжок · хват за край'};if(t<2.28){z=blend(a,hang,(t-runEnd)/.53);let lift=Math.sin(PI*clamp((t-runEnd)/.53));z.hip[1]+=.26*lift;z.feet.forEach(f=>f.p[1]+=.20*lift);}else if(t<2.55){z=hang;z.phase='Вис · погашение раскачки';}else if(t<3.42){let pull={...hang,hip:[EDGE-.35,1.48],theta:-.18,feet:[{p:[EDGE-.55,.68],a:-.2},{p:[EDGE-.35,.65],a:-.35}],phase:'Подтягивание · локти вниз'};z=blend(hang,pull,(t-2.55)/.87);}else if(t<4.25){let from={...hang,hip:[EDGE-.35,1.48],theta:-.18,feet:[{p:[EDGE-.55,.68],a:-.2},{p:[EDGE-.35,.65],a:-.35}]},press={...hang,hip:[EDGE-.34,2.25],theta:-1.27,headTheta:-.05,feet:[{p:[EDGE-.50,1.49],a:-.15},{p:[EDGE-.16,1.70],a:-.1}],phase:'Силовой выход · разгибание рук'};let q=(t-3.42)/.83;z=blend(from,press,q);z.feet[1].p=lerp([EDGE-.35,z.hip[1]-.83],press.feet[1].p,sm((q-.65)/.35));}else if(t<5.15){let press={...hang,hip:[EDGE-.34,2.25],theta:-1.27,headTheta:-.05,feet:[{p:[EDGE-.50,1.49],a:-.15},{p:[EDGE-.16,1.70],a:-.1}]},hook={...press,hip:[EDGE-.04,2.34],theta:-1.60,feet:[{p:[EDGE-.46,1.60],a:-.10},{p:[EDGE+.50,TOP+.075],a:0}],phase:'Заброс ноги · опора стопой'};z=blend(press,hook,(t-4.25)/.90);z.feet[1].p[1]+=.32*Math.sin(PI*clamp((t-4.25)/.9));if(t>5.0)z.contacts.push({p:[EDGE+.53,TOP],kind:'foot',label:'Стопа на верхней плоскости'});}else if(t<6.10){let from={...hang,hip:[EDGE-.04,2.34],theta:-1.60,headTheta:-.05,feet:[{p:[EDGE-.46,1.60],a:-.10},{p:[EDGE+.50,TOP+.075],a:0}]},end={...stand(EDGE+.50,TOP),hip:[EDGE+.50,TOP+.85],feet:[{p:[EDGE+.09,TOP+.075],a:0},{p:[EDGE+.50,TOP+.075],a:0}]};z=blend(from,end,(t-5.15)/.95);z.feet[1]=from.feet[1];z.feet[0].p[1]+=.38*Math.sin(PI*clamp((t-5.15)/.95));z.phase='Перенос веса · подъём';if(t>5.55)z.contacts=[{p:[EDGE+.53,TOP],kind:'foot',label:'Опорная стопа'}];}else{let end={...stand(EDGE+.50,TOP),hip:[EDGE+.50,TOP+.85],feet:[{p:[EDGE+.09,TOP+.075],a:0},{p:[EDGE+.50,TOP+.075],a:0}]};z=blend(end,walk(t-6.10,EDGE+.50,TOP,false),(t-6.10)/.45);z.phase='Продолжение по препятствию';}return{pose:build(z),props};}
- if(id===5){props=[{kind:'car'}];let a=walk(Math.min(t,1.4),2.10),stop={...stand(3.28),theta:-.15,hands:[[3.72,1.01],[3.45,.83]],phase:'Открыть дверь'};stop.feet=walk(1.4,2.10).feet;if(t<1.4){z=a;z.phase='Подход к автомобилю';}else if(t<1.75){z=blend(a,stop,(t-1.4)/.35);z.phase='Рука к ручке двери';}else if(t<2.48){z=stop;z.contacts=[{p:[3.72,1.01],kind:'hand',label:'Ручка двери'}];}else{let entry={hip:[3.80,.73],theta:-.65,headTheta:-.1,feet:[{p:[3.33,.075],a:0},{p:[4.44,.35],a:.05}],hands:[[4.62,1.12],[3.86,1.20]],contacts:[{p:[3.33,0],kind:'foot'},{p:[4.48,.275],kind:'foot'}],phase:'Нога в салон · наклон под крышу'},seated={hip:[4.18,.72],theta:.13,headTheta:0,feet:[{p:[4.79,.365],a:.12},{p:[4.84,.36],a:.12}],hands:[[4.61,1.17],[4.69,1.015]],contacts:[{p:[4.18,.69],kind:'seat',label:'Таз на сиденье'},{p:[4.61,1.17],kind:'hand',label:'Кисти на руле'}],phase:'Посадка · ноги у педалей'};if(t<3.58){let q=(t-2.48)/1.1;z=blend(stop,entry,q);z.feet[1].p[1]+=.30*Math.sin(PI*clamp(q));}else if(t<4.95){let q=(t-3.58)/1.37;z=blend(entry,seated,q);z.feet[0].p[1]+=.47*Math.sin(PI*clamp(q));}else{z=seated;z.phase=t<6.2?'Закрыть дверь · проверить посадку':'За рулём';}}return{pose:build(z),props,door:sm((t-1.85)/.55)*(1-sm((t-5.2)/.75))};}
+ if(id===5){props=[{kind:'car',x:0}];let a=walk(Math.min(t,1.4),2.10),stop={...stand(3.28),theta:-.15,hands:[[3.72,1.01],[3.45,.83]],phase:'Открыть дверь'};stop.feet=walk(1.4,2.10).feet;if(t<1.4){z=a;z.phase='Подход к автомобилю';}else if(t<1.75){z=blend(a,stop,(t-1.4)/.35);z.phase='Рука к ручке двери';}else if(t<2.48){z=stop;z.contacts=[{p:[3.72,1.01],kind:'hand',label:'Ручка двери'}];}else{let entry={hip:[3.80,.73],theta:-.65,headTheta:-.1,feet:[{p:[3.33,.075],a:0},{p:[4.44,.35],a:.05}],hands:[[4.62,1.12],[3.86,1.20]],contacts:[{p:[3.33,0],kind:'foot'},{p:[4.48,.275],kind:'foot'}],phase:'Нога в салон · наклон под крышу'},seated={hip:[4.18,.72],theta:.13,headTheta:0,feet:[{p:[4.79,.365],a:.12},{p:[4.84,.36],a:.12}],hands:[[4.61,1.17],[4.69,1.015]],contacts:[{p:[4.18,.69],kind:'seat',label:'Таз на сиденье'},{p:[4.61,1.17],kind:'hand',label:'Кисти на руле'}],phase:'Посадка · ноги у педалей'};if(t<3.58){let q=(t-2.48)/1.1;z=blend(stop,entry,q);z.feet[1].p[1]+=.30*Math.sin(PI*clamp(q));}else if(t<4.95){let q=(t-3.58)/1.37;z=blend(entry,seated,q);z.feet[0].p[1]+=.47*Math.sin(PI*clamp(q));}else{z=seated;z.phase=t<6.2?'Закрыть дверь · проверить посадку':'За рулём';}}return{pose:build(z),props,door:sm((t-1.85)/.55)*(1-sm((t-5.2)/.75))};}
 }
 
-const api={scene,build,gait,clips,F0,F1,rung,LADDER,massProps,solePoint,TOP};
+const STAGE=[0,10,20,30,40,50];
+function shiftPose(pose,v){return shift(pose,v,0);}
+function shiftProps(props,v){return props.map(p=>{let q={...p};if(typeof q.x==='number')q.x+=v[0];if(typeof q.y==='number'&&p.kind!=='box')q.y+=v[1];return q;});}
+function travelScene(x0,y0,x1,y1,u,d){
+ const t=Math.max(0,Math.min(d,u*d));
+ const gy=mix(y0,y1,sm(u));
+ const walkStart=x0+(x1-x0)*Math.min(1,t/(d||1))-t;
+ const g=walk(t,walkStart,gy,false);
+ g.phase=u<.96?'Переход · шаг':'Подход к снаряду';
+ return {pose:build(g),props:[]};
+}
+function route(steps,elapsed){
+ let segs=[],cursor=0,i=0;
+ for(;i<steps.length;i++){
+  const id=steps[i],dur=clips[id].duration;
+  segs.push({kind:'skill',id,start:cursor,duration:dur,station:STAGE[id]});
+  cursor+=dur;
+  if(i<steps.length-1){
+   const a=scene(id,dur),b=scene(steps[i+1],0);
+   const ax=STAGE[id]+a.pose.pelvis.p[0],ay=a.pose.pelvis.p[1]-.87;
+   const bx=STAGE[steps[i+1]]+b.pose.pelvis.p[0],by=b.pose.pelvis.p[1]-.87;
+   const dist=Math.hypot(bx-ax,by-ay);
+   const td=Math.max(1.6,dist/.94+.7);
+   segs.push({kind:'travel',from:[ax,ay],to:[bx,by],start:cursor,duration:td,id:steps[i+1]});
+   cursor+=td;
+  }
+ }
+ const total=cursor;
+ let s=segs.find(v=>elapsed<v.start+v.duration)||segs[segs.length-1];
+ const lt=Math.max(0,Math.min(s.duration,elapsed-s.start));
+ if(s.kind==='skill'){
+  const r=scene(s.id,lt),v=[s.station,0];
+  return {pose:shiftPose(r.pose,v),props:shiftProps(r.props,v),door:r.door,segment:s,skillTime:lt,total,segs};
+ }
+ return {...travelScene(s.from[0],s.from[1],s.to[0],s.to[1],s.duration?lt/s.duration:0,s.duration),segment:s,total,segs};
+}
+const api={scene,build,gait,clips,F0,F1,rung,LADDER,massProps,solePoint,TOP,STAGE,route,travelScene,shiftPose,shiftProps};
 if(typeof module!=="undefined")module.exports=api;else global.DagiMotion=api;
 })(globalThis);
