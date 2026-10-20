@@ -58,6 +58,14 @@
     .tool-actions { display: flex; flex-wrap: wrap; gap: 6px; }
     .tool-actions:empty { display: none; }
     .tool-actions button { font-size: 12px; padding: 4px 7px; }
+    .link-button { background: none; border: none; color: #8ab4f8; font-size: 12px; padding: 0 4px; text-decoration: underline; }
+    .link-button:hover { background: none; color: #ff8d85; }
+    #sessions li { display: flex; align-items: center; gap: 4px; }
+    #sessions li button { flex: 1; }
+    .row-delete { background: none; border: none; color: #96a2b6; font-size: 14px; padding: 2px 6px; }
+    .row-delete:hover { background: none; color: #ff8d85; }
+    #templates li { display: flex; align-items: center; gap: 4px; }
+    #templates li button { flex: 1; }
     .approval-row { display: grid; gap: 6px; padding: 6px 0; border-bottom: 1px solid #30394a; }
     .approval-command { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .event.error { color: #ffb4ab; }
@@ -96,7 +104,7 @@
     <header><h1>Dagi Sandbox</h1><div class="header-actions"><button id="logout">Sign out</button><button id="new-session">New session</button></div></header>
     <main>
       <nav>
-        <h2>Sessions</h2><ul id="sessions"></ul>
+        <h2>Sessions <button id="purge-sessions" class="link-button" type="button">Delete all</button></h2><ul id="sessions"></ul>
         <h2 style="margin-top:18px">Saved runs</h2><ul id="runs"></ul>
         <h2 style="margin-top:18px">Templates</h2><ul id="templates"></ul>
       </nav>

@@ -1246,6 +1246,64 @@ class StateStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    # --- session deletion -----------------------------------------------
+
+    def _active_run_ids(self) -> list[str]:
+        return [
+            row["run_id"] for row in self._db.execute(
+                "SELECT run_id FROM runs WHERE status='running'"
+            )
+        ]
+
+    def delete_session(self, session_id: int) -> dict[str, Any]:
+        """Delete one session and everything scoped to it.
+
+        A session with a running run is never deleted: the run would lose its
+        lease and its transcript mid-flight.
+        """
+        if type(session_id) is not int or session_id < 1:
+            raise ValueError("session id must be a positive integer")
+        session = self.get_session(session_id)
+        if session is None:
+            raise ValueError("session not found")
+        active = [
+            row["run_id"] for row in self._db.execute(
+                "SELECT run_id FROM runs WHERE session_id=? AND status='running'", (session_id,)
+            )
+        ]
+        if active:
+            raise ValueError("session has an active run; stop it first")
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            self._db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        return {"session_id": session_id, "deleted": True}
+
+    def delete_all_sessions(self, keep_session_id: int | None = None) -> dict[str, Any]:
+        """Delete every session (optionally keeping one) and its scoped rows."""
+        if self._active_run_ids():
+            raise ValueError("a run is active; stop it first")
+        if keep_session_id is not None:
+            if type(keep_session_id) is not int or keep_session_id < 1:
+                raise ValueError("kept session id must be a positive integer")
+            if self.get_session(keep_session_id) is None:
+                raise ValueError("session not found")
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            if keep_session_id is None:
+                self._db.execute("DELETE FROM sessions")
+            else:
+                self._db.execute("DELETE FROM sessions WHERE id<>?", (keep_session_id,))
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        remaining = [row["id"] for row in self._db.execute("SELECT id FROM sessions")]
+        return {"deleted": True, "remaining": remaining}
+
     def fork_session(self, session_id: int) -> int:
         source = self.get_session(session_id)
         if source is None:

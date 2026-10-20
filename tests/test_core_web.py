@@ -350,6 +350,42 @@ def test_a_shell_command_from_a_chat_session_waits_for_operator_approval(tmp_pat
         _stop(server, thread)
 
 
+def test_session_deletion_api_removes_one_session_and_purges_the_rest(tmp_path):
+    app = WebApp(_config(tmp_path), provider_factory=lambda *_args: SlowProvider())
+    server, thread, base = _start(app)
+    opener = build_opener(HTTPCookieProcessor())
+
+    def request(path, method="GET", payload=None):
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = Request(
+            base + path, data=data,
+            headers={"Content-Type": "application/json"}, method=method,
+        )
+        try:
+            with opener.open(req, timeout=5) as response:
+                return response.status, json.loads(response.read() or b"{}")
+        except HTTPError as response:
+            return response.code, json.loads(response.read() or b"{}")
+
+    try:
+        request("/api/auth/login", "POST", {"username": "admin", "password": "local-test-password"})
+        status, first = request("/api/sessions", "POST", {"title": "old one"})
+        assert status == 201
+        status, second = request("/api/sessions", "POST", {"title": "old two"})
+        assert status == 201
+
+        status, body = request(f"/api/sessions/{first['session_id']}", "DELETE")
+        assert status == 200 and body["deleted"] is True
+        assert request(f"/api/sessions/{first['session_id']}")[0] == 404
+
+        assert request("/api/sessions/purge", "POST", {})[0] == 400, "a purge needs an explicit confirmation"
+        status, body = request("/api/sessions/purge", "POST", {"confirm": "DELETE ALL"})
+        assert status == 200 and body["remaining"] == []
+        assert request("/api/sessions")[1]["sessions"] == []
+    finally:
+        _stop(server, thread)
+
+
 def test_template_api_captures_a_session_and_clones_a_clean_session(tmp_path):
     app = WebApp(_config(tmp_path), provider_factory=lambda *_args: SlowProvider())
     server, thread, base = _start(app)

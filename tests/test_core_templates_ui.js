@@ -151,3 +151,70 @@ test("a pending command is shown with approve and deny controls", async () => {
   await buttons[1].onclick();
   assert.deepEqual(posted, [{approved: true}, {approved: false}]);
 });
+
+test("a session row carries a delete control that removes the session", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: [{id: 7, title: "old"}]});
+    if (url === "/api/sessions/7" && options.method === "DELETE") {
+      calls.push("delete-7");
+      return jsonResponse({session_id: 7, deleted: true});
+    }
+    if (url === "/api/templates") return jsonResponse({templates: []});
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.refreshSessions();
+  const row = elements.get("sessions").children[0];
+  const remove = row.children[1];
+  assert.equal(remove.textContent, "×");
+  await remove.onclick();
+  assert.deepEqual(calls, ["delete-7"]);
+});
+
+test("deleting every session asks for confirmation before it purges", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/sessions/purge") {
+      calls.push(JSON.parse(options.body));
+      return jsonResponse({deleted: true, remaining: []});
+    }
+    if (url === "/api/templates") return jsonResponse({templates: []});
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.purgeSessions();
+  assert.deepEqual(calls, [], "a refused confirmation must not purge anything");
+  context.confirm = () => true;
+  await context.purgeSessions();
+  assert.deepEqual(calls, [{confirm: "DELETE ALL"}]);
+});
+
+test("a template row carries a delete control", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    if (url === "/api/auth/session") return jsonResponse({authenticated: true});
+    if (url === "/api/sessions") return jsonResponse({sessions: []});
+    if (url === "/api/templates" && options.method === undefined) {
+      return jsonResponse({templates: [{id: "tpl-1", name: "hermes-deploy", task: "t", brief: "b"}]});
+    }
+    if (url === "/api/templates/tpl-1" && options.method === "DELETE") {
+      calls.push("delete-tpl");
+      return jsonResponse({deleted: true});
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const {context, elements} = makeUi(fetchImpl);
+  await context.restoreSession();
+  await context.refreshTemplates();
+  const row = elements.get("templates").children[0];
+  const remove = row.children[1];
+  assert.equal(remove.textContent, "×");
+  await remove.onclick();
+  assert.deepEqual(calls, ["delete-tpl"]);
+});

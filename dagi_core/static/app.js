@@ -932,12 +932,58 @@ async function refreshSessions(generation = sessionGeneration) {
     button.textContent = `${session.title || "Untitled"} · #${session.id}`;
     button.classList.toggle("selected", session.id === selectedSession);
     button.onclick = () => selectSession(session.id);
-    li.append(button);
+    const remove = document.createElement("button");
+    remove.className = "row-delete";
+    remove.type = "button";
+    remove.title = `Delete session #${session.id}`;
+    remove.textContent = "×";
+    remove.onclick = () => deleteSession(session.id, session.title || `session #${session.id}`);
+    li.append(button, remove);
     list.append(li);
   }
   if (selectedSession !== null) {
     const current = data.sessions.find((item) => item.id === selectedSession);
     renderRuns(current ? current.runs : []);
+  }
+}
+
+async function deleteSession(sessionId, label) {
+  const confirmed = typeof confirm === "function"
+    ? confirm(`Delete session "${label}"? Its transcript and runs are removed permanently.`)
+    : true;
+  if (!confirmed) return;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(sessionId)}`, {method: "DELETE"});
+    if (selectedSession === sessionId) {
+      selectedSession = null;
+      $("chat").replaceChildren();
+      $("session-title").textContent = "Select or create a session";
+      $("save-template").disabled = true;
+      resetRunInspector();
+    }
+    await refreshSessions();
+    $("run-status").textContent = `Session #${sessionId} deleted.`;
+  } catch (error) {
+    $("run-status").textContent = `Could not delete the session: ${error}`;
+  }
+}
+
+async function purgeSessions() {
+  const confirmed = typeof confirm === "function"
+    ? confirm("Delete every session, including its transcripts and runs? This cannot be undone from the chat.")
+    : false;
+  if (!confirmed) return;
+  try {
+    await api("/api/sessions/purge", {method: "POST", body: JSON.stringify({confirm: "DELETE ALL"})});
+    selectedSession = null;
+    $("chat").replaceChildren();
+    $("session-title").textContent = "Select or create a session";
+    $("save-template").disabled = true;
+    resetRunInspector();
+    await refreshSessions();
+    $("run-status").textContent = "All sessions deleted.";
+  } catch (error) {
+    $("run-status").textContent = `Could not delete the sessions: ${error}`;
   }
 }
 
@@ -965,7 +1011,13 @@ async function refreshTemplates() {
     button.textContent = `Clone · ${template.name}`;
     button.title = template.brief || template.task || "";
     button.onclick = () => cloneTemplate(template.id);
-    li.append(button);
+    const remove = document.createElement("button");
+    remove.className = "row-delete";
+    remove.type = "button";
+    remove.title = `Delete template ${template.name}`;
+    remove.textContent = "×";
+    remove.onclick = () => deleteTemplate(template.id, template.name);
+    li.append(button, remove);
     list.append(li);
   }
 }
@@ -1021,6 +1073,18 @@ async function decideApproval(approvalId, approved) {
     await refreshApprovals();
   } catch (error) {
     $("run-status").textContent = `Approval failed: ${error}`;
+  }
+}
+
+async function deleteTemplate(templateId, name) {
+  const confirmed = typeof confirm === "function" ? confirm(`Delete template "${name}"?`) : true;
+  if (!confirmed) return;
+  try {
+    await api(`/api/templates/${encodeURIComponent(templateId)}`, {method: "DELETE"});
+    await refreshTemplates();
+    $("run-status").textContent = `Template ${name} deleted.`;
+  } catch (error) {
+    $("run-status").textContent = `Could not delete the template: ${error}`;
   }
 }
 
@@ -1269,6 +1333,7 @@ $("message").addEventListener("keydown", (event) => {
 });
 
 $("refresh-runtime").onclick = refreshRuntimeStatus;
+$("purge-sessions").onclick = purgeSessions;
 if (typeof setInterval === "function") setInterval(refreshApprovals, 5000);
 $("save-template").onclick = saveTemplateAsCurrent;
 

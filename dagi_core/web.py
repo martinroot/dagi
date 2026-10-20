@@ -533,6 +533,15 @@ class WebApp:
                             self._send_json(404, {"error": "approval not found or already decided"})
                             return
                         self._send_json(200, {"decided": True, "approved": approved})
+                    elif parsed.path == "/api/sessions/purge":
+                        if body.get("confirm") != "DELETE ALL":
+                            raise ValueError("purge requires the confirmation \"DELETE ALL\"")
+                        keep = body.get("keep_session_id")
+                        if keep is not None and (type(keep) is not int or keep < 1):
+                            raise ValueError("keep_session_id must be a positive integer")
+                        with _StateContext(self._state()) as state:
+                            result = state.delete_all_sessions(keep_session_id=keep)
+                        self._send_json(200, result)
                     elif parsed.path == "/api/templates":
                         name = body.get("name")
                         if not isinstance(name, str) or not name.strip():
@@ -588,6 +597,10 @@ class WebApp:
                         with _StateContext(self._state()) as state:
                             state.delete_template(match.group(1))
                         self._send_json(200, {"deleted": True})
+                    elif match := re.fullmatch(r"/api/sessions/(\d+)", parsed.path):
+                        with _StateContext(self._state()) as state:
+                            result = state.delete_session(int(match.group(1)))
+                        self._send_json(200, result)
                     else:
                         self._send_json(404, {"error": "not found"})
                 except ValueError as exc:
