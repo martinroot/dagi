@@ -64,6 +64,16 @@ class OpenAICompatibleProvider:
                     and isinstance(output_tokens, int) and not isinstance(output_tokens, bool) and output_tokens >= 0
                 ):
                     actual_usage = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+                    prompt_details = getattr(usage, "prompt_tokens_details", None) if usage is not None else None
+                    cached_tokens = getattr(prompt_details, "cached_tokens", None) if prompt_details is not None else None
+                    if (isinstance(cached_tokens, int) and not isinstance(cached_tokens, bool)
+                            and 0 <= cached_tokens <= input_tokens):
+                        actual_usage["cache_read_tokens"] = cached_tokens
+                    else:
+                        cache_read_tokens = getattr(prompt_details, "cache_read_tokens", None) if prompt_details is not None else None
+                        if (isinstance(cache_read_tokens, int) and not isinstance(cache_read_tokens, bool)
+                                and 0 <= cache_read_tokens <= input_tokens):
+                            actual_usage["cache_read_tokens"] = cache_read_tokens
                 if not chunk.choices:
                     continue
                 choice = chunk.choices[0]

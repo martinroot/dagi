@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS provider_calls (
     usage_source TEXT NOT NULL CHECK (usage_source IN ('actual', 'estimated', 'unavailable')),
     input_tokens INTEGER,
     output_tokens INTEGER,
+    cache_read_tokens INTEGER,
     cost_usd TEXT,
     started_at TEXT NOT NULL,
     finished_at TEXT
@@ -340,6 +341,9 @@ class StateStore:
         for name, declaration in reflection_migrations.items():
             if name not in reflection_columns:
                 self._db.execute(f"ALTER TABLE goal_reflections ADD COLUMN {name} {declaration}")
+        provider_columns = {row[1] for row in self._db.execute("PRAGMA table_info(provider_calls)")}
+        if "cache_read_tokens" not in provider_columns:
+            self._db.execute("ALTER TABLE provider_calls ADD COLUMN cache_read_tokens INTEGER")
         self._db.commit()
         if os.name == "posix":
             os.chmod(self.path, 0o600)
@@ -650,21 +654,28 @@ class StateStore:
             raise ValueError(f"invalid usage source: {source!r}")
         input_tokens = usage.get("input_tokens")
         output_tokens = usage.get("output_tokens")
+        cache_read_tokens = usage.get("cache_read_tokens")
         cost_usd = usage.get("cost_usd")
         if source == "unavailable":
-            if any(value is not None for value in (input_tokens, output_tokens, cost_usd)):
+            if any(value is not None for value in (input_tokens, output_tokens, cache_read_tokens, cost_usd)):
                 raise ValueError("unavailable usage must not contain numeric zeroes or costs")
         else:
             for value in (input_tokens, output_tokens):
                 if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                     raise ValueError("known usage requires non-negative integer token counts")
+            if cache_read_tokens is not None and (
+                isinstance(cache_read_tokens, bool) or not isinstance(cache_read_tokens, int)
+                or cache_read_tokens < 0 or cache_read_tokens > input_tokens
+            ):
+                raise ValueError("cache read tokens must be between 0 and input tokens")
         cursor = self._db.execute(
             """UPDATE provider_calls SET usage_source=?, input_tokens=?, output_tokens=?,
-                      cost_usd=?, finished_at=? WHERE id=?""",
+                      cache_read_tokens=?, cost_usd=?, finished_at=? WHERE id=?""",
             (
                 source,
                 input_tokens,
                 output_tokens,
+                cache_read_tokens,
                 str(cost_usd) if cost_usd is not None else None,
                 _now(),
                 provider_call_id,
@@ -783,7 +794,7 @@ class StateStore:
 
     def usage_summary(self, run_id: str) -> dict[str, Any]:
         rows = self._db.execute(
-            "SELECT usage_source, input_tokens, output_tokens, cost_usd FROM provider_calls WHERE run_id=? ORDER BY id",
+            "SELECT usage_source, input_tokens, output_tokens, cache_read_tokens, cost_usd FROM provider_calls WHERE run_id=? ORDER BY id",
             (run_id,),
         ).fetchall()
         return self._summarize_usage(rows)
@@ -794,7 +805,7 @@ class StateStore:
             raise ValueError(f"run does not exist: {run_id}")
         group_id = run["budget_group_id"] or run_id
         rows = self._db.execute(
-            """SELECT pc.usage_source, pc.input_tokens, pc.output_tokens, pc.cost_usd
+            """SELECT pc.usage_source, pc.input_tokens, pc.output_tokens, pc.cache_read_tokens, pc.cost_usd
                FROM provider_calls AS pc JOIN runs AS r ON r.run_id=pc.run_id
                WHERE r.budget_group_id=? ORDER BY pc.id""",
             (group_id,),
@@ -807,18 +818,20 @@ class StateStore:
         if not rows:
             return {
                 "provider_calls": 0, "source": "actual", "input_tokens": 0,
-                "output_tokens": 0, "cost_usd": Decimal("0"),
+                "output_tokens": 0, "cache_read_tokens": 0, "cost_usd": Decimal("0"),
             }
         sources = {row["usage_source"] for row in rows}
         source = "unavailable" if "unavailable" in sources else (next(iter(sources)) if len(sources) == 1 else "mixed")
         input_tokens = None if any(row["input_tokens"] is None for row in rows) else sum(row["input_tokens"] for row in rows)
         output_tokens = None if any(row["output_tokens"] is None for row in rows) else sum(row["output_tokens"] for row in rows)
+        cache_read_tokens = None if any(row["cache_read_tokens"] is None for row in rows) else sum(row["cache_read_tokens"] for row in rows)
         cost_usd = None if any(row["cost_usd"] is None for row in rows) else sum(
             (Decimal(row["cost_usd"]) for row in rows), Decimal("0")
         )
         return {
             "provider_calls": len(rows), "source": source,
-            "input_tokens": input_tokens, "output_tokens": output_tokens, "cost_usd": cost_usd,
+            "input_tokens": input_tokens, "output_tokens": output_tokens,
+            "cache_read_tokens": cache_read_tokens, "cost_usd": cost_usd,
         }
 
     def cost_status(self, run_id: str, prices: dict[str, Any], *, group: bool = False) -> dict[str, Any]:

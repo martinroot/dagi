@@ -28,12 +28,14 @@ class UsageRecord:
     input_tokens: int | None
     output_tokens: int | None
     cost_usd: Decimal | None
+    cache_read_tokens: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "source": self.source,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
             "cost_usd": str(self.cost_usd) if self.cost_usd is not None else None,
         }
 
@@ -69,6 +71,9 @@ class UsagePolicy:
     ) -> UsageRecord:
         input_tokens = _valid_token_count(actual_usage.get("input_tokens")) if actual_usage else None
         output_tokens = _valid_token_count(actual_usage.get("output_tokens")) if actual_usage else None
+        cache_read_tokens = _valid_token_count(actual_usage.get("cache_read_tokens")) if actual_usage else None
+        if cache_read_tokens is not None and input_tokens is not None and cache_read_tokens > input_tokens:
+            cache_read_tokens = None
         should_estimate = self.estimate_missing if estimate is None else estimate
         if input_tokens is not None and output_tokens is not None:
             source: UsageSource = "actual"
@@ -92,7 +97,8 @@ class UsagePolicy:
                 Decimal(input_tokens) * price.input_per_million
                 + Decimal(output_tokens) * price.output_per_million
             ) / Decimal(1_000_000)
-        return UsageRecord(source, input_tokens, output_tokens, cost)
+        return UsageRecord(source, input_tokens, output_tokens, cost,
+                           cache_read_tokens if source == "actual" else None)
 
     def stop_reason(self, summary: dict[str, Any]) -> str | None:
         calls = int(summary.get("provider_calls", 0))
