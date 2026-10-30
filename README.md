@@ -1,20 +1,34 @@
-# Dagi — a debugging instrument for an AI agent
+# Dagi — self-hosted AI agent platform
 
-Dagi watches an AI agent instead of narrating it. The live chat is the product
-surface: the model answers, calls tools, and the run inspector shows exactly
-what happened — the provider requests that were sent, the tool calls and their
-outcomes, the persisted transcript, the run's usage and cost provenance, the
-shared parent/child budget, and the bounded runtime context the agent was
-given (assignment, acceptance checks, blocker, next observed action, latest
-reflection). Everything is persisted and correlated by session ID, run ID and
-tool-call ID, so a run can be replayed and inspected after the fact.
+Dagi is a standalone Python agent platform built on the Hermes Agent
+architecture: an agent loop with streaming responses and tool calls, persistent
+state with interruption recovery, a multi-level memory (SQLite FTS5 search,
+compressed context archives, reusable skills), error reflection with verified
+corrections, bounded parent/child delegation, and an agent template factory
+that launches new sessions from a saved task, instructions, skills, and tools.
+Models are selected per task from OpenRouter and other OpenAI-compatible
+endpoints, with per-call token accounting (input, output, cache reads),
+configured prices, and spending budgets.
 
-The product is the core plus the chat. The embodied lab was removed from the
-product on 2026-10-20; the base it carried — versioned skill contracts, the
-bounded expression language, measured grading and dependency-aware mastery —
-now lives in the core, and the lab's own operator documentation stays in
-[docs/legacy-game/](docs/legacy-game/). See
-[Removed embodied lab](#removed-embodied-lab).
+The live web chat is the product surface: the model answers, calls tools, and
+the run inspector shows exactly what happened — the provider requests that were
+sent, the tool calls and their outcomes, the persisted transcript, the run's
+usage and cost provenance, the shared parent/child budget, and the bounded
+runtime context the agent was given (assignment, acceptance checks, blocker,
+next observed action, latest reflection). Everything is persisted and
+correlated by session ID, run ID and tool-call ID, so a run can be replayed
+and inspected after the fact.
+
+Built-in tools cover workspace files, the web, documents (DOCX), image
+generation and editing, audio transcription and synthesis, video generation
+and export, and remote servers over SSH behind an explicit approval flow.
+
+The production service built on the platform —
+[Fabra](https://fabra.live) — runs a marketplace of specialized agents with
+multi-step pipelines (requirements → planning → execution → checking →
+revision → delivery) and hands finished artifacts to the user.
+
+GitHub: <https://github.com/martinroot/dagi>
 
 ## Quick start
 
@@ -38,7 +52,7 @@ Try in the chat: "Read the project layout and report the entry point", or
 - SQLite transcript, FTS5 memory search, and persistent reusable skills.
 - Durable run records with `completed`, `error`, `limit`, and `cancelled` outcomes.
 - Events correlated by session ID, run ID, and tool-call ID.
-- Provider usage is persisted per call and aggregated per run as actual, estimated, mixed, or unavailable; missing usage is never stored as zero.
+- Provider usage is persisted per call and aggregated per run — input, output, and cache-read tokens — as actual, estimated, mixed, or unavailable; missing usage is never stored as zero.
 - Configurable per-model prices, provider-call limits, and monetary run budgets.
 - Bounded model-context assembly with tool-result truncation, source-preserving history summaries, and exact request snapshots.
 - Stream finish reasons are validated; partial responses are stored as incomplete, and unfinalized tool calls are never executed.
@@ -118,6 +132,19 @@ export DAGI_BUDGET_USD="0.25"
 
 CLI commands: `/help`, `/new`, `/sessions`, `/resume <session_id>`, `/memory <query>`, `/skills`, `/model`, `/exit`. A run prints its ID and final status. Skills can be saved with `create_skill` and loaded with `use_skill`.
 
+## Orchestration and factories
+
+The core exposes the building blocks the platform's project-orchestration layer
+is built on: goals with acceptance checks and repeat-failure caps
+(`dagi_core/goals.py`), a bounded runtime context that states the agent's
+assignment, blocker and next observed action (`dagi_core/runtime_context.py`),
+an agent factory that seeds a new session from a stored task, instructions,
+skills and tools (`dagi_core/factory_seed.py`), and remote worker peers that
+receive tasks over HTTPS and return results to the controlling loop
+(`dagi_core/worker.py`). On top of these, the operator runs a central
+orchestration loop — goal tree → roadmap → task sequence → executor agents →
+result verification — with executors distributed across several servers.
+
 ## Custom tools
 
 Register tools through the public registry; duplicate names raise `ValueError`.
@@ -169,14 +196,18 @@ Use the focused gate during small iterations; do not remove or weaken tests. Run
 ```text
 |dagi_core/agent.py     agent loop, run status, recovery, and usage budgets
 |dagi_core/provider.py  single OpenAI-compatible streaming adapter
-|dagi_core/tools.py     workspace files, memory, skills, optional shell
+|dagi_core/tools.py     workspace files, memory, skills, documents, media, SSH
 |dagi_core/state.py     SQLite, FTS5, runs, requests, archives, and usage
 |dagi_core/context.py   bounded request assembly and history compression
-|dagi_core/usage.py     token provenance, model prices, and run limits
+|dagi_core/usage.py     token provenance (incl. cache reads), prices, run limits
 |dagi_core/runtime_context.py  bounded runtime identity and task position
 |dagi_core/goals.py     goals, acceptance checks, and repeat-failure caps
 |dagi_core/delegation.py  bounded parent/child agent delegation
+|dagi_core/factory_seed.py  agent template factory and seeded sessions
 |dagi_core/worker.py    remote worker peers and their proxy
+|dagi_core/documents.py |dagi_core/docx.py  document tools and DOCX engine
+|dagi_core/media.py |dagi_core/media_audio.py |dagi_core/media_video.py |dagi_core/media_merge.py  image, audio, and video tools
+|dagi_core/voice.py     speech transcription and synthesis
 |dagi_core/web.py       loopback web sandbox and HTTP API
 |dagi_core/static/      sandbox HTML and event-driven chat UI
 |dagi_core/config.py    environment-based configuration
