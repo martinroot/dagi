@@ -40,32 +40,30 @@ function makeUi(fetchImpl) {
   }
   const context = {document, fetch: fetchImpl, EventSource: FakeEventSource, setInterval: () => 0, clearInterval: () => {}, prompt: () => "hermes-deploy"};
   vm.runInNewContext(fs.readFileSync(new URL("../dagi_core/static/app.js", import.meta.url), "utf8"), context);
-  return {context, elements, sources};
+  return {context, elements, sources, document};
 }
 
 const jsonResponse = (value, status = 200) => ({
   status, ok: status < 400, text: async () => JSON.stringify(value),
 });
 
-test("the template list is rendered with a clone button per template", async () => {
+test("template refresh is skipped when the chat has no template sidebar", async () => {
+  let templateReads = 0;
   const fetchImpl = async (url) => {
     if (url === "/api/auth/session") return jsonResponse({authenticated: true});
     if (url === "/api/sessions") return jsonResponse({sessions: []});
-    if (url === "/api/templates") return jsonResponse({
-      templates: [{
-        id: "tpl-1", name: "hermes-deploy", task: "Install Hermes and set up Telegram.",
-        brief: "Remote host, dedicated user, protected token, bot online.", skills: ["deploy-hermes"], tools: ["run_bash"],
-      }],
-    });
+    if (url === "/api/templates") {
+      templateReads += 1;
+      return jsonResponse({templates: []});
+    }
     throw new Error(`unexpected fetch ${url}`);
   };
-  const {context, elements} = makeUi(fetchImpl);
+  const {context, document} = makeUi(fetchImpl);
+  const getElementById = document.getElementById.bind(document);
+  document.getElementById = (id) => id === "templates" ? null : getElementById(id);
   await context.restoreSession();
   await context.refreshTemplates();
-  const list = elements.get("templates");
-  assert.equal(list.children.length, 1);
-  assert.match(list.children[0].children[0].textContent, /Clone/);
-  assert.match(list.children[0].children[0].textContent, /hermes-deploy/);
+  assert.equal(templateReads, 0, "the chat must not load a template list that is no longer rendered there");
 });
 
 test("cloning a template opens a clean session with the task ready to run", async () => {

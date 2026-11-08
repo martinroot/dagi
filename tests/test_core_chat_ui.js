@@ -308,6 +308,21 @@ test("a second submit while a run is starting is ignored", async () => {
   assert.equal(posted, 1, "a duplicate submit must not start a second run");
 });
 
+test("composer disables duplicate sends and exposes Stop while a run is active", async () => {
+  const posted = [];
+  const {elements, document} = await makeChat(posted);
+  const input = document.getElementById("message");
+  const send = document.getElementById("send");
+  const stop = document.getElementById("stop-run");
+  assert.equal(send.disabled, false, "composer is usable after selecting a session");
+  input.value = "start work";
+  document.getElementById("chat-form").dispatch("submit", {preventDefault() {}});
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(posted, ["start work"]);
+  assert.equal(send.disabled, true, "send must be disabled after the run starts");
+  assert.equal(stop.disabled, false, "stop must be available while the run streams");
+});
+
 test("new content does not force-scroll while the reader is in history", async () => {
   const {context, elements} = makeUi(sessionFetch());
   await context.restoreSession();

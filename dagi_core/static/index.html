@@ -1,151 +1,105 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru" data-bs-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dagi Sandbox</title>
-  <style>
-    :root { color-scheme: light dark; font: 15px/1.45 system-ui, sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; grid-template-rows: auto 1fr; background: #11151d; color: #edf2fa; }
-    header { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid #30394a; background: #171d27; }
-    .header-actions { display: flex; gap: 8px; }
-    .login-panel { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
-    .login-form { width: min(360px, 100%); display: grid; gap: 10px; padding: 24px; background: #171d27; border: 1px solid #30394a; border-radius: 8px; }
-    .login-form input { min-width: 0; border: 1px solid #435571; border-radius: 6px; padding: 10px; color: inherit; background: #11151d; }
-    .login-form h1 { margin: 0 0 8px; font-size: 18px; }
-    #login-error:empty { display: none; }
-    #sandbox[hidden], #login-panel[hidden] { display: none; }
-    #sandbox { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
-    #sandbox main { min-height: 0; }
-    h1 { font-size: 18px; margin: 0; }
-    h2 { font-size: 14px; margin: 0 0 10px; color: #aebbd0; }
-    button { color: inherit; background: #28374c; border: 1px solid #435571; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
-    button:hover { background: #344965; }
-    button:disabled { opacity: .5; cursor: default; }
-    main { min-height: 0; display: grid; grid-template-columns: 268px minmax(300px, 1fr) minmax(260px, 360px); }
-    nav, .inspector { padding: 14px; overflow: auto; border-right: 1px solid #30394a; }
-    nav { display: flex; flex-direction: column; gap: 18px; background: #141a24; }
-    .nav-section { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-    .nav-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .nav-head h2 { margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #8f9db3; }
-    .nav-action { background: none; border: 1px solid #30394a; color: #96a2b6; font-size: 11px; padding: 2px 8px; border-radius: 5px; }
-    .nav-action:hover { border-color: #ff8d85; color: #ff8d85; background: none; }
-    .nav-empty { color: #7d8a9d; font-size: 12px; padding: 2px 2px 0; }
-    .inspector { border-right: 0; border-left: 1px solid #30394a; }
-    #sessions, #runs { list-style: none; margin: 0; padding: 0; }
-    #sessions button, #runs button { width: 100%; text-align: left; margin: 3px 0; overflow-wrap: anywhere; }
-    #sessions button.selected { border-color: #8ab4f8; }
-    .workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto 1fr auto; }
-    .toolbar { padding: 10px 14px; display: flex; gap: 8px; align-items: center; border-bottom: 1px solid #30394a; }
-    #session-title { margin-right: auto; font-weight: 600; }
-    #chat { overflow: auto; padding: 14px; }
-    .message, .event { padding: 9px 11px; margin: 7px 0; border-radius: 7px; white-space: pre-wrap; overflow-wrap: anywhere; background: #1c2430; }
-    .message.user { background: #223a51; }
-    .message.tool { background: #29283a; }
-    .tool-card { display: grid; gap: 6px; border-left: 3px solid #8ab4f8; }
-    .message pre { margin: 6px 0; background: #101620; border: 1px solid #30394a; border-radius: 5px; padding: 9px; overflow-x: auto; }
-    .message code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
-    .message p { margin: 0 0 8px; }
-    .message p:last-child { margin-bottom: 0; }
-    .message ul, .message ol { margin: 4px 0 8px; padding-left: 22px; }
-    .message blockquote { margin: 6px 0; padding: 2px 0 2px 10px; border-left: 3px solid #435571; color: #c7d2e2; }
-    .message table { border-collapse: collapse; margin: 6px 0; font-size: 13px; }
-    .message th, .message td { border: 1px solid #30394a; padding: 4px 8px; text-align: left; }
-    .message a { color: #8ab4f8; }
-    .message button { font-size: 12px; padding: 3px 8px; margin: 2px 0 6px; }
-    .tool-card[data-status="succeeded"] { border-left-color: #65c18c; }
-    .tool-card[data-status="failed"] { border-left-color: #ff8d85; }
-    .tool-card[data-status="uncertain"] { border-left-color: #ffcc66; }
-    .tool-card .tool-status { font-weight: 650; }
-    .tool-card details { margin: 2px 0; }
-    .tool-card .tool-raw-fallback { margin-top: 8px; font-size: 12px; }
-    .tool-card .tool-result-raw { max-height: 18vh; }
-    .tool-card pre { max-height: 22vh; }
-    .tool-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-    .tool-actions:empty { display: none; }
-    .tool-actions button { font-size: 12px; padding: 4px 7px; }
-    .tool-actions .artifact-link { font-size: 12px; padding: 4px 8px; border: 1px solid #435571; border-radius: 6px; color: #8ab4f8; text-decoration: none; align-self: center; }
-    .link-button { background: none; border: none; color: #8ab4f8; font-size: 12px; padding: 0 4px; text-decoration: underline; }
-    .link-button:hover { background: none; color: #ff8d85; }
-    #sessions li, #templates li, #runs li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; }
-    #sessions li button, #templates li button, #runs li button {
-      display: block; width: 100%; margin: 0; text-align: left;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      padding: 6px 9px; font-size: 13px; background: #1b2331; border-color: #2c374a;
-    }
-    #sessions li button:hover, #templates li button:hover, #runs li button:hover { background: #222d3e; }
-    #sessions li button.selected { border-color: #8ab4f8; background: #23324b; }
-    .row-delete { background: none; border: none; color: #7d8a9d; font-size: 15px; line-height: 1; padding: 4px 7px; border-radius: 5px; }
-    .row-delete:hover { background: #2a1f22; color: #ff8d85; }
-    .approval-row { display: grid; gap: 6px; padding: 6px 0; border-bottom: 1px solid #30394a; }
-    .approval-command { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .event.error { color: #ffb4ab; }
-    form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #30394a; }
-    textarea { resize: vertical; min-height: 44px; max-height: 180px; flex: 1; border-radius: 6px; border: 1px solid #435571; background: #171d27; color: inherit; padding: 9px; }
-    details { margin: 8px 0; }
-    #children { display: grid; gap: 6px; }
-    #children button { text-align: left; overflow-wrap: anywhere; }
-    pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 9px; background: #171d27; border-radius: 5px; max-height: 30vh; overflow: auto; font-size: 12px; }
-    .muted { color: #96a2b6; font-size: 12px; }
-    .runtime-status { display: grid; gap: 3px; }
-    .runtime-status-row { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 8px; padding: 4px 0; border-bottom: 1px solid #30394a; font-size: 12px; }
-    .runtime-status-row strong { color: #96a2b6; font-weight: 600; }
-    .runtime-status-row span { white-space: pre-wrap; overflow-wrap: anywhere; }
-    #refresh-runtime { padding: 4px 8px; margin: 2px 0 6px; }
-    .cost-status { display: grid; gap: 4px; margin-bottom: 6px; font-size: 12px; }
-    .cost-status-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 8px; }
-    .cost-status-row strong { color: #96a2b6; font-weight: 600; }
-    @media (max-width: 900px) { main { grid-template-columns: 216px minmax(250px, 1fr); } .inspector { grid-column: 1 / -1; border-left: 0; border-top: 1px solid #30394a; } }
-    @media (max-width: 600px) { main { grid-template-columns: 1fr; } nav { max-height: 180px; border-right: 0; border-bottom: 1px solid #30394a; } }
-  </style>
+  <meta name="theme-color" content="#0b1118">
+  <meta name="description" content="Dagi — кастомная агентная платформа в духе Hermes: готовые шаблоны, многоуровневая память, инструменты и непрерывный стриминг рабочих сессий.">
+  <title>Dagi Workspace — агентные сессии, шаблоны и память</title>
+  <link rel="stylesheet" href="/bootstrap-6.0.0-alpha.1.min.css">
+  <link rel="stylesheet" href="/dagi-app.css">
 </head>
 <body>
-  <section id="login-panel" class="login-panel" hidden>
-    <form id="login-form" class="login-form">
-      <h1>Dagi Sandbox sign in</h1>
-      <label for="login-username">Username</label>
-      <input id="login-username" name="username" autocomplete="username" required>
-      <label for="login-password">Password</label>
-      <input id="login-password" name="password" type="password" autocomplete="current-password" required>
-      <button type="submit">Sign in</button>
-      <div id="login-error" class="event error" role="alert"></div>
-    </form>
+  <section id="login-panel" class="login-shell container-fluid" hidden>
+    <div class="login-card card shadow-lg">
+      <div class="brand-lockup mb-4"><span class="brand-mark">D</span><span><strong>Dagi</strong><small>Agent workspace</small></span></div>
+      <p class="eyebrow">PRIVATE WORKSPACE</p>
+      <h1 class="h3 mb-2">Войдите в Dagi</h1>
+      <p class="fg-secondary mb-4">Ваши шаблоны, чаты и память — в одном рабочем пространстве.</p>
+      <form id="login-form" class="d-grid gap-3">
+        <div><label class="form-label" for="login-username">Логин</label><input class="form-control" id="login-username" name="username" autocomplete="username" required></div>
+        <div><label class="form-label" for="login-password">Пароль</label><input class="form-control" id="login-password" name="password" type="password" autocomplete="current-password" required></div>
+        <button class="btn btn-solid theme-primary btn-lg mt-1" type="submit">Войти в workspace <span aria-hidden="true">→</span></button>
+        <div id="login-error" class="login-error" role="alert"></div>
+      </form>
+    </div>
+    <a class="login-back" href="/">← На dagi.skin</a>
   </section>
-  <div id="sandbox" hidden>
-    <header><h1>Dagi Sandbox</h1><div class="header-actions"><button id="open-templates" type="button" onclick="location.href='/templates/'" title="Открыть страницу шаблонов">Шаблоны</button><button id="logout">Sign out</button><button id="new-session">New session</button></div></header>
-    <main>
-      <nav>
-        <section class="nav-section">
-          <div class="nav-head">
-            <h2>Sessions</h2>
-            <button id="purge-sessions" class="nav-action" type="button" title="Delete all sessions">Clear</button>
-          </div>
-          <ul id="sessions"></ul>
+
+  <div id="sandbox" class="app-shell" hidden>
+    <header class="app-topbar">
+      <div class="brand-lockup"><span class="brand-mark">D</span><span><strong>Dagi</strong><small>Agent workspace</small></span></div>
+      <div class="topbar-caption"><span class="live-dot"></span> Локальная агентная среда</div>
+      <div class="topbar-actions">
+        <a id="open-templates" class="btn btn-outline btn-sm" href="/templates/" title="Открыть библиотеку шаблонов"><span aria-hidden="true">▦</span> Шаблоны</a>
+        <button id="new-session" class="btn btn-solid theme-primary btn-sm" type="button"><span aria-hidden="true">＋</span> Новый чат</button>
+        <button id="logout" class="btn btn-outline theme-secondary btn-sm" type="button" aria-label="Выйти">Выйти</button>
+      </div>
+    </header>
+
+    <main class="container-fluid app-container">
+      <nav class="sidebar" aria-label="Навигация по рабочему пространству">
+        <section class="sidebar-card card">
+          <details class="sidebar-disclosure" open>
+            <summary class="section-heading"><span>Мои чаты</span><span class="section-hint">▾</span></summary>
+            <div class="section-tools"><span class="muted-label">Сохранённые сессии</span><button id="purge-sessions" class="btn btn-sm btn-outline theme-secondary" type="button" title="Удалить все сессии">Очистить</button></div>
+            <ul id="sessions" class="session-list list-unstyled mb-0" aria-label="Сохранённые чаты"></ul>
+          </details>
         </section>
-        <section class="nav-section">
-          <div class="nav-head"><h2>Saved runs</h2></div>
-          <ul id="runs"></ul>
+        <section class="sidebar-card card saved-runs-card">
+          <details class="sidebar-disclosure" open>
+            <summary class="section-heading"><span>Недавние запуски</span><span class="section-hint">▾</span></summary>
+            <ul id="runs" class="session-list run-list list-unstyled mb-0" aria-label="Запуски агента"></ul>
+          </details>
         </section>
-        <section class="nav-section">
-          <div class="nav-head"><h2><a href="/templates/" style="color:inherit;text-decoration:underline">Templates</a></h2></div>
-          <div style="padding:0 4px;font-size:11px;color:#6b7f94">Все шаблоны — на отдельной странице <a href="/templates/">/templates/</a></div>
-        </section>
+        <div class="sidebar-note"><span class="note-icon" aria-hidden="true">✳</span><span>Сценарий, память и инструменты агента задаются его шаблоном.</span></div>
+        <a class="sidebar-template-link" href="/templates/">Открыть библиотеку шаблонов <span aria-hidden="true">↗</span></a>
       </nav>
-      <section class="workspace">
-        <div class="toolbar"><span id="session-title">Select or create a session</span><button id="save-template" disabled>Save as template</button><button id="stop-run" disabled>Stop run</button></div>
-        <div id="chat" aria-live="polite"></div>
-        <form id="chat-form"><textarea id="message" placeholder="Send a message…" required></textarea><button id="send" type="submit">Run</button></form>
+
+      <section class="workspace card" aria-label="Чат агента">
+        <div class="chat-toolbar">
+          <div class="chat-heading">
+            <div class="chat-avatar" aria-hidden="true">D</div>
+            <div class="chat-heading-copy"><div id="session-title" class="chat-title">Выберите чат или создайте новый</div><div class="chat-subtitle">Контекст сессии · инструменты · память</div></div>
+          </div>
+          <div class="toolbar-actions">
+            <button id="save-template" class="btn btn-outline btn-sm" type="button" disabled>Сохранить как шаблон</button>
+            <button id="stop-run" class="btn btn-outline theme-danger btn-sm" type="button" disabled><span aria-hidden="true">■</span> Стоп</button>
+          </div>
+        </div>
+        <div id="run-status" class="run-status-bar" role="status" aria-live="polite">Выберите шаблон или создайте новый чат, чтобы начать.</div>
+        <div id="chat" class="chat-log" role="log" aria-live="polite" aria-relevant="additions text" aria-label="История сообщений">
+          <div class="welcome-state">
+            <div class="welcome-orbit" aria-hidden="true"><span>D</span></div>
+            <p class="eyebrow">ГОТОВ К РАБОТЕ</p>
+            <h2>Выберите агента<br>и дайте ему задачу</h2>
+            <p>Запустите готовый сценарий из библиотеки шаблонов или начните с чистой сессии.</p>
+            <a class="btn btn-solid theme-primary" href="/templates/">Выбрать шаблон <span aria-hidden="true">→</span></a>
+          </div>
+        </div>
+        <div class="composer-wrap">
+          <form id="chat-form" class="composer" aria-label="Сообщение агенту">
+            <label class="visually-hidden" for="message">Сообщение агенту</label>
+            <textarea class="form-control composer-input" id="message" rows="1" placeholder="Напишите задачу агенту…" aria-describedby="composer-status" required></textarea>
+            <button id="send" class="btn btn-solid theme-primary composer-send" type="submit" aria-label="Отправить сообщение"><span class="send-label">Отправить</span><span class="send-arrow" aria-hidden="true">↑</span></button>
+          </form>
+          <div class="composer-foot"><span id="composer-status" class="composer-hint" aria-live="polite">Выберите чат или создайте новый.</span><span class="composer-security"><span aria-hidden="true">⌁</span> Проверяйте выводы агента перед использованием</span></div>
+        </div>
       </section>
-      <aside class="inspector">
-        <h2>Run inspector</h2><div id="run-status" class="muted">Select a saved run or start one.</div>
-        <details open><summary>Exact model requests</summary><pre id="requests">[]</pre></details>
-        <details open><summary>Tool calls and errors</summary><pre id="tools">[]</pre></details>
-        <details open><summary>Run usage and cost</summary><div id="cost-status" class="cost-status">Select a saved run or start one.</div><pre id="usage">{}</pre></details>
-        <details open><summary>Shared tree budget</summary><pre id="budget-usage">{}</pre></details>
-        <details open><summary>Runtime and reflection</summary><button id="refresh-runtime" type="button">Refresh</button><div id="runtime-status" class="runtime-status" aria-live="polite"></div></details>
-        <details open><summary>Command approval</summary><div id="approvals" class="run-list"><span class="muted">No command is waiting.</span></div></details>
-        <details open><summary>Parent and child runs</summary><div id="children" class="run-list"></div></details>
+
+      <aside class="inspector card" aria-label="Инспектор запуска">
+        <details class="inspector-disclosure" open>
+          <summary class="inspector-heading"><span class="inspector-icon" aria-hidden="true">◈</span><span>Инспектор запуска</span><span class="inspector-chevron" aria-hidden="true">⌄</span></summary>
+          <div class="inspector-content">
+            <details class="inspector-section" open><summary>Стоимость и токены</summary><div id="cost-status" class="cost-status">Выберите запуск, чтобы увидеть учёт.</div><pre id="usage" class="diagnostic-pre">{}</pre></details>
+            <details class="inspector-section"><summary>Запросы к моделям</summary><pre id="requests" class="diagnostic-pre">[]</pre></details>
+            <details class="inspector-section"><summary>Вызовы инструментов и ошибки</summary><pre id="tools" class="diagnostic-pre">[]</pre></details>
+            <details class="inspector-section"><summary>Бюджет проекта</summary><pre id="budget-usage" class="diagnostic-pre">{}</pre></details>
+            <details class="inspector-section"><summary>Состояние и рефлексия</summary><button id="refresh-runtime" class="btn btn-sm btn-outline theme-secondary" type="button">Обновить</button><div id="runtime-status" class="runtime-status" aria-live="polite"></div></details>
+            <details class="inspector-section"><summary>Подтверждение команд</summary><div id="approvals" class="run-list"><span class="fg-secondary small">Нет ожидающих команд.</span></div></details>
+            <details class="inspector-section"><summary>Связанные запуски</summary><div id="children" class="run-list"></div></details>
+          </div>
+        </details>
       </aside>
     </main>
   </div>

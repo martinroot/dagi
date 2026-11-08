@@ -10,6 +10,39 @@ const sessionUiStates = new Map();
 const sessionDrafts = new Map();
 let submitting = false;
 
+function syncComposerState() {
+  const send = $("send");
+  if (send) send.disabled = selectedSession === null || activeRunId !== null || submitting;
+  const status = $("composer-status");
+  if (!status) return;
+  if (selectedSession === null) status.textContent = "Выберите чат или создайте новый.";
+  else if (submitting) status.textContent = "Запускаю агента…";
+  else if (activeRunId !== null) status.textContent = "Агент выполняет задачу. Можно подготовить следующее сообщение.";
+  else status.textContent = "Enter — отправить · Shift+Enter — новая строка";
+}
+
+function resizeComposer() {
+  const input = $("message");
+  if (!input || !input.style) return;
+  input.style.height = "auto";
+  input.style.height = `${Math.min(input.scrollHeight || 0, 176)}px`;
+}
+
+function getSessionValue(key) {
+  try { return typeof sessionStorage === "undefined" ? null : sessionStorage.getItem(key); }
+  catch { return null; }
+}
+
+function setSessionValue(key, value) {
+  try { if (typeof sessionStorage !== "undefined") sessionStorage.setItem(key, value); }
+  catch { /* session storage may be disabled by browser privacy settings */ }
+}
+
+function removeSessionValue(key) {
+  try { if (typeof sessionStorage !== "undefined") sessionStorage.removeItem(key); }
+  catch { /* session storage may be disabled by browser privacy settings */ }
+}
+
 function getSessionUiState(sessionId) {
   const key = String(sessionId);
   if (!sessionUiStates.has(key)) {
@@ -594,6 +627,7 @@ function detachRunStream() {
   resetAssistantStream();
   resetRunInspector();
   $("stop-run").disabled = true;
+  syncComposerState();
 }
 
 function isCurrentSession(sessionId, generation) {
@@ -617,6 +651,7 @@ async function showSandbox() {
   await refreshSessions();
   await refreshTemplates();
   await refreshApprovals();
+  syncComposerState();
 }
 
 async function restoreSession() {
@@ -628,9 +663,9 @@ async function restoreSession() {
       const target = Number(params.get("session"));
       if (Number.isFinite(target) && target > 0) {
         await selectSession(target);
-        const prefill = sessionStorage.getItem("jobsy-prefill-task");
+        const prefill = getSessionValue("jobsy-prefill-task");
         if (prefill) {
-          sessionStorage.removeItem("jobsy-prefill-task");
+          removeSessionValue("jobsy-prefill-task");
           if ($("message") && !$("message").value) $("message").value = prefill;
         }
         if (params.get("edit")) {
@@ -981,6 +1016,7 @@ function addEvent(event, scope = null) {
     eventSource = null;
     activeRunId = null;
     $("stop-run").disabled = true;
+    syncComposerState();
     const generation = scope ? scope.generation : sessionGeneration;
     const sessionId = scope ? scope.sessionId : selectedSession;
     refreshSessions();
@@ -1062,6 +1098,8 @@ async function purgeSessions() {
 }
 
 async function refreshTemplates() {
+  const list = $("templates");
+  if (!list) return;
   let templates = [];
   try {
     const data = await api("/api/templates");
@@ -1070,8 +1108,6 @@ async function refreshTemplates() {
     $("templates").textContent = `Templates unavailable: ${error}`;
     return;
   }
-  const list = $("templates");
-  if (!list) return;
   list.replaceChildren();
   if (!templates.length) {
     const empty = document.createElement("li");
@@ -1179,7 +1215,7 @@ async function cloneTemplate(templateId) {
 
 async function saveTemplateAsCurrent() {
   if (selectedSession === null) return;
-  const suggested = sessionStorage.getItem("jobsy-suggested-template-name") || "agent-template";
+  const suggested = getSessionValue("jobsy-suggested-template-name") || "agent-template";
   const name = typeof prompt === "function" ? prompt("Template name", suggested) : suggested;
   if (!name) return;
   try {
@@ -1188,7 +1224,7 @@ async function saveTemplateAsCurrent() {
       body: JSON.stringify({name, source_session_id: selectedSession}),
     });
     await refreshTemplates();
-    sessionStorage.removeItem("jobsy-suggested-template-name");
+    removeSessionValue("jobsy-suggested-template-name");
     $("run-status").textContent = `Template "${name}" saved.`;
   } catch (error) {
     $("run-status").textContent = `Could not save the template: ${error}`;
@@ -1227,6 +1263,7 @@ async function selectSession(sessionId) {
   const previousSession = selectedSession;
   if (previousSession !== null) storeDraft($("message")?.value || "");
   selectedSession = sessionId;
+  syncComposerState();
   const data = await api(`/api/sessions/${sessionId}`);
   if (!isCurrentSession(sessionId, generation)) return;
   applySessionSnapshot(sessionId, data);
@@ -1234,6 +1271,7 @@ async function selectSession(sessionId) {
   $("session-title").textContent = `${data.session.title || "Untitled session"} · #${sessionId}`;
   $("save-template").disabled = false;
   $("message").value = loadDraft(sessionId);
+  resizeComposer();
   $("chat").replaceChildren();
   for (const message of data.messages) {
     if (message.tool_calls) {
@@ -1310,6 +1348,7 @@ function connectRun(runId, afterId = 0, sessionId = selectedSession, generation 
   activeRunId = runId;
   selectedRunId = runId;
   $("stop-run").disabled = false;
+  syncComposerState();
   const source = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events?after=${afterId}`);
   eventSource = source;
   source.onmessage = (message) => {
@@ -1372,9 +1411,11 @@ async function submitChatMessage(event) {
   const message = input.value.trim();
   if (!message) return;
   submitting = true;
+  syncComposerState();
   resetAssistantStream();
   addChatLine("user", message, "You");
   input.value = "";
+  resizeComposer();
   storeDraft("");
   try {
     const started = await api(`/api/sessions/${sessionId}/runs`, {
@@ -1391,6 +1432,7 @@ async function submitChatMessage(event) {
     }
   } finally {
     submitting = false;
+    syncComposerState();
   }
 }
 
@@ -1398,6 +1440,7 @@ $("chat-form").onsubmit = submitChatMessage;
 
 $("message").addEventListener("input", (event) => {
   storeDraft(event.target?.value ?? $("message").value);
+  resizeComposer();
 });
 
 $("message").addEventListener("keydown", (event) => {
