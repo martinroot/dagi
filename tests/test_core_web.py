@@ -176,7 +176,7 @@ def test_web_sandbox_starts_inspects_and_replays_saved_run(tmp_path):
     try:
         status, content_type, page = _request(base)
         assert status == 200 and "text/html" in content_type
-        assert b"Dagi Sandbox" in page
+        assert b"Dagi Workspace" in page
 
         _, _, created = _request(f"{base}/api/sessions", "POST", {"title": "web test"})
         session_id = json.loads(created)["session_id"]
@@ -569,7 +569,7 @@ def test_web_inspector_exposes_parent_child_runs_and_child_model(tmp_path):
         main = next(provider for provider in providers if provider.model == "main-model")
         assert "Child answer." in str(main.requests[1])
         _, _, page = _request(base)
-        assert b"Parent and child runs" in page
+        assert "Связанные запуски".encode("utf-8") in page
     finally:
         _stop(server, thread)
 
