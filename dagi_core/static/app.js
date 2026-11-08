@@ -1055,6 +1055,7 @@ async function refreshTemplates() {
     return;
   }
   const list = $("templates");
+  if (!list) return;
   list.replaceChildren();
   if (!templates.length) {
     const empty = document.createElement("li");
