@@ -144,6 +144,8 @@ receive tasks over HTTPS and return results to the controlling loop
 (`dagi_core/worker.py`). On top of these, the operator runs a central
 orchestration loop — goal tree → roadmap → task sequence → executor agents →
 result verification — with executors distributed across several servers.
+Running through this loop, the system currently closes 60–80 tasks per day
+from the project tree.
 
 ## Custom tools
 
