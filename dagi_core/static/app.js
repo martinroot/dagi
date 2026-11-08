@@ -622,7 +622,23 @@ async function showSandbox() {
 async function restoreSession() {
   try {
     const session = await api("/api/auth/session");
-    if (session.authenticated) await showSandbox();
+    if (session.authenticated) {
+      await showSandbox();
+      const params = new URLSearchParams(location.search);
+      const target = Number(params.get("session"));
+      if (Number.isFinite(target) && target > 0) {
+        await selectSession(target);
+        const prefill = sessionStorage.getItem("jobsy-prefill-task");
+        if (prefill) {
+          sessionStorage.removeItem("jobsy-prefill-task");
+          if ($("message") && !$("message").value) $("message").value = prefill;
+        }
+        if (params.get("edit")) {
+          history.replaceState(null, "", "/chat/");
+          $("run-status").textContent = "Editing the template session. Save as template to keep the changes.";
+        }
+      }
+    }
     else showLogin();
   } catch {
     showLogin();
@@ -1163,7 +1179,7 @@ async function cloneTemplate(templateId) {
 
 async function saveTemplateAsCurrent() {
   if (selectedSession === null) return;
-  const suggested = "agent-template";
+  const suggested = sessionStorage.getItem("jobsy-suggested-template-name") || "agent-template";
   const name = typeof prompt === "function" ? prompt("Template name", suggested) : suggested;
   if (!name) return;
   try {
@@ -1172,6 +1188,7 @@ async function saveTemplateAsCurrent() {
       body: JSON.stringify({name, source_session_id: selectedSession}),
     });
     await refreshTemplates();
+    sessionStorage.removeItem("jobsy-suggested-template-name");
     $("run-status").textContent = `Template "${name}" saved.`;
   } catch (error) {
     $("run-status").textContent = `Could not save the template: ${error}`;

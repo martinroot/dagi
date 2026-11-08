@@ -440,6 +440,17 @@ class WebApp:
                     elif path == "/api/templates":
                         with _StateContext(self._state()) as state:
                             self._send_json(200, {"templates": state.list_templates()})
+                    elif match := re.fullmatch(r"/api/templates/([^/]+)", path):
+                        with _StateContext(self._state()) as state:
+                            template = state.get_template(match.group(1))
+                            if template is None:
+                                self._send_json(404, {"error": "template not found"})
+                                return
+                            source = template.get("source_session_id")
+                            template["source_session_exists"] = bool(
+                                source and state.get_session(source)
+                            )
+                            self._send_json(200, {"template": template})
                     elif match := re.fullmatch(r"/api/sessions/(\d+)/artifacts", path):
                         self._send_json(200, {"artifacts": app.list_artifacts(int(match.group(1)))})
                     elif match := re.fullmatch(r"/api/sessions/(\d+)/artifacts/(.+)", path):
