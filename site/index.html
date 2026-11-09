@@ -1,76 +1,123 @@
 <!doctype html>
-<html lang="ru" data-bs-theme="dark">
+<html lang="en" data-bs-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0a1115">
-  <meta name="description" content="Dagi — кастомная агентная платформа в духе Hermes: готовые шаблоны, многоуровневая память, инструменты и потоковые рабочие сессии.">
-  <title>Dagi — готовьте агентов к реальной работе</title>
+  <meta name="theme-color" content="#080d12">
+  <meta name="description" content="Dagi is a custom Hermes-style agent workbench for multi-server systems, custom memory, and a growing library of saved agent presets.">
+  <title>Dagi — Multi-server AI agent systems</title>
   <link rel="stylesheet" href="/bootstrap-6.0.0-alpha.1.min.css">
   <link rel="stylesheet" href="/dagi-site.css">
 </head>
 <body>
   <header class="site-header">
-    <nav class="container d-flex align-items-center justify-content-between" aria-label="Основная навигация">
-      <a class="site-brand" href="/" aria-label="Dagi — главная"><span class="site-mark">D</span><span>DAGI<span class="brand-dot">.</span></span></a>
-      <div class="d-flex align-items-center gap-2">
-        <a class="nav-link-soft d-none sm:d-inline-flex" href="https://github.com/martinroot/dagi">GitHub <span aria-hidden="true">↗</span></a>
-        <a class="btn btn-sm btn-outline" href="/templates/">Шаблоны</a>
-        <a class="btn btn-sm btn-solid theme-primary" href="/chat/">Открыть workspace <span aria-hidden="true">→</span></a>
+    <nav class="container" aria-label="Main navigation">
+      <a class="site-brand" href="/" aria-label="Dagi home"><span class="site-mark">D</span><span>DAGI<span class="brand-dot">.</span></span></a>
+      <div class="nav-links"><a href="#architecture">Architecture</a><a href="#memory">Memory</a><a href="#presets">Presets</a></div>
+      <div class="nav-actions">
+        <a class="github-link" href="https://github.com/martinroot/dagi" target="_blank" rel="noopener noreferrer" aria-label="Dagi GitHub repository" title="GitHub repository"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.55.1.76-.24.76-.53v-2.08c-3.1.68-3.76-1.32-3.76-1.32-.5-1.3-1.23-1.65-1.23-1.65-1.01-.69.08-.68.08-.68 1.12.08 1.71 1.15 1.71 1.15 1 1.7 2.63 1.21 3.27.92.1-.72.39-1.21.71-1.49-2.48-.28-5.09-1.24-5.09-5.52 0-1.22.44-2.22 1.15-3-.12-.28-.5-1.42.11-2.96 0 0 .94-.3 3.05 1.15a10.6 10.6 0 0 1 5.55 0c2.12-1.45 3.05-1.15 3.05-1.15.61 1.54.23 2.68.12 2.96.72.78 1.14 1.78 1.14 3 0 4.3-2.62 5.24-5.11 5.51.4.35.76 1.02.76 2.06V22c0 .29.2.63.77.52A11.1 11.1 0 0 0 12 .9Z"/></svg><span>GitHub</span><span class="external-mark" aria-hidden="true">↗</span></a>
+        <a class="btn btn-sm btn-outline" href="/templates/">Browse presets</a>
+        <a class="btn btn-sm btn-solid theme-primary" href="/chat/">Open workspace <span aria-hidden="true">→</span></a>
       </div>
     </nav>
   </header>
+
   <main>
     <section class="hero container">
-      <div class="row align-items-center">
-        <div class="lg:col-6 hero-copy">
-          <div class="eyebrow"><span class="eyebrow-dot"></span> SELF-HOSTED AGENT WORKSPACE <span class="eyebrow-version">DAGI / 01</span></div>
-          <h1>Не просто чат.<br><span class="gradient-text">Готовый агент</span><br>для реальной работы.</h1>
-          <p class="hero-lede">Кастомный AI-workspace в духе Hermes — со специализацией на шаблонах, долговременной памяти и повторяемых сценариях. Настройте исполнителя один раз. Запускайте его в новой сессии с нужными инструментами и контекстом.</p>
+      <div class="row align-items-center hero-grid">
+        <div class="lg:col-5 hero-copy">
+          <p class="eyebrow"><span class="eyebrow-pulse"></span> MULTI-SERVER AGENT INFRASTRUCTURE <span class="eyebrow-id">DAGI / 01</span></p>
+          <h1>Agent fleets.<br><span class="gradient-text">Custom memory.</span><br>Saved presets.</h1>
+          <p class="hero-lede">A custom Hermes-style workbench for building multi-server agent systems. Route work to specialist workers, give them custom memory, and launch from a growing library of saved presets.</p>
           <div class="hero-actions">
-            <a class="btn btn-solid theme-primary btn-lg" href="/chat/">Открыть Dagi <span aria-hidden="true">↗</span></a>
-            <a class="btn btn-outline btn-lg" href="/templates/">Посмотреть шаблоны <span aria-hidden="true">→</span></a>
+            <a class="btn btn-solid theme-primary btn-lg" href="/chat/">Open Dagi workspace <span aria-hidden="true">↗</span></a>
+            <a class="btn btn-outline btn-lg" href="/templates/">Explore agent presets <span aria-hidden="true">→</span></a>
           </div>
-          <div class="hero-proof"><span class="proof-check">✓</span> Python core <i></i> SQLite FTS5 <i></i> OpenRouter <i></i> Streaming</div>
+          <div class="hero-proof"><span class="proof-mark">✓</span><span>Self-hosted Python core</span><i></i><span>SQLite FTS5 memory</span><i></i><span>OpenRouter</span></div>
         </div>
-        <div class="lg:col-6">
-          <div class="product-stage" aria-label="Визуальный пример Dagi workspace">
-            <div class="stage-glow"></div>
-            <div class="product-window">
-              <div class="window-top"><div class="window-dots"><i></i><i></i><i></i></div><div class="window-address"><span>dagi</span>.skin / chat</div><span class="window-avatar">MR</span></div>
-              <div class="window-body">
-                <aside class="mock-sidebar"><div class="mock-logo"><span>D</span> Dagi</div><div class="mock-nav-label">ТЕКУЩИЙ АГЕНТ</div><div class="mock-agent selected"><span class="mock-agent-icon">✳</span><span><b>SEO-редактор</b><small>Шаблон · 4 tools · 3 skills</small></span></div><div class="mock-nav-label second">ПАМЯТЬ</div><div class="mock-memory"><span>◌</span> 12 найденных заметок</div><div class="mock-nav-label second">ПОСЛЕДНИЕ ЧАТЫ</div><div class="mock-chat-mini active">Разбор сайта example.ru</div><div class="mock-chat-mini">Текст для нового лендинга</div><div class="mock-sidebar-foot">● Сессия сохранена</div></aside>
-                <div class="mock-conversation"><div class="mock-conv-top"><span class="mock-online"></span><b>Разбор сайта example.ru</b><span class="mock-running">РАБОТАЕТ</span></div><div class="mock-chat-content"><div class="mock-message user-msg"><small>ВЫ</small><p>Проверь страницу и подготовь SEO-текст для главного экрана.</p></div><div class="mock-memory-hit"><span>◈</span><span><b>Память подключена</b><small>Бренд-гайд · 2 релевантных решения</small></span></div><div class="mock-message agent-msg"><small>DAGI · SEO-РЕДАКТОР</small><p>Сначала проверю страницу, затем подготовлю текст по сохранённому брифу и критериям качества.</p><div class="mock-tool"><span class="tool-icon">⌁</span><span><b>web.search</b><small>Источники найдены · 3 страницы</small></span><span class="tool-check">✓</span></div><div class="mock-stream"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div></div><div class="mock-composer"><span>Напишите задачу агенту…</span><b>↑</b></div></div>
+
+        <div class="lg:col-7">
+          <div class="topology-frame" aria-label="Illustrative Dagi multi-server agent topology">
+            <div class="topology-topbar"><div class="topbar-dots"><i></i><i></i><i></i></div><span class="topology-path">DAGI / PROJECT CONTROL PLANE</span><span class="preview-tag"><i></i> SYSTEM MAP</span></div>
+            <div class="topology-content">
+              <div class="topology-headline"><span>PROJECT / PRODUCT LAUNCH</span><span class="run-id">ORCHESTRATION VIEW · PREVIEW</span></div>
+              <div class="control-node">
+                <div class="control-icon">D</div>
+                <div class="control-copy"><span class="node-eyebrow">CONTROL PLANE</span><strong>Goal → roadmap → assignments</strong><small>Break work into scoped tasks and route them to the right worker.</small></div>
+                <div class="control-state"><i></i> ROUTING</div>
               </div>
+              <div class="route-line"><span>ASSIGN BY ROLE · MODEL · SERVER</span></div>
+              <div class="worker-grid">
+                <article class="worker-node worker-mint"><div class="worker-head"><span class="server-glyph">▤</span><span>NODE 01</span><span class="worker-online"><i></i> READY</span></div><strong>Research agent</strong><small>Web · Memory · Analysis</small><div class="worker-foot"><span>SERVER WORKER</span><span>↗</span></div></article>
+                <article class="worker-node worker-violet"><div class="worker-head"><span class="server-glyph">▤</span><span>NODE 02</span><span class="worker-online"><i></i> READY</span></div><strong>Build agent</strong><small>Code · Files · Artifacts</small><div class="worker-foot"><span>SERVER WORKER</span><span>↗</span></div></article>
+                <article class="worker-node worker-amber"><div class="worker-head"><span class="server-glyph">▤</span><span>NODE 03</span><span class="worker-online"><i></i> READY</span></div><strong>QA agent</strong><small>Checks · Evidence · Review</small><div class="worker-foot"><span>SERVER WORKER</span><span>↗</span></div></article>
+              </div>
+              <div class="memory-bus"><div class="memory-bus-icon">◈</div><div class="memory-bus-copy"><span class="node-eyebrow">CUSTOM MEMORY LAYER</span><strong>Session history · FTS5 retrieval · reusable skills</strong></div><div class="memory-bus-status"><span>CONTEXT</span><b>ATTACHED TO RUN</b></div></div>
+              <div class="topology-bottom"><span><i></i> Persisted run events</span><span>Tool traces</span><span>Usage & cost</span><span>Recovery state</span></div>
             </div>
-            <div class="floating-chip memory-chip"><span>◈</span><b>ПАМЯТЬ</b><small>FTS5 retrieval</small></div>
-            <div class="floating-chip tools-chip"><span>✳</span><b>TOOLS</b><small>3 инструмента активны</small></div>
-            <div class="stage-caption">АГЕНТНЫЙ ЦИКЛ · СОСТОЯНИЕ · ИНСТРУМЕНТЫ</div>
+            <div class="topology-glow" aria-hidden="true"></div>
           </div>
+          <p class="visual-caption">Illustrative architecture · workers are independently deployed and configured</p>
         </div>
       </div>
     </section>
 
-    <section class="ticker-wrap" aria-label="Ключевые возможности"><div class="container ticker"><span>ШАБЛОНЫ</span><i>✳</i><span>МНОГОУРОВНЕВАЯ ПАМЯТЬ</span><i>✳</i><span>ИНСТРУМЕНТЫ</span><i>✳</i><span>ПОТОКОВЫЙ ЧАТ</span><i>✳</i><span>ОРКЕСТРАЦИЯ</span><i>✳</i><span>ШАБЛОНЫ</span></div></section>
+    <section class="signal-strip" aria-label="Platform foundations"><div class="container signal-grid"><div><span class="signal-icon">⌘</span><span><b>Agent runtime</b><small>Python · streaming · tool calls</small></span></div><div><span class="signal-icon">◈</span><span><b>Custom memory</b><small>SQLite · FTS5 · archives</small></span></div><div><span class="signal-icon">▤</span><span><b>Distributed workers</b><small>Multi-server orchestration</small></span></div><div><span class="signal-icon">✳</span><span><b>Saved presets</b><small>Reusable agent configurations</small></span></div></div></section>
 
-    <section class="section container" id="approach">
-      <div class="section-intro row align-items-end"><div class="lg:col-7"><p class="eyebrow">01 / ПОДХОД</p><h2>Контекст не теряется.<br><span class="gradient-text">Рабочий процесс повторяется.</span></h2></div><div class="lg:col-5"><p class="section-lede">Dagi превращает хороший запуск в сохранённый сценарий: инструкции, память, навыки и инструменты собраны вокруг агента, а каждая работа живёт в отдельной сессии.</p></div></div>
-      <div class="row feature-grid">
-        <div class="md:col-6 xl:col-4"><article class="feature-card card h-100"><div class="feature-icon icon-mint">◈</div><p class="feature-index">01 — REUSABLE AGENTS</p><h3>Шаблон — это исполнитель</h3><p>Задача, system-инструкции, сценарии, skills и разрешённые инструменты сохраняются вместе. Новый запуск получает подготовленный контекст, а не пустой чат.</p><a href="/templates/">Изучить библиотеку <span>→</span></a></article></div>
-        <div class="md:col-6 xl:col-4"><article class="feature-card card h-100"><div class="feature-icon icon-lime">⌘</div><p class="feature-index">02 — MEMORY</p><h3>Память с поиском по смыслу</h3><p>История сессий, сжатые архивы и SQLite FTS5 возвращают важный контекст и проверенный опыт в текущую работу.</p><span class="feature-tech">SQLite · FTS5 · Retrieval</span></article></div>
-        <div class="md:col-6 xl:col-4"><article class="feature-card card h-100"><div class="feature-icon icon-violet">⤴</div><p class="feature-index">03 — STREAMING CORE</p><h3>Видно, что делает агент</h3><p>Текст приходит потоком. Вызовы инструментов, результаты, ошибки, остановка и восстановление запуска связаны с конкретной сессией.</p><span class="feature-tech">Python · SSE · Run events</span></article></div>
-        <div class="md:col-6 xl:col-4"><article class="feature-card card h-100"><div class="feature-icon icon-orange">⚒</div><p class="feature-index">04 — TOOLING</p><h3>Инструменты под задачу</h3><p>Файлы, веб, документы, медиа, SSH и дочерние агенты доступны по конфигурации; чувствительные операции требуют явного подтверждения.</p><span class="feature-tech">Scoped tools · Approval</span></article></div>
-        <div class="md:col-6 xl:col-4"><article class="feature-card card h-100"><div class="feature-icon icon-blue">◎</div><p class="feature-index">05 — PROJECT FLOW</p><h3>От цели до результата</h3><p>Цели, roadmap, последовательность задач, исполнители на разных серверах и обратная связь — единый контур управления проектами.</p><span class="feature-tech">Goals · Roadmap · Workers</span></article></div>
-        <div class="md:col-6 xl:col-4"><article class="feature-card card h-100"><div class="feature-icon icon-pink">◷</div><p class="feature-index">06 — INSPECTABLE RUNS</p><h3>Факты вместо догадок</h3><p>Run inspector показывает запросы, инструменты, статусы, токены IN/КЕШ/OUT и стоимость по данным провайдера или явно помеченному тарифу.</p><span class="feature-tech">Usage · Cost · Recovery</span></article></div>
+    <section class="section container" id="architecture">
+      <div class="section-intro row align-items-end">
+        <div class="lg:col-7"><p class="eyebrow section-kicker">01 / MULTI-SERVER BY DESIGN</p><h2>One project control plane.<br><span class="gradient-text">Workers where the work is.</span></h2></div>
+        <div class="lg:col-5"><p class="section-lede">Keep planning, assignment, execution, and verification in distinct layers. Dispatch specialist agents across servers and follow each task through a durable run record.</p></div>
+      </div>
+      <div class="architecture-cards">
+        <article class="architecture-card card control-card"><div class="card-index">01 <span>ORCHESTRATE</span></div><div class="architecture-icon icon-cyan">⌘</div><h3>Projects become executable plans</h3><p>Structure goals into roadmaps and bounded assignments. Route each task by role, model, tools, and server instead of treating a project as one giant prompt.</p><div class="architecture-flow"><span>GOAL TREE</span><b>→</b><span>ROADMAP</span><b>→</b><span>WORKERS</span></div></article>
+        <article class="architecture-card card worker-card"><div class="card-index">02 <span>DISTRIBUTE</span></div><div class="architecture-icon icon-violet">▤</div><h3>Specialists run across servers</h3><p>Separate workers by capability and execution boundary. Delegate with explicit context, a shared project budget, and a traceable parent–child run tree.</p><div class="node-stack"><span><i></i> Research / node-01</span><span><i></i> Engineering / node-02</span><span><i></i> Review / node-03</span></div></article>
+        <article class="architecture-card card verify-card"><div class="card-index">03 <span>OBSERVE</span></div><div class="architecture-icon icon-lime">◉</div><h3>Inspect outcomes, not promises</h3><p>Stream output and tool events; persist statuses, errors, token usage, cost, and recovery state. Verify deliverables against the task’s acceptance checks.</p><div class="verification-tags"><span>RUN EVENTS</span><span>TOOL RESULTS</span><span>USAGE</span><span>RECOVERY</span></div></article>
       </div>
     </section>
 
-    <section class="workflow-band"><div class="container"><div class="row align-items-center"><div class="lg:col-5"><p class="eyebrow">02 / ОТ ШАБЛОНА ДО РАБОТЫ</p><h2>Подготовьте один раз.<br><span class="gradient-text">Запускайте снова.</span></h2><p class="section-lede">Редактируйте сценарий в чате, сохраняйте проверенную конфигурацию и открывайте чистую рабочую сессию с уже загруженным агентом.</p><a class="btn btn-solid theme-primary" href="/templates/">Открыть шаблоны <span aria-hidden="true">→</span></a></div><div class="lg:col-7"><div class="flow-board"><div class="flow-step"><span class="step-n">01</span><div><small>CONFIGURE</small><b>Создать шаблон</b><span>Роль · сценарий · память · tools</span></div><span class="step-mark">✳</span></div><div class="flow-connector"></div><div class="flow-step"><span class="step-n">02</span><div><small>ASSIGN</small><b>Назначить агенту задачу</b><span>Шаблон + контекст проекта</span></div><span class="step-mark">↗</span></div><div class="flow-connector"></div><div class="flow-step active-step"><span class="step-n">03</span><div><small>EXECUTE</small><b>Вести работу до сдачи</b><span>Стриминг · инструменты · проверка</span></div><span class="step-mark">✓</span></div><div class="flow-footer"><span><i></i> Состояние сессии сохраняется</span><span>SQLite-backed history</span></div></div></div></div></div></section>
+    <section class="memory-section" id="memory">
+      <div class="container memory-layout">
+        <div class="memory-copy"><p class="eyebrow section-kicker">02 / MEMORY THAT FITS THE WORK</p><h2>Not just more context.<br><span class="gradient-text">The right context, retrieved.</span></h2><p class="section-lede">Shape the memory each workflow needs. Search past sessions, recover archived context, and attach reusable skills or verified lessons to the agent that can use them.</p><a class="text-cta" href="/chat/">See Dagi workspace <span aria-hidden="true">→</span></a></div>
+        <div class="memory-stack" aria-label="Custom memory components">
+          <div class="memory-layer layer-live"><span class="layer-icon">01</span><div><small>ACTIVE SESSION</small><strong>Current task and working state</strong><p>Run context · tool results · progress</p></div><span class="layer-state">LIVE</span></div>
+          <div class="memory-connector"><i></i><span>ARCHIVE & INDEX</span><i></i></div>
+          <div class="memory-layer layer-index"><span class="layer-icon">02</span><div><small>SEARCHABLE MEMORY</small><strong>SQLite FTS5 + context archives</strong><p>Find relevant history without replaying everything</p></div><span class="layer-state">RETRIEVE</span></div>
+          <div class="memory-connector"><i></i><span>CURATE & REUSE</span><i></i></div>
+          <div class="memory-layer layer-skills"><span class="layer-icon">03</span><div><small>REUSABLE KNOWLEDGE</small><strong>Skills · playbooks · verified lessons</strong><p>Keep proven procedures available to future runs</p></div><span class="layer-state">PERSIST</span></div>
+          <div class="memory-foot"><span>MEMORY IS CONFIGURABLE</span><span>Scope it to the agent and workflow</span></div>
+        </div>
+      </div>
+    </section>
 
-    <section class="stack-section container"><div class="row align-items-center"><div class="lg:col-6"><p class="eyebrow">03 / ТЕХНИЧЕСКАЯ ОСНОВА</p><h2>Практичный стек.<br><span class="gradient-text">Свой контроль.</span></h2><p class="section-lede">Самостоятельно развиваемое Python-ядро для потоковых агентных сессий. OpenRouter и OpenAI-compatible API, постоянное состояние, проверяемые инструменты и self-hosted инфраструктура.</p><div class="stack-chips"><span>Python</span><span>SQLite + FTS5</span><span>OpenRouter</span><span>JavaScript</span><span>Linux</span><span>Nginx</span><span>SSH</span><span>pytest</span></div></div><div class="lg:col-6"><div class="stack-console"><div class="console-head"><span>dag i / run-inspector</span><span class="console-live"><i></i> LIVE TRACE</span></div><div class="console-line"><span class="console-time">00:00.12</span><span class="console-tag tag-request">MODEL</span><code>openrouter · stream started</code></div><div class="console-line"><span class="console-time">00:00.48</span><span class="console-tag tag-tool">TOOL</span><code>memory.search → 2 relevant hits</code></div><div class="console-line"><span class="console-time">00:01.06</span><span class="console-tag tag-tool">TOOL</span><code>web.search → 3 sources</code></div><div class="console-line"><span class="console-time">00:03.81</span><span class="console-tag tag-ok">STATE</span><code>run events persisted · session #248</code></div><div class="console-usage"><span>IN <b>4.2k</b></span><span>CACHE <b>1.1k</b></span><span>OUT <b>846</b></span><span>STATUS <b class="status-done">DONE</b></span></div></div></div></div></section>
+    <section class="presets-section container" id="presets">
+      <div class="section-intro row align-items-end">
+        <div class="lg:col-7"><p class="eyebrow section-kicker">03 / A LIBRARY OF SAVED PRESETS</p><h2>Good agents shouldn’t<br><span class="gradient-text">start from zero.</span></h2></div>
+        <div class="lg:col-5"><p class="section-lede">Save complete agent setups—not just prompts. Each preset can carry its role, instructions, memory approach, skills, tools, and scenario into a fresh working session.</p></div>
+      </div>
+      <div class="preset-showcase">
+        <div class="preset-main"><div class="preset-main-top"><span class="preset-library-mark">✳</span><span class="preset-count-label">SAVED AGENT CONFIGURATIONS</span><span class="preset-live"><i></i> GROWING LIBRARY</span></div><h3>From proven workflow<br>to reusable worker.</h3><p>Browse, use, or refine a preset in chat. Save what works and launch it again with its tools and context already attached.</p><div class="preset-pills"><span>ROLE</span><span>INSTRUCTIONS</span><span>MEMORY</span><span>SKILLS</span><span>TOOLS</span><span>SCENARIO</span></div><a class="btn btn-solid theme-primary" href="/templates/">Browse all presets <span aria-hidden="true">→</span></a></div>
+        <div class="preset-categories">
+          <a class="preset-category" href="/templates/"><span class="preset-category-icon tint-cyan">⌕</span><span><b>Research & SEO</b><small>Briefs · sources · editorial workflows</small></span><span class="category-arrow">↗</span></a>
+          <a class="preset-category" href="/templates/"><span class="preset-category-icon tint-violet">▧</span><span><b>Documents & contracts</b><small>Structured data · review · delivery</small></span><span class="category-arrow">↗</span></a>
+          <a class="preset-category" href="/templates/"><span class="preset-category-icon tint-lime">⌘</span><span><b>Engineering & QA</b><small>Code · tests · verified changes</small></span><span class="category-arrow">↗</span></a>
+          <a class="preset-category" href="/templates/"><span class="preset-category-icon tint-amber">⌁</span><span><b>Server operations</b><small>Remote tasks · SSH · approvals</small></span><span class="category-arrow">↗</span></a>
+          <a class="preset-category" href="/templates/"><span class="preset-category-icon tint-pink">◌</span><span><b>Media & production</b><small>Images · audio · video pipelines</small></span><span class="category-arrow">↗</span></a>
+          <a class="preset-category" href="/templates/"><span class="preset-category-icon tint-blue">◎</span><span><b>Project delivery</b><small>Planning · execution · acceptance</small></span><span class="category-arrow">↗</span></a>
+        </div>
+      </div>
+    </section>
 
-    <section class="final-cta"><div class="container"><div class="cta-panel"><div class="cta-decoration" aria-hidden="true">D</div><div class="cta-content"><p class="eyebrow">YOUR AGENT WORKSPACE</p><h2>Соберите своего<br>рабочего агента.</h2><p>Начните с готового шаблона — настройте инструкции, память и инструменты под свою задачу.</p><div class="d-flex flex-wrap gap-2"><a class="btn btn-solid theme-primary btn-lg" href="/templates/">Выбрать шаблон <span aria-hidden="true">→</span></a><a class="btn btn-outline btn-lg" href="/chat/">Открыть чат</a></div></div><div class="cta-meta"><span>SELF-HOSTED</span><span>OPEN SOURCE CORE</span><span>BUILT FOR EXECUTION</span></div></div></div></section>
+    <section class="trace-section">
+      <div class="container trace-layout">
+        <div><p class="eyebrow section-kicker">04 / BUILT TO BE INSPECTED</p><h2>Every run leaves<br><span class="gradient-text">a useful trail.</span></h2><p class="section-lede">Follow model requests, streamed output, tool calls, failures, usage, and recovery in one correlated run view. Provider-reported cost stays distinct from estimates.</p></div>
+        <div class="trace-console"><div class="trace-console-head"><span><i></i> RUN INSPECTOR</span><b>TRACE / 8F2A</b></div><div class="trace-row"><time>00:00.12</time><span class="trace-tag model-tag">MODEL</span><code>openrouter · stream opened</code><span class="trace-ok">✓</span></div><div class="trace-row"><time>00:00.48</time><span class="trace-tag memory-tag">MEMORY</span><code>FTS5 · 2 relevant records</code><span class="trace-ok">✓</span></div><div class="trace-row"><time>00:01.06</time><span class="trace-tag tool-tag">TOOL</span><code>web.search · 3 sources</code><span class="trace-ok">✓</span></div><div class="trace-row"><time>00:03.81</time><span class="trace-tag state-tag">STATE</span><code>run events persisted</code><span class="trace-ok">✓</span></div><div class="trace-metrics"><span>INPUT <b>4.2k</b></span><span>CACHE <b>1.1k</b></span><span>OUTPUT <b>846</b></span><span>RUN <b class="done-label">COMPLETED</b></span></div></div>
+      </div>
+    </section>
+
+    <section class="final-cta container"><div class="cta-panel"><div class="cta-orbit orbit-one"></div><div class="cta-orbit orbit-two"></div><div class="cta-copy"><p class="eyebrow">BUILD YOUR AGENT SYSTEM</p><h2>Make your best workflows<br><span class="gradient-text">reusable infrastructure.</span></h2><p>Start with a saved preset. Shape its memory. Deploy it to the workers that move your project forward.</p><div class="hero-actions"><a class="btn btn-solid theme-primary btn-lg" href="/templates/">Explore presets <span aria-hidden="true">→</span></a><a class="btn btn-outline btn-lg" href="/chat/">Open workspace</a></div></div><div class="cta-signature">DAGI / AGENT SYSTEMS</div></div></section>
   </main>
-  <footer class="site-footer"><div class="container d-flex flex-wrap align-items-center justify-content-between gap-3"><a class="site-brand footer-brand" href="/"><span class="site-mark">D</span><span>DAGI<span class="brand-dot">.</span></span></a><p>Собственная агентная платформа · проект Fabra</p><div class="d-flex gap-3"><a href="https://github.com/martinroot/dagi">GitHub ↗</a><a href="https://fabra.live/">Fabra ↗</a><a href="/chat/">Workspace ↗</a></div></div></footer>
+
+  <footer class="site-footer"><div class="container footer-inner"><a class="site-brand" href="/"><span class="site-mark">D</span><span>DAGI<span class="brand-dot">.</span></span></a><span class="footer-copy">A custom agent workbench for persistent, multi-server work.</span><div class="footer-links"><a href="https://github.com/martinroot/dagi" target="_blank" rel="noopener noreferrer">GitHub ↗</a><a href="/templates/">Presets</a><a href="/chat/">Workspace</a></div></div></footer>
 </body>
 </html>

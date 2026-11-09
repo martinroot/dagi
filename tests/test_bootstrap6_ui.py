@@ -28,8 +28,8 @@ class DagiBootstrap6UiTests(unittest.TestCase):
         self.assertIn('href="/templates/"', HTML)
 
     def test_markup_uses_bootstrap6_utilities_not_bootstrap5_breakpoint_names(self):
-        self.assertIn("lg:col-6", LANDING)
-        self.assertIn("md:col-6", LANDING)
+        self.assertIn("lg:col-5", LANDING)
+        self.assertIn("lg:col-7", LANDING)
         self.assertIn("btn-solid theme-primary", HTML)
         self.assertNotIn("col-lg-", LANDING)
         self.assertNotIn("btn-primary", HTML)
@@ -41,10 +41,18 @@ class DagiBootstrap6UiTests(unittest.TestCase):
         self.assertIn(".composer-send:disabled{--bs-btn-disabled-bg:", CSS)
         self.assertIn(".chat-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap", CSS)
 
-    def test_homepage_sells_template_memory_and_agent_workflows(self):
-        for text in ["Шаблоны", "Память", "Hermes", "/chat/"]:
+    def test_homepage_is_english_and_centers_servers_memory_and_presets(self):
+        self.assertIn('<html lang="en"', LANDING)
+        self.assertNotIn('<html lang="ru"', LANDING)
+        for text in ["multi-server", "memory", "presets", "Hermes-style", "/chat/"]:
             with self.subTest(text=text):
-                self.assertIn(text, LANDING)
+                self.assertIn(text.casefold(), LANDING.casefold())
+
+    def test_header_has_a_direct_github_repository_link(self):
+        header = LANDING.split("</header>", 1)[0]
+        self.assertIn('href="https://github.com/martinroot/dagi"', header)
+        self.assertIn("GitHub", header)
+        self.assertNotRegex(LANDING, r"[А-Яа-яЁё]")
 
 
 if __name__ == "__main__":
