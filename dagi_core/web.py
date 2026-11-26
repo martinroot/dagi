@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -36,6 +37,7 @@ from .goals import validate_checks, verify
 from .worker import load_workers
 
 ProviderFactory = Callable[[str, str, str], Any]
+_LOG = logging.getLogger("dagi.sandbox")
 _REFLECTION_VOLATILE_KEYS = {"timestamp", "created_at", "updated_at", "request_id", "event_id", "nonce"}
 
 
@@ -60,6 +62,40 @@ def _reflection_fingerprint(value: Any) -> str:
         allow_nan=False,
     )
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+# Log only route templates, never the raw path (which may carry ids or secrets).
+_STATIC_ROUTES = frozenset({
+    "/", "/app.js",
+    "/api/auth/session", "/api/auth/login", "/api/auth/logout",
+    "/api/health", "/api/workers", "/api/approvals",
+    "/api/templates", "/api/sessions", "/api/sessions/purge",
+})
+_ROUTE_TEMPLATES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^/api/workers/[^/]+/proxy(?:/api/.*)?$"), "/api/workers/:worker/proxy/:path"),
+    (re.compile(r"^/api/templates/[^/]+/clone$"), "/api/templates/:name/clone"),
+    (re.compile(r"^/api/sessions/\d+/artifacts/[^/]+$"), "/api/sessions/:id/artifacts/:name"),
+    (re.compile(r"^/api/sessions/\d+/artifacts$"), "/api/sessions/:id/artifacts"),
+    (re.compile(r"^/api/sessions/\d+/goals$"), "/api/sessions/:id/goals"),
+    (re.compile(r"^/api/sessions/\d+/runs$"), "/api/sessions/:id/runs"),
+    (re.compile(r"^/api/sessions/\d+$"), "/api/sessions/:id"),
+    (re.compile(r"^/api/goals/[^/]+/(?:stop|resume)$"), "/api/goals/:id/:action"),
+    (re.compile(r"^/api/goals/[^/]+$"), "/api/goals/:id"),
+    (re.compile(r"^/api/runs/[^/]+/events$"), "/api/runs/:id/events"),
+    (re.compile(r"^/api/runs/[^/]+/cancel$"), "/api/runs/:id/cancel"),
+    (re.compile(r"^/api/runs/[^/]+$"), "/api/runs/:id"),
+    (re.compile(r"^/api/approvals/[^/]+$"), "/api/approvals/:id"),
+    (re.compile(r"^/api/templates/[^/]+$"), "/api/templates/:name"),
+)
+
+
+def _route_template(path: str) -> str:
+    if path in _STATIC_ROUTES:
+        return path
+    for pattern, template in _ROUTE_TEMPLATES:
+        if pattern.fullmatch(path):
+            return template
+    return "<unmatched>"
 
 
 def _runtime_inspector_status(state: StateStore, session_id: int, run_id: str | None = None) -> dict[str, Any]:
@@ -381,9 +417,33 @@ class WebApp:
             def log_message(self, _format: str, *_args: Any) -> None:
                 return
 
+            def _log_failure(
+                self, status: int, payload: Any, exc: BaseException | None = None
+            ) -> None:
+                """Emit one redacted, structured line for a failed sandbox request."""
+                entry: dict[str, Any] = {
+                    "event": "sandbox.http.failure",
+                    "request_id": getattr(self, "_request_id", "-"),
+                    "method": self.command,
+                    "route": _route_template(urlparse(self.path).path),
+                    "status": status,
+                }
+                detail = str(exc) if exc is not None else (
+                    payload.get("error") if isinstance(payload, dict) else None
+                )
+                if exc is not None:
+                    entry["error_type"] = type(exc).__name__
+                if detail:
+                    entry["error"] = str(_redact_export(str(detail)))[:512]
+                _LOG.warning(json.dumps(entry, ensure_ascii=False, sort_keys=True))
+
             def _send_json(
                 self, status: int, payload: Any, headers: dict[str, str] | None = None
             ) -> None:
+                failure_exc = getattr(self, "_failure_exc", None)
+                self._failure_exc = None
+                if status >= 400:
+                    self._log_failure(status, payload, failure_exc)
                 data = json.dumps(_json_safe(payload), ensure_ascii=False).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -410,6 +470,8 @@ class WebApp:
                 return StateStore(app.config.database)
 
             def do_GET(self) -> None:
+                self._request_id = uuid4().hex[:12]
+                self._failure_exc = None
                 parsed = urlparse(self.path)
                 path = parsed.path
                 try:
@@ -489,10 +551,13 @@ class WebApp:
                         self._send_json(404, {"error": "not found"})
                 except (ValueError, json.JSONDecodeError) as exc:
                     self._send_json(400, {"error": str(exc)})
-                except Exception:
+                except Exception as exc:
+                    self._failure_exc = exc
                     self._send_json(500, {"error": "sandbox request failed"})
 
             def do_POST(self) -> None:
+                self._request_id = uuid4().hex[:12]
+                self._failure_exc = None
                 parsed = urlparse(self.path)
                 try:
                     body = self._read_json()
@@ -607,10 +672,13 @@ class WebApp:
                     self._send_json(409, {"error": str(exc)})
                 except (ValueError, json.JSONDecodeError) as exc:
                     self._send_json(400, {"error": str(exc)})
-                except Exception:
+                except Exception as exc:
+                    self._failure_exc = exc
                     self._send_json(500, {"error": "sandbox request failed"})
 
             def do_DELETE(self) -> None:
+                self._request_id = uuid4().hex[:12]
+                self._failure_exc = None
                 parsed = urlparse(self.path)
                 try:
                     if not app._origin_allowed(self.headers):
@@ -631,7 +699,8 @@ class WebApp:
                         self._send_json(404, {"error": "not found"})
                 except ValueError as exc:
                     self._send_json(404, {"error": str(exc)})
-                except Exception:
+                except Exception as exc:
+                    self._failure_exc = exc
                     self._send_json(500, {"error": "sandbox request failed"})
 
             def _send_artifact(self, session_id: int, name: str) -> None:
@@ -662,7 +731,8 @@ class WebApp:
                     return
                 try:
                     result = worker.request(path, "POST" if body is not None else "GET", body)
-                except Exception:
+                except Exception as exc:
+                    self._failure_exc = exc
                     # The peer response may contain sensitive material; do not relay it.
                     self._send_json(502, {"error": "worker request failed"})
                     return
