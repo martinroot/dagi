@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from dagi_core.state import StateStore
-from dagi_core.tools import Tool, ToolError, ToolRegistry, ToolResult
+from dagi_core.tools import MAX_OUTPUT_CHARS, Tool, ToolError, ToolRegistry, ToolResult
 
 
 def make_tools(tmp_path: Path, *, shell=False, approve=None):
@@ -68,6 +68,72 @@ def test_read_file_marks_truncated_preview_structurally(tmp_path):
     assert "[truncated" in result.content
     assert result.presentation["diagnostics"]["truncated"] is True
     assert result.presentation["diagnostics"]["line_count"] == 2_000
+    state.close()
+
+
+def test_read_file_paging_reports_next_offset_and_bounds_each_page(tmp_path):
+    state, tools = make_tools(tmp_path)
+    path = tools.workspace / "paged.txt"
+    path.write_text("".join(f"line-{index}\n" for index in range(2_000)), encoding="utf-8")
+
+    first = tools.call("read_file", {"path": "paged.txt", "offset": 0, "limit": 2})
+    assert first.content == "line-0\nline-1\n"
+    diagnostics = first.presentation["diagnostics"]
+    assert diagnostics["offset"] == 0
+    assert diagnostics["limit"] == 2
+    assert diagnostics["page_line_count"] == 2
+    assert diagnostics["line_count"] == 2_000
+    assert diagnostics["next_offset"] == 2
+
+    second = tools.call("read_file", {
+        "path": "paged.txt", "offset": diagnostics["next_offset"], "limit": 2,
+    })
+    assert second.content == "line-2\nline-3\n"
+    assert second.presentation["diagnostics"]["next_offset"] == 4
+
+    last = tools.call("read_file", {"path": "paged.txt", "offset": 1_999, "limit": 2})
+    assert last.content == "line-1999\n"
+    assert last.presentation["diagnostics"]["next_offset"] is None
+    assert last.presentation["diagnostics"]["truncated"] is False
+    state.close()
+
+
+def test_read_file_rejects_invalid_paging_arguments(tmp_path):
+    state, tools = make_tools(tmp_path)
+    path = tools.workspace / "notes.txt"
+    path.write_text("alpha\nbeta\n", encoding="utf-8")
+    for args in (
+        {"path": "notes.txt", "offset": -1},
+        {"path": "notes.txt", "offset": True},
+        {"path": "notes.txt", "limit": 0},
+        {"path": "notes.txt", "limit": "2"},
+    ):
+        with pytest.raises(ToolError):
+            tools.call("read_file", args)
+    state.close()
+
+
+def test_write_file_replaces_existing_file_atomically(tmp_path, monkeypatch):
+    state, tools = make_tools(tmp_path)
+    path = tools.workspace / "notes.txt"
+    path.write_text("original content", encoding="utf-8")
+    path.chmod(0o640)
+    original_replace = os.replace
+
+    def failing_replace(source, target):
+        assert path.read_text(encoding="utf-8") == "original content"
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+    with pytest.raises(OSError, match="simulated replace failure"):
+        tools.call("write_file", {"path": "notes.txt", "content": "replacement"})
+    assert path.read_text(encoding="utf-8") == "original content"
+    assert [item.name for item in path.parent.iterdir()] == ["notes.txt"]
+
+    monkeypatch.setattr(os, "replace", original_replace)
+    tools.call("write_file", {"path": "notes.txt", "content": "replacement"})
+    assert path.read_text(encoding="utf-8") == "replacement"
+    assert path.stat().st_mode & 0o777 == 0o640
     state.close()
 
 
@@ -330,7 +396,11 @@ def test_provider_tool_specs_explain_runtime_recovery_without_changing_schema(tm
     assert "not declared retryable" in custom["description"].lower()
     assert "effect verifier" in custom["description"].lower()
     assert read_file["parameters"] == {
-        "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"],
+        "type": "object", "properties": {
+            "path": {"type": "string"},
+            "offset": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 1, "maximum": MAX_OUTPUT_CHARS},
+        }, "required": ["path"],
     }
     assert write_file["parameters"]["required"] == ["path", "content"]
     state.close()

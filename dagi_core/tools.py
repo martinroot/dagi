@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import re
 import shutil
-from decimal import Decimal
 import subprocess
+import tempfile
 import time
+from decimal import Decimal
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -411,7 +413,11 @@ class ToolRegistry:
     def _register_builtins(self, shell_enabled: bool) -> None:
         self.register(Tool(
             "read_file", "Read a UTF-8 text file within the workspace.",
-            {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+            {"type": "object", "properties": {
+                "path": {"type": "string"},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": MAX_OUTPUT_CHARS},
+            }, "required": ["path"]},
             self._read_file, retryable=True,
         ))
         self.register(Tool(
@@ -939,17 +945,65 @@ class ToolRegistry:
             raise ToolError(f"file exceeds {MAX_FILE_BYTES} bytes")
         content = path.read_text(encoding="utf-8")
         relative = path.relative_to(self.workspace).as_posix()
+        diagnostics: dict[str, Any] = {
+            "size_bytes": size_bytes,
+            "line_count": len(content.splitlines()),
+            "truncated": len(content) > MAX_OUTPUT_CHARS,
+        }
+        paged = "offset" in args or "limit" in args
+        if not paged:
+            return ToolResult(
+                _truncate(content),
+                presentation={
+                    "type": "file",
+                    "summary": f"Read {relative}",
+                    "artifacts": [{"path": relative, "operation": "read"}],
+                    "diagnostics": diagnostics,
+                },
+            )
+
+        offset = args.get("offset", 0)
+        limit = args.get("limit")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ToolError("offset must be a non-negative integer")
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+            raise ToolError("limit must be a positive integer")
+        lines = content.splitlines(keepends=True)
+        page = lines[offset:] if limit is None else lines[offset:offset + limit]
+        shown: list[str] = []
+        used = 0
+        partial_remaining = 0
+        for line in page:
+            remaining = MAX_OUTPUT_CHARS - used
+            if not remaining:
+                break
+            if len(line) > remaining:
+                shown.append(line[:remaining])
+                used += remaining
+                partial_remaining = len(line) - remaining
+                break
+            shown.append(line)
+            used += len(line)
+        text = "".join(shown)
+        consumed = offset + len(shown)
+        remaining_chars = sum(len(line) for line in lines[consumed:]) + partial_remaining
+        truncated = consumed < len(lines) or partial_remaining > 0
+        if partial_remaining:
+            text += f"\n...[truncated {remaining_chars} chars; use offset={consumed} to continue]"
+        diagnostics.update({
+            "offset": offset,
+            "limit": limit,
+            "next_offset": consumed if truncated else None,
+            "truncated": truncated,
+            "page_line_count": len(shown),
+        })
         return ToolResult(
-            _truncate(content),
+            text,
             presentation={
                 "type": "file",
-                "summary": f"Read {relative}",
+                "summary": f"Read {relative} (lines {offset + 1}-{consumed})",
                 "artifacts": [{"path": relative, "operation": "read"}],
-                "diagnostics": {
-                    "size_bytes": size_bytes,
-                    "line_count": len(content.splitlines()),
-                    "truncated": len(content) > MAX_OUTPUT_CHARS,
-                },
+                "diagnostics": diagnostics,
             },
         )
 
@@ -1013,7 +1067,21 @@ class ToolRegistry:
         relative = path.relative_to(self.workspace).as_posix()
         diff, diff_reason, diff_truncated = self._bounded_file_diff(path, relative, content)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if existed:
+                os.chmod(temporary, path.stat().st_mode & 0o777)
+            os.replace(temporary, path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
         operation = "update" if existed else "create"
         artifact = {"path": relative, "operation": operation}
         if diff is not None:

@@ -9,6 +9,7 @@ from typing import Any, Callable, Generator, Iterator, Literal
 from uuid import uuid4
 
 from .context import ContextBuilder, ContextLimitError
+from .hooks import LifecycleHooks
 from .provider import IncompleteStreamError, OpenAICompatibleProvider
 from .runtime_context import build_runtime_context, extract_assignment_contract, render_runtime_context
 from .state import StateStore, tool_action_fingerprint, tool_failure_fingerprint
@@ -58,6 +59,7 @@ class Agent:
         entry_point: Literal["cli", "web", "unknown"] = "unknown",
         repeat_failure_threshold: int = 2,
         runtime_context_extension: Callable[[], str] | None = None,
+        hooks: LifecycleHooks | None = None,
     ):
         if entry_point not in {"cli", "web", "unknown"}:
             raise ValueError("entry_point must be cli, web, or unknown")
@@ -70,6 +72,7 @@ class Agent:
         self.entry_point = entry_point
         self.repeat_failure_threshold = repeat_failure_threshold
         self.runtime_context_extension = runtime_context_extension
+        self.hooks = hooks or LifecycleHooks()
         self._tools_source = tools
         self.state = state
         self._default_session_id = session_id
@@ -223,22 +226,42 @@ class Agent:
                 error = result.content
                 error_category = "repeated_failure_blocked"
             else:
-                try:
-                    returned = tools.call(name, arguments)
-                    result = returned if isinstance(returned, ToolResult) else ToolResult(str(returned))
-                    if result.is_error:
-                        outcome = "failed"
-                        error = result.content
-                        error_category = "tool_reported_error"
-                except ToolError as exc:
-                    result = ToolResult(f"[tool error] {exc}", is_error=True)
+                denied = self.hooks.invoke("before_tool", name, fingerprint_arguments)
+                if denied:
+                    result = ToolResult(
+                        f"[tool error] before_tool hook denied this action: {denied}",
+                        is_error=True,
+                    )
                     outcome = "failed"
-                    error = str(exc)
-                    error_category = "tool_error"
-                except Exception as exc:
-                    result = ToolResult(f"[tool outcome unknown] {type(exc).__name__}: {exc}", is_error=True)
-                    outcome = "uncertain"
-                    error = str(exc)
+                    error = result.content
+                    error_category = "before_tool_hook"
+                else:
+                    try:
+                        returned = tools.call(name, arguments)
+                        result = returned if isinstance(returned, ToolResult) else ToolResult(str(returned))
+                        if result.is_error:
+                            outcome = "failed"
+                            error = result.content
+                            error_category = "tool_reported_error"
+                    except ToolError as exc:
+                        result = ToolResult(f"[tool error] {exc}", is_error=True)
+                        outcome = "failed"
+                        error = str(exc)
+                        error_category = "tool_error"
+                    except Exception as exc:
+                        result = ToolResult(f"[tool outcome unknown] {type(exc).__name__}: {exc}", is_error=True)
+                        outcome = "uncertain"
+                        error = str(exc)
+                    if outcome == "succeeded" or error_category == "tool_reported_error":
+                        post_effect = self.hooks.invoke("after_tool", name, fingerprint_arguments, result)
+                        if post_effect:
+                            outcome = "uncertain"
+                            error = f"after_tool hook failed after the side effect: {post_effect}"
+                            result = ToolResult(
+                                f"{result.content}\n[tool outcome unknown] {error}",
+                                is_error=True,
+                                presentation=result.presentation,
+                            )
             result_event = AgentEvent(
                 kind="tool_result",
                 session_id=session_id,
@@ -283,6 +306,20 @@ class Agent:
         try:
             yield event("started", status="running")
             check_cancelled()
+            denied = self.hooks.invoke("before_model", {
+                "session_id": session_id,
+                "run_id": run_id,
+                "agent_id": self.agent_id,
+                "entry_point": self.entry_point,
+                "model": self.model,
+                "user_text_chars": len(user_text),
+            })
+            if denied:
+                status = "error"
+                error_text = f"before_model hook denied the run: {denied}"
+                yield event("error", text=error_text)
+                yield event("done", status=status)
+                return
             running = self.state.list_tool_calls(session_id, ("running",))
             uncertain = self.state.list_tool_calls(session_id, ("uncertain",))
             for call in uncertain:
